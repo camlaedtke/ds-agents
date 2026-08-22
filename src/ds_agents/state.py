@@ -1,0 +1,488 @@
+"""The single object every node reads and writes.
+
+Nothing in `nodes/` touches the filesystem, the network, or the environment. A node receives a
+`PipelineState`, calls MCP tools, and returns a `PipelineState`. If something is not on this
+object, a node cannot know it.
+
+Two rules shape most of what follows, both of them consequences of the project's thesis:
+
+1. The system under test does not get to report its own grade. Anything an agent claims is stored
+   as a claim, and the harness records what it independently measured alongside it.
+2. Anything the eval counts must be a field, never prose. If a metric can only be computed by
+   string-matching a model's sentence, the metric is not real.
+"""
+
+import operator
+import uuid
+from datetime import UTC, datetime
+from typing import Annotated, Any, Literal, Self, get_args
+
+from pydantic import BaseModel, ConfigDict, Field, computed_field, model_validator
+
+ArtifactId = str
+
+
+def _strip_computed(model: type[BaseModel], data: Any) -> Any:
+    """Remove serialization-only computed fields from a dumped payload, recursively.
+
+    `extra="forbid"` is load-bearing here: a node inventing a field must fail loudly. The cost is
+    that `model_dump()` output cannot be fed straight back to `model_validate()`, because computed
+    fields look like unexpected extras. This walks the declared field types and drops them.
+    """
+    if not isinstance(data, dict):
+        return data
+    computed = set(model.model_computed_fields)
+    out: dict[str, Any] = {}
+    for key, value in data.items():
+        if key in computed:
+            continue
+        field = model.model_fields.get(key)
+        out[key] = _strip_value(field.annotation, value) if field else value
+    return out
+
+
+def _strip_value(annotation: Any, value: Any) -> Any:
+    """Descend into lists and optionals looking for nested Contract models."""
+    if isinstance(annotation, type) and issubclass(annotation, BaseModel):
+        return _strip_computed(annotation, value)
+    for arg in get_args(annotation):
+        if isinstance(arg, type) and issubclass(arg, BaseModel):
+            if isinstance(value, list):
+                return [_strip_computed(arg, item) for item in value]
+            return _strip_computed(arg, value)
+    return value
+
+
+def _utc_now() -> datetime:
+    """Timezone-aware. Naive timestamps make committed JSONL inconsistent across machines."""
+    return datetime.now(UTC)
+
+
+NodeName = Literal[
+    "intake",
+    "profiler",
+    "feature_eng",
+    "modeler",
+    "reviewer",
+    "reporter",
+    # The single-agent ablation arm runs one generalist instead of the team. It still has to
+    # produce a valid trace, or the two arms are not comparable.
+    "generalist",
+]
+
+RoutableNode = Literal["feature_eng", "modeler"]
+
+TaskType = Literal["binary", "multiclass", "regression"]
+
+Metric = Literal["roc_auc", "accuracy", "f1", "log_loss", "rmse", "mae", "r2"]
+
+# Which direction counts as better. `score_ratio` is meaningless without this: the same ratio
+# means "good" for roc_auc and "bad" for rmse.
+GREATER_IS_BETTER: dict[str, bool] = {
+    "roc_auc": True,
+    "accuracy": True,
+    "f1": True,
+    "r2": True,
+    "log_loss": False,
+    "rmse": False,
+    "mae": False,
+}
+
+# Kept small and enumerable on purpose: the eval counts objections by category, so an open-ended
+# string here would make "did the reviewer catch the planted leak" unanswerable. `subcategory` is
+# the escape hatch, so a reviewer catching something unanticipated is not forced to mislabel it.
+ObjectionCategory = Literal[
+    "leakage",
+    "contamination",
+    "overfit",
+    "metric_mismatch",
+    "implausible_importance",
+    "spec_violation",
+    "other",
+]
+
+# Categories whose whole meaning is "this column is the problem". An objection in one of these
+# that names no column cannot be scored, so it is rejected at the contract.
+COLUMN_SCOPED_CATEGORIES = frozenset({"leakage", "contamination", "implausible_importance"})
+
+Severity = Literal["low", "medium", "high"]
+
+ReviewVerdict = Literal["pending", "pass", "block", "exhausted"]
+
+Disposition = Literal["still_open", "resolved", "withdrawn", "not_reviewed"]
+
+
+class Contract(BaseModel):
+    """Base for every state object. Unknown fields are an error, not a silent pass."""
+
+    model_config = ConfigDict(extra="forbid", validate_assignment=True)
+
+    @classmethod
+    def from_dump(cls, data: dict[str, Any]) -> Self:
+        """Rebuild from `model_dump()` output. Use this to read a committed run back."""
+        return cls.model_validate(_strip_computed(cls, data))
+
+
+class RunConfig(Contract):
+    """What this run IS. Frozen at construction, so no node can rewrite its own conditions.
+
+    Every results row must be self-describing from the state object alone. Without this, the
+    reviewer-off arm is byte-identical to a run where the reviewer crashed.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    run_id: str = Field(default_factory=lambda: uuid.uuid4().hex)
+    arm: Literal["team", "single_agent"] = "team"
+    reviewer_enabled: bool = True
+    reviewer_model: str = "haiku"
+    default_model: str = "haiku"
+    loop_cap: int = Field(default=3, ge=0)
+    reviewer_sees_code: bool = Field(
+        default=True,
+        description="Whether the reviewer may read the feature engineering code, not just its "
+        "outputs. Starts on; becomes an ablation later.",
+    )
+    random_seed: int = 20260822
+    dataset_hash: str | None = None
+
+
+class TaskSpec(Contract):
+    """What the run is trying to do. Written by intake, read by everyone after it."""
+
+    target: str
+    task_type: TaskType
+    metric: Metric
+    split_strategy: Literal["random", "stratified", "temporal", "grouped"] = "stratified"
+    split_key: str | None = Field(
+        default=None,
+        description="Column used by temporal or grouped splits. Required for those strategies.",
+    )
+    positive_class: str | None = None
+
+    @computed_field
+    @property
+    def greater_is_better(self) -> bool:
+        return GREATER_IS_BETTER[self.metric]
+
+    @model_validator(mode="after")
+    def _split_key_required_for_keyed_strategies(self) -> "TaskSpec":
+        if self.split_strategy in {"temporal", "grouped"} and not self.split_key:
+            raise ValueError(f"split_strategy={self.split_strategy!r} requires split_key")
+        return self
+
+
+class LeakageCandidate(Contract):
+    """A column the profiler thinks may encode the target.
+
+    The profiler only flags. Deciding what to do about it is the reviewer's job, and whether the
+    reviewer agrees is exactly what the eval measures.
+    """
+
+    column: str
+    reason: str
+    evidence: str = Field(description="The number or observation behind the flag, not a vibe.")
+    suspicion: Severity = Field(
+        description="Ordinal on purpose. A float from an uncalibrated model is fake precision."
+    )
+
+
+class ColumnProfile(Contract):
+    name: str
+    dtype: str
+    missing_fraction: float = Field(ge=0.0, le=1.0)
+    n_unique: int = Field(ge=0)
+    sample_values: list[str] = Field(
+        default_factory=list,
+        max_length=5,
+        description="Capped: this renders into every prompt that shows the profile.",
+    )
+
+
+class ProfileReport(Contract):
+    """Written by profiler. The reviewer reads this to argue with the modeler."""
+
+    n_rows: int = Field(ge=0)
+    n_columns: int = Field(ge=0)
+    columns: list[ColumnProfile] = Field(default_factory=list)
+    leakage_candidates: list[LeakageCandidate] = Field(default_factory=list)
+    target_balance: dict[str, float] = Field(default_factory=dict)
+
+
+class ModelResult(Contract):
+    name: str
+    # Deliberately untyped values: real estimator params include lists and nested dicts, and with
+    # extra="forbid" a ValidationError mid-run costs the whole eval row. Nothing reads this.
+    params: dict[str, Any] = Field(default_factory=dict)
+    cv_scores: list[float] = Field(default_factory=list)
+    claimed_holdout_score: float | None = Field(
+        default=None,
+        description="What the modeler says it scored. A claim, not a measurement. The harness "
+        "writes the independent number to PipelineState.verified_holdout_score.",
+    )
+    model_artifact: ArtifactId | None = None
+
+    @computed_field
+    @property
+    def cv_mean(self) -> float | None:
+        return sum(self.cv_scores) / len(self.cv_scores) if self.cv_scores else None
+
+
+class Objection(Contract):
+    """A blocking complaint from the reviewer, aimed at one node.
+
+    Strictly append-only: once raised, an Objection is never edited or removed. Whether it was
+    later accepted, dropped, or silently forgotten is recorded in `ReviewPass.dispositions`, so
+    that "the reviewer withdrew it" stays distinguishable from "the reviewer never looked again."
+    """
+
+    id: str = Field(default_factory=lambda: uuid.uuid4().hex)
+    category: ObjectionCategory
+    subcategory: str = Field(
+        description="Free text, so a reviewer catching something unanticipated is not forced to "
+        "mislabel it as spec_violation. Counted by category; read by humans."
+    )
+    target_node: RoutableNode
+    columns: list[str] = Field(
+        default_factory=list,
+        description="The columns at issue. Required for column-scoped categories, because "
+        "leakage_caught is a set comparison against ground truth, not a substring search.",
+    )
+    evidence: str
+    severity: Severity
+    raised_at_iteration: int = Field(ge=0)
+
+    @model_validator(mode="after")
+    def _column_scoped_categories_need_columns(self) -> "Objection":
+        if self.category in COLUMN_SCOPED_CATEGORIES and not self.columns:
+            raise ValueError(f"category={self.category!r} requires at least one column")
+        return self
+
+
+class ReviewPass(Contract):
+    """One completed reviewer invocation.
+
+    This is what makes silence legible. Without a per-pass disposition for every open objection,
+    "feature_eng fixed it" and "the reviewer forgot about it" are the same absence.
+    """
+
+    iteration: int = Field(ge=0)
+    claim: Literal["pass", "block"] = Field(
+        description="What the reviewer asked for. Not the outcome: the router decides that."
+    )
+    routed_to: RoutableNode | Literal["reporter"]
+    dispositions: dict[str, Disposition] = Field(
+        default_factory=dict,
+        description="Keyed by Objection.id, for every objection open on entry.",
+    )
+    new_objection_ids: list[str] = Field(default_factory=list)
+
+
+class PipelineError(Contract):
+    node: NodeName
+    message: str
+    recoverable: bool = True
+    occurred_at: datetime = Field(default_factory=_utc_now)
+
+
+class NodeEvent(Contract):
+    """One node execution.
+
+    Appended by every node so results files do not depend on the tracing backend.
+    """
+
+    node: NodeName
+    started: datetime
+    ended: datetime | None = None
+    input_tokens: int = Field(default=0, ge=0)
+    output_tokens: int = Field(default=0, ge=0)
+    cost_usd: float = Field(default=0.0, ge=0.0)
+    model: str | None = None
+
+    @computed_field
+    @property
+    def wall_seconds(self) -> float | None:
+        if self.ended is None:
+            return None
+        return (self.ended - self.started).total_seconds()
+
+
+class PipelineState(Contract):
+    """Every node reads and writes this. Nothing else.
+
+    The three list fields carrying history are annotated with `operator.add` so LangGraph appends
+    partial updates instead of replacing them. Without that, a node returning `{"node_trace": [e]}`
+    silently discards every earlier event and the cost table becomes fiction.
+    """
+
+    # run identity and conditions
+    config: RunConfig = Field(default_factory=RunConfig)
+    started_at: datetime = Field(default_factory=_utc_now)
+    ended_at: datetime | None = None
+
+    # intake
+    dataset_id: str
+    task_description: str
+    spec: TaskSpec | None = None
+
+    # profiler
+    profile: ProfileReport | None = None
+    split_artifact: ArtifactId | None = Field(
+        default=None,
+        description="Row-id manifest for train/holdout/folds. Pinned before feature_eng runs and "
+        "never rewritten, or contamination objections are unfalsifiable and runs are not "
+        "reproducible.",
+    )
+
+    # feature_eng
+    feature_code_artifact: ArtifactId | None = None
+    feature_summary: str | None = None
+    final_features: list[str] | None = Field(
+        default=None,
+        description="Columns that survived into the matrix the model was fit on. This is what "
+        "makes 'the reviewer caught it' and 'the leak was removed' two different numbers.",
+    )
+    dropped_features: list[str] = Field(default_factory=list)
+
+    # modeler
+    candidates: list[ModelResult] = Field(default_factory=list)
+    chosen_model: ModelResult | None = None
+    shap_artifact: ArtifactId | None = None
+    top_importances: list[tuple[str, float]] = Field(default_factory=list)
+
+    # reviewer
+    review_iterations: int = Field(
+        default=0,
+        ge=0,
+        description="Completed reviewer invocations. Incremented by the router, never by the "
+        "reviewer node, so the model under test cannot exceed its own cap.",
+    )
+    objections: Annotated[list[Objection], operator.add] = Field(default_factory=list)
+    review_passes: Annotated[list[ReviewPass], operator.add] = Field(default_factory=list)
+    reviewer_claim: Literal["pass", "block"] | None = Field(
+        default=None,
+        description="The reviewer's own last word. Input to the verdict, not the verdict.",
+    )
+    review_verdict: ReviewVerdict = Field(
+        default="pending",
+        description="Derived by the router. 'exhausted' means the reviewer still wanted to block "
+        "when it ran out of loops, which no node is permitted to self-certify.",
+    )
+
+    # reporter
+    report_artifact: ArtifactId | None = None
+
+    # harness-written ground truth. Nodes never set these; they are how the run gets graded.
+    planted_leakage_columns: list[str] = Field(default_factory=list)
+    verified_holdout_score: float | None = Field(
+        default=None,
+        description="Scored by the harness on a holdout the agents never see. The gap against "
+        "chosen_model.claimed_holdout_score is itself a finding.",
+    )
+    baseline_score: float | None = None
+
+    # bookkeeping
+    errors: Annotated[list[PipelineError], operator.add] = Field(default_factory=list)
+    node_trace: Annotated[list[NodeEvent], operator.add] = Field(default_factory=list)
+
+    @computed_field
+    @property
+    def total_cost_usd(self) -> float:
+        return sum(event.cost_usd for event in self.node_trace)
+
+    @computed_field
+    @property
+    def loop_exhausted(self) -> bool:
+        return self.review_iterations >= self.config.loop_cap
+
+    @computed_field
+    @property
+    def wall_seconds(self) -> float | None:
+        """Real elapsed time, including graph and tool overhead that node events miss."""
+        if self.ended_at is None:
+            return None
+        return (self.ended_at - self.started_at).total_seconds()
+
+    @computed_field
+    @property
+    def score_ratio(self) -> float | None:
+        """Direction-aware, so classification and regression rows mean the same thing."""
+        if self.verified_holdout_score is None or not self.baseline_score or self.spec is None:
+            return None
+        if self.spec.greater_is_better:
+            return self.verified_holdout_score / self.baseline_score
+        return self.baseline_score / self.verified_holdout_score
+
+    def objected_columns(self, categories: frozenset[str] = COLUMN_SCOPED_CATEGORIES) -> set[str]:
+        """Every column the reviewer named, for the given categories."""
+        return {c for o in self.objections if o.category in categories for c in o.columns}
+
+    def results_row(self) -> dict[str, Any]:
+        """The flat row `harness.py` writes to results JSONL. One per dataset per run.
+
+        Every eval outcome named in docs/ARCHITECTURE.md is computed here, from fields only. If a
+        number in the published tables cannot be traced to this method, it is not a real number.
+        """
+        planted = set(self.planted_leakage_columns)
+        flagged = self.objected_columns(frozenset({"leakage", "contamination"}))
+        true_positives = planted & flagged
+        false_positives = flagged - planted
+
+        remediated: bool | None = None
+        if planted and self.final_features is not None:
+            remediated = not (planted & set(self.final_features))
+
+        claimed = self.chosen_model.claimed_holdout_score if self.chosen_model else None
+        gap: float | None = None
+        if claimed is not None and self.verified_holdout_score is not None:
+            gap = claimed - self.verified_holdout_score
+
+        return {
+            # what this run was
+            "run_id": self.config.run_id,
+            "dataset_id": self.dataset_id,
+            "arm": self.config.arm,
+            "reviewer_enabled": self.config.reviewer_enabled,
+            "reviewer_model": self.config.reviewer_model,
+            "reviewer_sees_code": self.config.reviewer_sees_code,
+            "loop_cap": self.config.loop_cap,
+            "random_seed": self.config.random_seed,
+            # scores. `claimed` is what the agent said; `verified` is what we measured.
+            "claimed_holdout_score": claimed,
+            "verified_holdout_score": self.verified_holdout_score,
+            "holdout_claim_gap": gap,
+            "baseline_score": self.baseline_score,
+            "score_ratio": self.score_ratio,
+            "metric": self.spec.metric if self.spec else None,
+            # leakage, as a set comparison against ground truth
+            "leakage_planted": sorted(planted),
+            "leakage_flagged": sorted(flagged),
+            "leakage_caught": bool(true_positives),
+            "leakage_remediated": remediated,
+            "leakage_recall": len(true_positives) / len(planted) if planted else None,
+            "leakage_precision": len(true_positives) / len(flagged) if flagged else None,
+            "false_alarm_columns": sorted(false_positives),
+            "false_alarm": len(false_positives),
+            # the loop
+            "review_verdict": self.review_verdict,
+            "review_loops": self.review_iterations,
+            "objections_raised": len(self.objections),
+            "objections_open_at_end": len(self.open_objections()),
+            # cost and reliability
+            "wall_seconds": self.wall_seconds,
+            "cost_usd": self.total_cost_usd,
+            "errored": bool(self.errors),
+        }
+
+    def open_objections(self, target_node: str | None = None) -> list[Objection]:
+        """Objections no later review pass has marked resolved or withdrawn."""
+        closed = {
+            oid
+            for review in self.review_passes
+            for oid, disposition in review.dispositions.items()
+            if disposition in {"resolved", "withdrawn"}
+        }
+        pending = [o for o in self.objections if o.id not in closed]
+        if target_node is not None:
+            pending = [o for o in pending if o.target_node == target_node]
+        return pending

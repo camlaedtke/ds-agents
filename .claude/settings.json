@@ -1,0 +1,15 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cd \"$CLAUDE_PROJECT_DIR\" && uv run ruff format --quiet . && uv run ruff check --quiet --fix . && uv run pytest -m fast -q -x --no-header -p no:cacheprovider 2>&1 | tail -5"
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -1,0 +1,26 @@
+{
+  "seed": 20260822,
+  "n_rows": 200,
+  "target": "churned",
+  "task_type": "binary",
+  "metric": "roc_auc",
+  "planted_leakage": [
+    {
+      "column": "account_status_code",
+      "kind": "noisy_copy_of_target",
+      "agreement_with_target": 0.91,
+      "why": "Status is assigned after the churn decision, so it cannot exist at predict time."
+    }
+  ],
+  "legit_strong_features": [
+    "support_tickets_90d"
+  ],
+  "noise_features": [
+    "region",
+    "plan_tier"
+  ],
+  "id_columns": [
+    "customer_id"
+  ],
+  "positive_rate": 0.255
+}
