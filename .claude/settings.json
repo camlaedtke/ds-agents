@@ -1,4 +1,50 @@
 {
+  "permissions": {
+    "allow": [
+      "Bash(uv run pytest:*)",
+      "Bash(uv run ruff:*)",
+      "Bash(uv run ds-agents:*)",
+      "Bash(uv run mcp-server:*)",
+      "Bash(uv run python:*)",
+      "Bash(uv sync:*)",
+      "Bash(uv lock:*)",
+      "Bash(uv add:*)",
+      "Bash(uv init:*)",
+      "Bash(uv tree:*)",
+      "Bash(git status:*)",
+      "Bash(git diff:*)",
+      "Bash(git log:*)",
+      "Bash(git show:*)",
+      "Bash(git branch:*)",
+      "Bash(git add:*)",
+      "Bash(ls:*)",
+      "Bash(cat:*)",
+      "Bash(head:*)",
+      "Bash(tail:*)",
+      "Bash(wc:*)",
+      "Bash(grep:*)",
+      "Bash(rg:*)",
+      "Bash(find:*)",
+      "Bash(tree:*)",
+      "Bash(sed -n:*)",
+      "Bash(jq:*)",
+      "Bash(which:*)",
+      "Bash(mkdir -p:*)",
+      "Read",
+      "Edit(./src/**)",
+      "Edit(./tests/**)",
+      "Edit(./mcp_server/**)",
+      "Edit(./docs/**)",
+      "Edit(./.claude/**)"
+    ],
+    "deny": [
+      "Edit(./evals/datasets/**)",
+      "Write(./evals/datasets/**)",
+      "Read(./.env)",
+      "Bash(rm -rf:*)",
+      "Bash(git push --force:*)"
+    ]
+  },
   "hooks": {
     "PostToolUse": [
       {
@@ -6,7 +52,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "cd \"$CLAUDE_PROJECT_DIR\" && uv run ruff format --quiet . && uv run ruff check --quiet --fix . && uv run pytest -m fast -q -x --no-header -p no:cacheprovider 2>&1 | tail -5"
+            "command": "export PATH=\"/opt/homebrew/bin:$PATH\"; cd \"$CLAUDE_PROJECT_DIR\" && uv run ruff format --quiet . && uv run ruff check --quiet --fix . && uv run pytest -m fast -q -x --no-header -p no:cacheprovider 2>&1 | tail -5"
           }
         ]
       }
