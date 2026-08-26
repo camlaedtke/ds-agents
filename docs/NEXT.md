@@ -29,7 +29,11 @@ profiler actually flags: whether it separates `account_status_code` (mutual info
 from `support_tickets_90d` (0.094) and `customer_id` (0.194) is the first real signal this project
 has produced. After that, continue Phase 1 with `feature_eng` and `modeler` per /add-node.
 
-Needs `ANTHROPIC_API_KEY` in the environment; it was not set last session.
+The key lives in `.env` at the repo root (gitignored, and denied to Claude Code in
+`.claude/settings.json`). **Nothing loads it yet** -- there is no `python-dotenv` dependency and no
+code that reads it -- so the client work has to add the loader too, at the CLI entry point rather
+than inside a node. Nodes never read the environment; that rule is in `state.py`'s docstring and is
+what lets `tools/local.py` hand the sandbox a stripped env with no key in it.
 
 ## Open questions
 - The LangChain-vs-Anthropic fork is now blocking, not theoretical. Everything downstream of it —
