@@ -1,10 +1,15 @@
 """The model client, as a Protocol, plus an offline placeholder.
 
 Nodes call `model.generate(system=..., user=..., schema=SomePydanticModel)` and get back a typed
-object plus its usage. They never import an SDK. That keeps the open fork in docs/NEXT.md
-(LangChain `with_structured_output` vs the Anthropic API directly) a one-file decision instead of
-one spread across six nodes, and it is what makes the Haiku/Sonnet reviewer ablation a config
-change rather than an edit.
+object plus its usage. They never import an SDK, which is what makes the Haiku/Sonnet reviewer
+ablation a config change rather than an edit across six nodes.
+
+The LangChain-vs-direct fork is settled: `AnthropicModel` below calls the Anthropic SDK directly.
+`langgraph` already pulls in `langchain-core` and `langsmith`, so tracing was never the thing
+LangChain would have bought us. Going direct buys constrained decoding via `messages.parse`
+(a schema the server enforces, not a tool call we hope validates) and `response.usage` verbatim,
+which matters because token counts are a published output of this project rather than an
+implementation detail. See docs/DECISIONS.md, 2026-08-26.
 
 `StubModel` is NOT a model. It is a placeholder so the graph is runnable with no API key, and it
 is deliberately bad at the thing this project measures: it nominates no leakage candidates at all.
@@ -13,10 +18,14 @@ identifiable and must never be published.
 """
 
 import json
-from dataclasses import dataclass
+import os
+from dataclasses import dataclass, field
 from typing import Any, Protocol
 
-from pydantic import BaseModel
+from langsmith import traceable
+from pydantic import BaseModel, ValidationError
+
+from ds_agents.tools import pricing
 
 
 @dataclass(frozen=True)
@@ -96,6 +105,120 @@ class StubModel:
         # Empty on purpose. A stub that flagged the planted column would make the toy run look
         # like a working reviewer.
         return LeakageNomination(candidates=[], notes="stub: no model was called")
+
+    def _for_FeaturePlan(self, payload: dict[str, Any]) -> Any:  # noqa: N802 - schema name
+        from ds_agents.nodes.feature_eng import FeaturePlan
+
+        # Drops nothing. The node's own forced drops (target, id columns, objected columns) still
+        # apply, so the toy run produces a matrix -- it just produces the one that keeps the leak,
+        # which is the honest depiction of a pipeline with no model in it.
+        return FeaturePlan(drops=[], kept_despite_flag=[])
+
+    def _for_ModelChoice(self, payload: dict[str, Any]) -> Any:  # noqa: N802 - schema name
+        from ds_agents.nodes.modeler import ModelChoice
+
+        # Takes the arithmetic answer the node already computed. Choosing between two fitted
+        # candidates on cv_mean is not judgement, and pretending otherwise would let the stub's
+        # runs look like the model contributed something.
+        best = payload.get("best_by_cv")
+        if not best:
+            candidates = payload.get("candidates") or []
+            best = candidates[0]["name"] if candidates else ""
+        return ModelChoice(chosen=best, rationale="stub: best cv_mean, no model was called")
+
+
+@dataclass
+class AnthropicModel:
+    """The real client. One API call per `generate`, structured output enforced by the server.
+
+    Uses `messages.parse` rather than asking for JSON in the prompt and parsing what comes back.
+    The difference is not stylistic: the schema is enforced during decoding, so "the reviewer
+    returned an objection with no `columns`" becomes impossible rather than becoming a silent
+    zero in the leakage-recall column.
+
+    Failures raise. There is no retry-with-a-nudge and no repair pass, because both would convert
+    "this model could not do the task" -- a finding -- into "this model found nothing", which is a
+    different finding that happens to look better.
+    """
+
+    model: str = "haiku"
+    max_tokens: int = 4096
+    timeout_s: float = 120.0
+    client: Any = None
+    name: str = field(init=False, default="")
+
+    def __post_init__(self) -> None:
+        # Resolved once, here, so `NodeEvent.model` records the id that was actually billed
+        # rather than the alias someone typed in a config file.
+        self.name = pricing.resolve(self.model)
+        # Fail now rather than after a benchmark run has already spent money on an unpriceable
+        # model. This raises UnknownModelError for an id we have no rate for.
+        pricing.price_for(self.name)
+        if self.client is None:
+            import anthropic
+
+            self.client = anthropic.Anthropic(timeout=self.timeout_s)
+
+    # LangSmith gets the per-call span; `langgraph` already traces the graph itself, since it
+    # depends on `langchain-core`. Inert unless LANGSMITH_TRACING and LANGSMITH_API_KEY are set,
+    # so no key means no network call and no behaviour change -- and `node_trace` carries the
+    # token counts regardless, so results files never depend on the tracing backend being up.
+    @traceable(run_type="llm", name="ds_agents.generate")
+    def generate[M: BaseModel](self, *, system: str, user: str, schema: type[M]) -> Completion[M]:
+        response = self.client.messages.parse(
+            model=self.name,
+            max_tokens=self.max_tokens,
+            system=system,
+            messages=[{"role": "user", "content": user}],
+            output_format=schema,
+        )
+        if response.stop_reason == "refusal":
+            raise ModelRefusal(
+                f"{self.name} declined to answer for {schema.__name__}. Recorded as a node error "
+                f"rather than an empty result."
+            )
+        value = getattr(response, "parsed_output", None)
+        if value is None:
+            raise ModelRefusal(
+                f"{self.name} returned no parsed output for {schema.__name__} "
+                f"(stop_reason={response.stop_reason!r}); it may have hit max_tokens mid-object."
+            )
+        if not isinstance(value, schema):
+            # Belt and braces. The SDK validates, but a shape mismatch that reached a node would
+            # be a Pydantic error thrown from deep inside unrelated code.
+            try:
+                value = schema.model_validate(value)
+            except ValidationError as exc:
+                raise ModelRefusal(f"{self.name} output failed {schema.__name__}: {exc}") from exc
+
+        usage = response.usage
+        return Completion(
+            value=value,
+            model=self.name,
+            input_tokens=usage.input_tokens,
+            output_tokens=usage.output_tokens,
+            cost_usd=pricing.cost_usd(
+                self.name,
+                input_tokens=usage.input_tokens,
+                output_tokens=usage.output_tokens,
+                # Read directly, not via getattr with a default. A field the SDK renamed would
+                # then price silently at zero, which is the same "quietly wrong in the flattering
+                # direction" failure pricing.py refuses for unknown model ids. `or 0` only covers
+                # the API's documented `null` for "no cache activity on this call".
+                cache_write_tokens=usage.cache_creation_input_tokens or 0,
+                cache_read_tokens=usage.cache_read_input_tokens or 0,
+            ),
+        )
+
+
+def api_key_present() -> bool:
+    """Whether a real client can be constructed.
+
+    Lives here rather than in a node because nodes never read the environment -- that rule is what
+    lets `tools/local.py` hand the sandbox a stripped env with no key in it. Only `cli.py` and the
+    Phase 4 harness call this.
+    """
+    return bool(os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_AUTH_TOKEN"))
 
 
 def _payload(user: str) -> dict[str, Any]:

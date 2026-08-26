@@ -22,15 +22,25 @@ them; that is Phase 4 scope that PLAN.md did not previously name.
 - [x] `tools/local.py` shim with the four MCP signatures, behind a `Tools` Protocol. Subprocess
       execution, stripped environment, artifact store, both asserted in tests.
 - [x] `tools/llm.py`: `StructuredModel` Protocol plus `StubModel`, so the graph runs with no API
-      key. The concrete LangChain-vs-Anthropic adapter is still not written.
+      key. The LangChain-vs-Anthropic fork is now decided (direct SDK) and the adapter is written.
 - [x] intake node (spec from the dataset artifact's schema) and profiler node (deterministic stats
       via `run_python`, model nominates leakage candidates, pins `split_artifact`), unit tests each
 - [x] graph.py wiring for intake -> profiler, `ds-agents run --dataset toy` prints a node trace
-- [ ] modeler, reporter nodes
-- [ ] feature_eng node (can be minimal: pass-through plus one-hot)
-- [ ] router as a pass-through, so the loop contract is honest before Phase 3 needs it
-- [ ] LangSmith tracing wired, NodeEvent cost accounting (blocked: needs a real model client)
-- [ ] real model client, and a harness guard that refuses a results row containing `model="stub"`
+- [x] modeler, reporter nodes. Modeler fits a fixed candidate set on the pinned folds and asks the
+      model only which to promote; reporter is deterministic markdown and calls no model.
+- [x] feature_eng node. Model proposes a drop plan, a templated snippet does the transform. The
+      artifact is a *fitted transform as code*, so Phase 4 re-applies the same code path.
+- [x] router as a real node on a conditional edge, with the cycle back to feature_eng/modeler
+      wired and tested even though nothing takes it until Phase 3.
+- [x] LangSmith tracing wired (`@traceable`, inert without a key -- untested end to end, no key
+      yet). NodeEvent cost accounting live: a real toy run reports ~$0.009.
+- [x] real model client (`AnthropicModel`, direct SDK), per-model pricing, and the guard --
+      `PipelineState.publishable()`, which Phase 4's harness must call before writing a row.
+
+Scope note: the guard landed as a method on `PipelineState` rather than inside `harness.py`, so the
+CLI and the not-yet-written harness share one implementation. The CLI prints it on every run.
+First live Haiku runs done: the profiler flagged the planted leak in 9 of 9 runs, `feature_eng`
+acted on it in 8 of 9.
 
 ## Phase 2: MCP server (2 to 3 sessions)
 - [ ] mcp_server/ with run_python sandbox (Docker, subprocess, timeout, no network), artifact

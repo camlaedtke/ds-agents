@@ -111,6 +111,10 @@ COLUMN_SCOPED_CATEGORIES = frozenset({"leakage", "contamination", "implausible_i
 
 Severity = Literal["low", "medium", "high"]
 
+# Model names that mean "no real client answered". A run whose trace contains one of these
+# must never reach a results file; `PipelineState.publishable()` is the single gate.
+PLACEHOLDER_MODEL_NAMES = frozenset({"stub"})
+
 ReviewVerdict = Literal["pending", "pass", "block", "exhausted"]
 
 Disposition = Literal["still_open", "resolved", "withdrawn", "not_reviewed"]
@@ -344,15 +348,28 @@ class PipelineState(Contract):
     final_features: list[str] | None = Field(
         default=None,
         description="Columns that survived into the matrix the model was fit on. This is what "
-        "makes 'the reviewer caught it' and 'the leak was removed' two different numbers.",
+        "makes 'the reviewer caught it' and 'the leak was removed' two different numbers. SOURCE "
+        "column names, never one-hot expansions: `results_row()` intersects this with "
+        "`planted_leakage_columns`, which are source names, so storing 'colour=red' here would "
+        "empty the intersection and score every run as remediated.",
     )
     dropped_features: list[str] = Field(default_factory=list)
 
     # modeler
     candidates: list[ModelResult] = Field(default_factory=list)
     chosen_model: ModelResult | None = None
-    shap_artifact: ArtifactId | None = None
-    top_importances: list[tuple[str, float]] = Field(default_factory=list)
+    importance_artifact: ArtifactId | None = Field(
+        default=None,
+        description="Permutation importances for every candidate, computed on the agents' holdout "
+        "with the feature transform inside the estimator pipeline so the names are source columns. "
+        "Named for what it holds: `shap` is not a dependency and this has never held SHAP values.",
+    )
+    top_importances: list[tuple[str, float]] = Field(
+        default_factory=list,
+        description="The chosen model's permutation importances, source column names, highest "
+        "first. Source names because `planted_leakage_columns` and `Objection.columns` speak that "
+        "vocabulary, and a set comparison across two vocabularies is not a comparison.",
+    )
 
     # reviewer
     review_iterations: int = Field(
@@ -533,3 +550,31 @@ class PipelineState(Contract):
         if target_node is not None:
             pending = [o for o in pending if o.target_node == target_node]
         return pending
+
+    def placeholder_models(self) -> list[str]:
+        """Model names in the trace that are placeholders rather than a real client.
+
+        `StubModel` answers intake from column-name convention and nominates zero leakage
+        candidates by design. A results row built from those events would look like a working
+        pipeline that found nothing, which is indistinguishable in a table from a real reviewer
+        that missed the leak. The harness calls this and refuses the row; see
+        `publishable()`.
+        """
+        return sorted({e.model for e in self.node_trace if e.model in PLACEHOLDER_MODEL_NAMES})
+
+    def publishable(self) -> tuple[bool, str]:
+        """Whether this run may be written to a results file, and why not if it may not.
+
+        A tuple rather than a bool because the caller has to print the reason. Returning False
+        with no explanation produces a harness that silently drops rows, which is the same
+        failure as writing fake ones.
+        """
+        placeholders = self.placeholder_models()
+        if placeholders:
+            return False, (
+                f"node_trace contains placeholder model(s) {', '.join(placeholders)}; "
+                "no number from this run is real"
+            )
+        if not self.node_trace:
+            return False, "node_trace is empty; nothing ran"
+        return True, ""

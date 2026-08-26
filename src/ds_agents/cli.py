@@ -1,11 +1,13 @@
 """Command line entry point.
 
-Phase 1 runs the front of the graph: intake -> profiler. The remaining nodes land in later
-phases, so a `run` today ends after profiling rather than producing a model.
+This is also the ONLY place that reads the environment. `.env` is loaded here, not in a node and
+not in `tools/`, because `state.py`'s contract says nodes never touch the environment -- which is
+what lets `tools/local.py` hand the sandbox a stripped env with no API key in it. A node that
+loaded dotenv would put the key one `os.environ` call away from agent-authored code.
 
-With no API key configured this falls back to `StubModel`, which is not a model. Every event it
-produces is stamped `model="stub"` and the run prints a warning, because a results row built from
-a stub would look like a system that never finds anything.
+With no API key this falls back to `StubModel`, which is not a model. Every event it produces is
+stamped `model="stub"`, the run prints a warning, and `PipelineState.publishable()` refuses the
+run, because a results row built from a stub would look like a system that never finds anything.
 """
 
 import argparse
@@ -14,15 +16,19 @@ import sys
 import tempfile
 from pathlib import Path
 
+from dotenv import load_dotenv
+
 from ds_agents.graph import run_pipeline
-from ds_agents.state import PipelineState
-from ds_agents.tools.llm import StubModel
+from ds_agents.state import PipelineState, RunConfig
+from ds_agents.tools.llm import AnthropicModel, StubModel, api_key_present
 from ds_agents.tools.local import LocalTools
+from ds_agents.tools.pricing import UnknownModelError
 
 FIXTURES = Path(__file__).resolve().parents[2] / "tests" / "fixtures"
+REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
-def _toy_state() -> PipelineState:
+def _toy_state(model_name: str = "haiku") -> PipelineState:
     manifest_path = FIXTURES / "toy" / "manifest.json"
     if not manifest_path.exists():
         raise SystemExit(
@@ -31,6 +37,20 @@ def _toy_state() -> PipelineState:
         )
     manifest = json.loads(manifest_path.read_text())
     return PipelineState(
+        # The reviewer node does not exist until Phase 3, so saying it is enabled would be the
+        # config lying about the run. The router correctly treats "enabled but silent" as an
+        # error, which would otherwise fire on every Phase 1 and 2 run and make `errored` true in
+        # every results row -- burying the first real error under two phases of noise. Flip this
+        # back when `reviewer` is wired.
+        config=RunConfig(
+            reviewer_enabled=False,
+            # Recorded, not decorative. `results_row()` reports `reviewer_model` straight off this
+            # object, so a config that says "haiku" while --model sonnet ran would publish a
+            # Sonnet-everywhere run under a Haiku label and silently corrupt the ablation table.
+            # ARCHITECTURE.md's rule is that a row is self-describing from the state alone.
+            default_model=model_name,
+            reviewer_model=model_name,
+        ),
         dataset_id="toy",
         # No `spec`: naming the target is intake's job, and pre-filling it here would skip the
         # node under test. The description is what a person would actually say.
@@ -57,6 +77,29 @@ def _print_trace(state: PipelineState) -> None:
             print(f"  [{flag}] {error.node}: {error.message}")
 
 
+def _select_model(config: RunConfig, *, no_live: bool = False):
+    """Real client when a key resolves, placeholder otherwise, and say which out loud.
+
+    Takes the frozen `RunConfig` rather than argv so the client and the results row cannot
+    disagree about which model ran. Never silently downgrades: `--no-live` is the only way to ask
+    for the stub when a key is present, so a benchmark run cannot quietly become a placeholder run
+    because an env var went missing.
+    """
+    if no_live:
+        return StubModel()
+    if not api_key_present():
+        print(
+            "no ANTHROPIC_API_KEY found (looked in the environment and .env at the repo root); "
+            "falling back to the placeholder",
+            file=sys.stderr,
+        )
+        return StubModel()
+    try:
+        return AnthropicModel(model=config.default_model)
+    except UnknownModelError as exc:
+        raise SystemExit(str(exc)) from exc
+
+
 def cmd_run(args: argparse.Namespace) -> int:
     if args.dataset != "toy":
         print(f"only the toy dataset exists so far, not {args.dataset!r}", file=sys.stderr)
@@ -64,20 +107,57 @@ def cmd_run(args: argparse.Namespace) -> int:
 
     root = Path(args.artifacts_dir) if args.artifacts_dir else Path(tempfile.mkdtemp())
     tools = LocalTools(root, dataset_path=FIXTURES / "toy" / "toy.csv", dataset_id="toy")
-    model = StubModel()
-    print(
-        f"WARNING: running with {model.name!r}, which is a placeholder and not a model. It "
-        f"nominates no leakage candidates by design. Numbers from this run are not results.",
-        file=sys.stderr,
-    )
+    state = _toy_state(args.model)
+    model = _select_model(state.config, no_live=args.no_live)
+    if isinstance(model, StubModel):
+        print(
+            f"WARNING: running with {model.name!r}, which is a placeholder and not a model. It "
+            f"nominates no leakage candidates by design. Numbers from this run are not results.",
+            file=sys.stderr,
+        )
+    else:
+        print(f"running live against {model.name}", file=sys.stderr)
 
-    state = run_pipeline(_toy_state(), tools=tools, model=model)
+    state = run_pipeline(state, tools=tools, model=model)
 
     print(state.model_dump_json(indent=2, exclude_none=True))
     _print_trace(state)
-    print(f"\nartifacts: {root}", file=sys.stderr)
-    print("graph ends after profiler; the rest of the nodes land in Phase 1-3.", file=sys.stderr)
+    _print_summary(state, root)
     return 1 if any(not e.recoverable for e in state.errors) else 0
+
+
+def _print_summary(state: PipelineState, root: Path) -> None:
+    """What the run produced, and whether it may be published.
+
+    The publishable line is the whole point of printing a summary: it is the same gate the Phase 4
+    harness applies, shown on every manual run so a placeholder run is obvious before anyone
+    quotes a number off it.
+    """
+    print("\nresult", file=sys.stderr)
+    if state.chosen_model:
+        chosen = state.chosen_model
+        metric = state.spec.metric if state.spec else "?"
+        print(
+            f"  chosen model : {chosen.name} (claimed {metric} {chosen.claimed_holdout_score})",
+            file=sys.stderr,
+        )
+    if state.final_features is not None:
+        print(f"  features kept: {', '.join(state.final_features) or '(none)'}", file=sys.stderr)
+    if state.dropped_features:
+        print(f"  dropped      : {', '.join(state.dropped_features)}", file=sys.stderr)
+    if state.top_importances:
+        top = ", ".join(f"{n} {v:.3f}" for n, v in state.top_importances[:3])
+        print(f"  top features : {top}", file=sys.stderr)
+    print(f"  verdict      : {state.review_verdict}", file=sys.stderr)
+    if state.report_artifact:
+        print(f"  report       : {state.report_artifact}", file=sys.stderr)
+    print(f"  artifacts    : {root}", file=sys.stderr)
+
+    publishable, reason = state.publishable()
+    print(
+        f"  publishable  : {'yes' if publishable else f'NO -- {reason}'}",
+        file=sys.stderr,
+    )
 
 
 def cmd_eval(args: argparse.Namespace) -> int:
@@ -88,6 +168,10 @@ def cmd_eval(args: argparse.Namespace) -> int:
 
 
 def main() -> int:
+    # The one environment read in the whole package. `override=False` so an explicitly exported
+    # key beats the file, which is what makes a one-off `ANTHROPIC_API_KEY=... uv run` work.
+    load_dotenv(REPO_ROOT / ".env", override=False)
+
     parser = argparse.ArgumentParser(prog="ds-agents", description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
 
@@ -95,6 +179,16 @@ def main() -> int:
     run.add_argument("--dataset", default="toy")
     run.add_argument(
         "--artifacts-dir", default=None, help="where the run's artifacts land (default: a tempdir)"
+    )
+    run.add_argument(
+        "--model",
+        default="haiku",
+        help="model for every node: a short name (haiku, sonnet) or a full id (default: haiku)",
+    )
+    run.add_argument(
+        "--no-live",
+        action="store_true",
+        help="force the placeholder model even when a key is available",
     )
     run.set_defaults(func=cmd_run)
 

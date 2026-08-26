@@ -148,3 +148,63 @@ Priority: **load-bearing** means the thesis breaks if this is wrong and you cann
   Haiku-vs-Sonnet reviewer ablation as a config change rather than an edit. It also answers the
   structured-output fork in one file instead of six. Related: [[structured-output]],
   [[mcp-tool-boundary]].
+
+### constrained-decoding — making the model physically unable to return the wrong shape
+- Priority: useful
+- Came up: 2026-08-26, writing the real model client
+- Status: flagged
+- Why it matters here: there are two ways to get JSON out of a model. Ask nicely in the prompt and
+  parse what comes back, or hand the API a schema it enforces while generating. We use the second
+  (`messages.parse(output_format=Schema)`). The difference shows up in the eval, not the code: if a
+  reviewer objection can come back missing its `columns` list, "the model could not fill in the
+  field" and "the reviewer found no leaky columns" become the same row in the results table, and
+  the second one is a much better-looking result than the truth. The client raises on a refusal or
+  a validation failure rather than retrying with a nudge, for the same reason.
+
+### token-pricing-and-cost-accounting — where the dollar figures in the README come from
+- Priority: load-bearing
+- Came up: 2026-08-26, `tools/pricing.py`
+- Status: flagged
+- Why it matters here: `cost_usd` is a published number — the cost-per-caught-leak headline and the
+  Haiku-vs-Sonnet comparison are both read straight off `NodeEvent.cost_usd`, which is summed from
+  the API's own reported token usage times a rate table we maintain by hand. Two consequences worth
+  understanding before trusting any cost number: an unknown model id raises instead of pricing at
+  zero (a $0.00 row is indistinguishable from a genuinely cheap one), and prices are a snapshot, so
+  a rate change invalidates old rows rather than being backfilled.
+
+### permutation-importance — how we ask "did the model actually lean on this column?"
+- Priority: useful
+- Came up: 2026-08-26, the modeler node
+- Status: flagged
+- Why it matters here: this is the number that catches a leak *after* the model is fit. Shuffle one
+  column's values, re-score, and see how much worse the model gets; a column the model leaned on
+  hard makes the score collapse. On the toy set the planted leak scores 0.367 and the legitimately
+  strong feature 0.034 — a 10x gap, which is what makes `implausible_importance` a real judgement
+  call for the reviewer rather than a threshold. Two details that are not cosmetic: it is computed
+  on the holdout, not on the training rows (permuting training rows measures memorisation, not
+  usefulness), and the feature transform sits inside the sklearn pipeline so the shuffling happens
+  on *source* columns, not one-hot expansions. It is not SHAP; the field is named
+  `importance_artifact` for that reason.
+
+### fit-on-train-only — why the median gets computed on 160 rows and not 200
+- Priority: load-bearing
+- Came up: 2026-08-26, the feature_eng node
+- Status: flagged
+- Why it matters here: filling missing values with a median computed over the whole dataset means
+  the holdout rows helped choose the number used to prepare the training rows. The model has then
+  seen a smudge of its own test set, and the score comes out slightly too good for reasons nothing
+  in the code says out loud. This is the `contamination` objection category — one of the failures we
+  are asking the reviewer to catch in *its own* pipeline — so having it in our scaffolding would
+  make every contamination finding unfalsifiable. It is also why a missing `split_artifact` kills
+  `feature_eng` outright instead of falling back to the full frame.
+
+### loop-cap-and-verdict-derivation — who decides the run is over, and why it is not the reviewer
+- Priority: load-bearing
+- Came up: 2026-08-26, the router node
+- Status: flagged
+- Why it matters here: the reviewer says `pass` or `block` and nothing else. The router counts the
+  rounds and turns a `block` at the cap into `exhausted`. Collapsing those — letting the reviewer
+  write the verdict, or scoring `exhausted` as `pass` — would make a reviewer that ran out of
+  patience look identical in a results table to one that was satisfied, and those are opposite
+  findings. The cap is enforced by the router and the graph edge together rather than by a guard
+  inside the router, deliberately: see docs/DECISIONS.md 2026-08-26.

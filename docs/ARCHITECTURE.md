@@ -62,14 +62,45 @@ forced to mislabel it.
 |---|---|---|---|---|
 | intake | dataset_id, task_description | spec | read_artifact | profiler |
 | profiler | spec, dataset_id, config.random_seed | profile, split_artifact | run_python | feature_eng |
-| feature_eng | spec, profile, open objections | feature_code_artifact, feature_summary, final_features, dropped_features | run_python, write_artifact | modeler |
-| modeler | spec, feature_code_artifact, split_artifact, open objections | candidates, chosen_model, shap_artifact, top_importances | run_python, write_artifact, log_metric | reviewer |
+| feature_eng | spec, profile, split_artifact, task_description, open objections | feature_code_artifact, feature_summary, final_features, dropped_features | read_artifact, run_python | modeler |
+| modeler | spec, feature_code_artifact, split_artifact, final_features, task_description, config.random_seed, config.run_id, open objections | candidates, chosen_model, importance_artifact, top_importances | read_artifact, run_python, log_metric | reviewer |
 | reviewer | everything above; feature code only if `config.reviewer_sees_code` | objections, reviewer_claim, review_passes | read_artifact | router decides |
-| router | reviewer_claim, review_iterations, config.loop_cap | review_iterations, review_verdict | none | feature_eng / modeler / reporter |
-| reporter | everything | report_artifact | read_artifact, write_artifact | END |
+| router | reviewer_claim, review_iterations, config.loop_cap, config.reviewer_enabled, open objections | review_iterations, review_verdict | none | feature_eng / modeler / reporter |
+| reporter | everything except the ground-truth fields below | report_artifact | write_artifact | END |
 
 No node writes `planted_leakage_columns`, `verified_holdout_score`, or `baseline_score`. Those are
-harness-written ground truth; a node that could see them could game them.
+harness-written ground truth; a node that could see them could game them. The reporter additionally
+must not *render* them: it receives the whole state, and writing the answer key into a report
+artifact would leak it into the store that the Phase 5 single-generalist arm reads.
+
+### One vocabulary: source column names
+
+`final_features`, `dropped_features`, `top_importances`, `Objection.columns`,
+`LeakageCandidate.column`, and `planted_leakage_columns` all hold **original** column names, never
+one-hot expansions. `results_row()` computes `leakage_remediated` as
+`not (planted & set(final_features))`, so storing `region=north` in `final_features` would make
+that intersection permanently empty and score every run as remediated with the leak still present.
+Expanded matrix names live in exactly two places, neither compared against ground truth:
+`FEATURE_ORDER`/`COLUMN_SOURCE` inside `feature_code_artifact`, and `matrix_columns` inside
+`importance_artifact`.
+
+### `review_verdict` values, including the awkward one
+
+`pending` (nobody adjudicated -- the reviewer-off arm, or the reviewer crashed), `pass`,
+`exhausted` (the reviewer still wanted to block when the loops ran out), and `block`. `block` is
+normally transient, but it is reachable as a *terminal* verdict in one case: the reviewer claims
+`block` while no objection is open, so there is nothing for feature_eng or modeler to act on and
+the router sends the run to the reporter with an error recorded. A results row can therefore end
+on `block`, and reading it as "still mid-loop" would be wrong. It always comes with a
+`PipelineError` from the router, which is how to tell the two apart.
+
+### Where the loop cap is actually enforced
+
+The router increments `review_iterations` before checking it, then derives the verdict; the graph
+edge `route_target()` reads that *written verdict* and sends an `exhausted` run to the reporter.
+So the cap is enforced by the two together, not by a clamp inside the router. That is deliberate:
+a defensive clamp would let a mis-wired `graph.py` keep looping while quietly reporting a
+compliant `review_iterations`, turning a topology bug into a wrong number instead of a crash.
 
 A node's signature is `node(state, *, tools, model) -> dict`. It returns a **narrow dict of the
 fields it changed**, never the state object: with `operator.add` on the history fields, returning

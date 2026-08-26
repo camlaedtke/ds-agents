@@ -18,6 +18,7 @@ from ds_agents.state import (
     ReviewPass,
     RunConfig,
     TaskSpec,
+    utc_now,
 )
 
 pytestmark = pytest.mark.fast
@@ -79,7 +80,7 @@ def populated_state() -> PipelineState:
         dropped_features=["account_status_code"],
         candidates=[ModelResult(name="logreg", cv_scores=[0.8, 0.82, 0.79])],
         chosen_model=ModelResult(name="logreg", cv_scores=[0.8], claimed_holdout_score=0.81),
-        shap_artifact="art-shap-1",
+        importance_artifact="art-importance-1",
         top_importances=[("support_tickets_90d", 0.62)],
         review_iterations=1,
         objections=[objection],
@@ -441,3 +442,45 @@ class TestResultsRowBranches:
         assert row["false_alarm"] == 1
         assert row["leakage_flagged_standing"] == []
         assert row["false_alarm_standing"] == 0
+
+
+# --- the placeholder guard --------------------------------------------------------------------
+# Nothing structurally stopped a StubModel run from being written to a results file. These cover
+# the gate that does.
+
+
+def test_a_trace_containing_a_stub_event_is_not_publishable():
+    state = PipelineState(dataset_id="toy", task_description="t")
+    state.node_trace = [
+        NodeEvent(node="intake", started=utc_now(), model="claude-haiku-4-5"),
+        NodeEvent(node="profiler", started=utc_now(), model="stub"),
+    ]
+    ok, reason = state.publishable()
+    assert ok is False
+    assert "stub" in reason
+    assert state.placeholder_models() == ["stub"]
+
+
+def test_a_fully_real_trace_is_publishable():
+    state = PipelineState(dataset_id="toy", task_description="t")
+    state.node_trace = [NodeEvent(node="intake", started=utc_now(), model="claude-haiku-4-5")]
+    assert state.publishable() == (True, "")
+    assert state.placeholder_models() == []
+
+
+def test_an_empty_trace_is_not_publishable():
+    # A row with no events would report cost 0.0 and look like a free, successful run.
+    ok, reason = PipelineState(dataset_id="toy", task_description="t").publishable()
+    assert ok is False
+    assert "nothing ran" in reason
+
+
+def test_a_node_that_called_no_model_does_not_count_as_a_placeholder():
+    # The router and reporter run no model, so their events carry model=None. Treating that as a
+    # placeholder would make every real run unpublishable.
+    state = PipelineState(dataset_id="toy", task_description="t")
+    state.node_trace = [
+        NodeEvent(node="intake", started=utc_now(), model="claude-haiku-4-5"),
+        NodeEvent(node="router", started=utc_now(), model=None),
+    ]
+    assert state.publishable()[0] is True
