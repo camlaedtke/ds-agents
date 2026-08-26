@@ -24,13 +24,30 @@ with a default value so old fixtures still load.
 ## 2. Files to create or edit
 
 1. `src/ds_agents/state.py` if the schema changes. Add a docstring on the new field.
-2. `src/ds_agents/nodes/<name>.py` with a single entry point `def <name>(state: PipelineState) -> PipelineState`.
+2. `src/ds_agents/nodes/<name>.py` with a single entry point:
+   `def <name>(state: PipelineState, *, tools: Tools, model: StructuredModel) -> dict[str, Any]`.
+   - It returns a **narrow dict of the fields it changed**. Never `return state`. Nothing in the
+     type system stops you, and with `operator.add` on `objections`, `review_passes`, `errors`,
+     and `node_trace`, returning the state object concatenates the accumulated history onto itself
+     and doubles every trace event and every objection.
+   - `tools` and `model` are injected, never imported at module level. `graph.py` binds them with
+     `functools.partial`. This is what makes the node testable against canned tool results and the
+     reviewer-model ablation a config change.
+   - Use `NodeRun` from `nodes/_run.py` for the `NodeEvent`, and `run.failure(...)` for error
+     returns, so the trace event is appended on the failure path too. A node that only records its
+     event on success makes the cost table read low by exactly the runs that failed.
    - Prompt templates live in the same file as module-level constants. Structured output via a Pydantic model; parse with the LLM's structured output mode, never regex.
-   - The node must be runnable with a mocked LLM. Take the model client as an injectable dependency.
+   - Put the facts the model needs in the user message as a JSON block, not as prose. The tests
+     assert on what reached the prompt, and a model cannot name a column it was never shown.
 3. `tests/nodes/test_<name>.py`
-   - One test with a mocked LLM response on `tests/fixtures/toy/` state, asserting the writes in the contract.
-   - One test for the failure path in the contract.
-   - Mark both `@pytest.mark.fast`.
+   - Use `FakeTools` and `ScriptedModel` from `tests/conftest.py`. A node test that shells out to
+     a real subprocess is testing pandas.
+   - One test asserting the writes in the contract, including `set(update) == {...}` — a node
+     writing someone else's field is the failure the contract exists to prevent.
+   - One test for the failure path in the contract, asserting the error AND that the trace event
+     is still there.
+   - One test that the facts the model needs actually reached the prompt.
+   - Mark them all `@pytest.mark.fast`.
 4. `src/ds_agents/graph.py`: register the node and its edges. Nothing else changes here.
 5. `docs/ARCHITECTURE.md`: update the node table (reads, writes, tools, routing).
 
@@ -53,6 +70,11 @@ If you made a design choice that a future session might question (loop caps, wha
 ## Things that go wrong
 
 - Node reads a file path from state and opens it directly. Wrong. Use `read_artifact`.
-- Node returns a dict instead of `PipelineState`. LangGraph will accept it and silently drop typed validation.
+- Node returns the whole `PipelineState` instead of a narrow dict. Doubles every append-only field.
+- Node lets a model's output onto the state unvalidated. A leakage candidate naming a column that
+  does not exist cannot be scored against ground truth, and counting it fills the false-alarm
+  column with the model's typos rather than its judgement. Filter against the known columns.
+- Node swallows a tool error into a `None` or an empty list without writing to `state.errors`. A
+  statistic that silently reads `null` is indistinguishable from a clean one.
 - Prompt asks the model for JSON "in the following format" as free text. Use structured output.
 - Test asserts on the LLM's prose instead of the structured fields. Prose is not a contract.

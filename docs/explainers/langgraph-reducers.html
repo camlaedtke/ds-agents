@@ -1,0 +1,361 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Reducers, traced through the toy run</title>
+<style>
+  :root{
+    --bg:#1a1a18; --fg:#f0eee6; --dim:#8f8c82; --line:#33322e; --panel:#212120;
+    --teal:#5DCAA5; --coral:#D85A30; --amber:#E8A94B; --purple:#AFA9EC;
+    --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--fg);
+    font:16px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;}
+  .wrap{max-width:1120px;margin:0 auto;padding:40px 24px 80px}
+  h1{font-size:28px;margin:0 0 6px;font-weight:600;letter-spacing:-.01em}
+  .sub{color:var(--dim);margin:0 0 40px}
+  h2{font-size:14px;text-transform:uppercase;letter-spacing:.09em;color:var(--dim);
+    font-weight:600;margin:56px 0 14px;padding-bottom:8px;border-bottom:1px solid var(--line)}
+  .look{color:var(--amber);margin:0 0 16px;font-size:15px}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:18px 20px}
+  code,.mono{font-family:var(--mono);font-size:13.5px}
+  .kw{color:var(--purple)} .str{color:var(--teal)} .num{color:var(--amber)} .cmt{color:var(--dim)}
+
+  /* section 0 */
+  .rule{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:18px}
+  .rule .card b{display:block;font-family:var(--mono);font-size:13px;margin-bottom:8px}
+  .rule .card p{margin:0;color:var(--dim);font-size:14.5px}
+  .tealb{border-left:3px solid var(--teal)} .coralb{border-left:3px solid var(--coral)}
+
+  /* stepper */
+  .ctrl{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:18px}
+  button{font:inherit;font-size:14px;background:#2b2b28;color:var(--fg);border:1px solid var(--line);
+    border-radius:7px;padding:7px 15px;cursor:pointer}
+  button:hover:not(:disabled){border-color:var(--teal)}
+  button:disabled{opacity:.35;cursor:default}
+  .pos{color:var(--dim);font-family:var(--mono);font-size:13px;margin-left:4px}
+  .toggle{margin-left:auto;display:flex;align-items:center;gap:9px;font-size:14px;color:var(--dim)}
+  .switch{background:#2b2b28;border:1px solid var(--line);border-radius:99px;padding:3px;display:flex}
+  .switch button{border:none;background:none;padding:5px 13px;border-radius:99px;font-size:13px;color:var(--dim)}
+  .switch button.on{background:var(--teal);color:#12241d;font-weight:600}
+  .switch button.on.bad{background:var(--coral);color:#1c0b04}
+
+  .grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.15fr);gap:16px;align-items:start}
+  .lbl{font-size:12px;text-transform:uppercase;letter-spacing:.08em;color:var(--dim);margin-bottom:8px}
+  .nodename{font-family:var(--mono);color:var(--teal);font-size:15px}
+  .nodename.rt{color:var(--purple)}
+  .ret{white-space:pre-wrap;margin:0;font-family:var(--mono);font-size:13px;line-height:1.7}
+  .why{color:var(--dim);font-size:14px;margin:14px 0 0;border-top:1px solid var(--line);padding-top:12px}
+
+  .field{margin-bottom:14px}
+  .fname{font-family:var(--mono);font-size:12.5px;color:var(--dim);margin-bottom:6px}
+  .fname em{font-style:normal;color:var(--fg)}
+  .row{font-family:var(--mono);font-size:12.5px;padding:5px 9px;border-radius:5px;margin-bottom:4px;
+    background:#26261f;border:1px solid transparent;display:flex;justify-content:space-between;gap:12px}
+  .row.new{border-color:var(--amber);background:#2e2a1c}
+  .row .c{color:var(--dim)}
+  .gone{font-family:var(--mono);font-size:12.5px;color:var(--coral);opacity:.75;padding:5px 9px}
+  .total{margin-top:12px;padding-top:11px;border-top:1px solid var(--line);
+    font-family:var(--mono);font-size:13px;display:flex;justify-content:space-between}
+  .total .v{color:var(--amber)} .total .v.bad{color:var(--coral)}
+  .verdict{margin-top:12px;font-size:14px;color:var(--coral)}
+  .verdict.ok{color:var(--teal)}
+  .note{color:var(--dim);font-size:13px;margin-top:14px}
+
+  /* tabs */
+  .tabs{display:flex;gap:8px;margin-bottom:16px}
+  .tabs button.on{border-color:var(--amber);color:var(--amber)}
+  .two{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:16px}
+  .two h3{margin:0 0 10px;font-size:13px;font-family:var(--mono);font-weight:600}
+  .two .ok h3{color:var(--teal)} .two .bad h3{color:var(--coral)}
+  .seq{font-family:var(--mono);font-size:13px;line-height:1.9;margin:0 0 12px;white-space:pre-wrap}
+  .out{font-family:var(--mono);font-size:13px;padding:10px 12px;border-radius:6px;background:#26261f}
+  .out.ok{border-left:3px solid var(--teal)} .out.bad{border-left:3px solid var(--coral)}
+  .punch{font-size:14.5px;margin:12px 0 0}
+  .punch.bad{color:var(--coral)} .punch.ok{color:var(--dim)}
+
+  table{border-collapse:collapse;width:100%;font-size:14px;margin-top:6px}
+  th,td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--line)}
+  th{color:var(--dim);font-size:12px;text-transform:uppercase;letter-spacing:.07em;font-weight:600}
+  td.m{font-family:var(--mono);font-size:13px}
+  .tag{font-family:var(--mono);font-size:12px;padding:2px 7px;border-radius:4px}
+  .tag.add{background:#1f3329;color:var(--teal)} .tag.rep{background:#33302a;color:var(--amber)}
+  @media(max-width:900px){.grid,.two,.rule{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>Reducers</h1>
+<p class="sub">The rule LangGraph uses to merge a node&rsquo;s return value into <code>PipelineState</code>. Traced through one run on <code>tests/fixtures/toy/</code>.</p>
+
+<h2>The one sentence</h2>
+<p class="look">Read this once, then stop reading and press Next below.</p>
+<div class="card">
+  <p style="margin:0 0 4px">A node never hands back the whole state. It hands back a <b>small dict of only the keys it changed</b>. LangGraph then merges that dict in, one key at a time &mdash; and each key has its own merge rule. That rule is the reducer.</p>
+</div>
+<div class="rule">
+  <div class="card tealb">
+    <b><span class="kw">Annotated</span>[<span class="kw">list</span>[NodeEvent], operator.add]</b>
+    <p>Rule: <b>append</b>. The new list is concatenated onto what is already there.</p>
+  </div>
+  <div class="card coralb">
+    <b><span class="kw">list</span>[NodeEvent]</b>
+    <p>Rule: <b>replace</b>, the default when you write nothing. The new list <i>becomes</i> the value. Everything before it is gone.</p>
+  </div>
+</div>
+
+<h2>1. Watch the trace accumulate &mdash; or not</h2>
+<p class="look">Step through the run. The left pane is what the node returned; the right pane is the state after LangGraph merged it. Flip the switch to see the same run with the annotation removed.</p>
+
+<div class="ctrl">
+  <button id="prev">&larr; Back</button>
+  <button id="next">Next &rarr;</button>
+  <span class="pos" id="pos"></span>
+  <span class="toggle">node_trace is
+    <span class="switch">
+      <button id="tOn" class="on">Annotated[..., operator.add]</button>
+      <button id="tOff">plain list</button>
+    </span>
+  </span>
+</div>
+
+<div class="grid">
+  <div class="card">
+    <div class="lbl">the node returns</div>
+    <div class="nodename" id="nname"></div>
+    <pre class="ret" id="ret"></pre>
+    <p class="why" id="why"></p>
+  </div>
+  <div class="card">
+    <div class="lbl">PipelineState after the merge</div>
+    <div id="state"></div>
+    <div class="total"><span id="totlbl">state.total_cost_usd</span><span class="v" id="tot"></span></div>
+    <div class="verdict" id="verdict"></div>
+  </div>
+</div>
+<p class="note">Field names, columns and the planted leak are real, from <code>src/ds_agents/state.py</code> and <code>tests/fixtures/toy/manifest.json</code>. The per-node dollar figures are illustrative &mdash; <code>src/ds_agents/nodes/</code> is still empty, so there is no real run to read them from yet.</p>
+
+<h2>2. The same rule, pointed the wrong way</h2>
+<p class="look">Appending is not &ldquo;the safe option&rdquo;. On these two fields, adding a reducer is what breaks the numbers. This is the part you left open last time.</p>
+
+<div class="tabs">
+  <button id="tabA" class="on">final_features</button>
+  <button id="tabB">review_iterations</button>
+</div>
+<div id="tabbody"></div>
+
+<h2>3. The whole decision, in one question</h2>
+<p class="look">When this key gets written a second time, is the second write <b>more history</b>, or a <b>correction</b>?</p>
+<div class="card">
+<table>
+  <tr><th>Field</th><th>Second write means</th><th>Rule</th></tr>
+  <tr><td class="m">node_trace</td><td>another node ran</td><td><span class="tag add">operator.add</span></td></tr>
+  <tr><td class="m">objections</td><td>the reviewer raised another one</td><td><span class="tag add">operator.add</span></td></tr>
+  <tr><td class="m">review_passes</td><td>the reviewer ran again</td><td><span class="tag add">operator.add</span></td></tr>
+  <tr><td class="m">errors</td><td>something else failed</td><td><span class="tag add">operator.add</span></td></tr>
+  <tr><td class="m">final_features</td><td>feature_eng changed its mind</td><td><span class="tag rep">replace</span></td></tr>
+  <tr><td class="m">review_iterations</td><td>the count moved on</td><td><span class="tag rep">replace</span></td></tr>
+  <tr><td class="m">chosen_model, review_verdict, spec, profile</td><td>the current answer is different now</td><td><span class="tag rep">replace</span></td></tr>
+</table>
+<p class="note" style="margin-top:16px">Four fields append; everything else replaces. Nothing in the type system stops you getting this backwards &mdash; <code>list[Objection]</code> and <code>Annotated[list[Objection], operator.add]</code> both type-check, both run, and both produce a results row. Only one of them produces a true one.</p>
+</div>
+
+</div>
+
+<script>
+const F = n => "$" + n.toFixed(4);
+
+const STEPS = [
+  { node:"intake", ret:
+`{
+  <k>"spec"</k>: TaskSpec(target=<s>"churned"</s>, task_type=<s>"binary"</s>,
+                  metric=<s>"roc_auc"</s>, split_strategy=<s>"stratified"</s>),
+  <k>"node_trace"</k>: [NodeEvent(node=<s>"intake"</s>, cost_usd=<n>0.0008</n>)]
+}`,
+    why:"Two keys, because intake changed exactly two things. It did not mention <code>profile</code> or <code>objections</code>, so LangGraph leaves them alone.",
+    trace:{node:"intake", cost:0.0008} },
+
+  { node:"profiler", ret:
+`{
+  <k>"profile"</k>: ProfileReport(n_rows=<n>200</n>, n_columns=<n>8</n>,
+      leakage_candidates=[LeakageCandidate(
+          column=<s>"account_status_code"</s>, suspicion=<s>"high"</s>,
+          evidence=<s>"agrees with churned on 91% of rows"</s>)]),
+  <k>"split_artifact"</k>: <s>"art_split_7c1e"</s>,
+  <k>"node_trace"</k>: [NodeEvent(node=<s>"profiler"</s>, cost_usd=<n>0.0021</n>)]
+}`,
+    why:"<code>profile</code> replaces (there was no profile before). <code>node_trace</code> is the interesting one: the returned list has <b>one</b> event in it, not two.",
+    trace:{node:"profiler", cost:0.0021} },
+
+  { node:"feature_eng", ret:
+`{
+  <k>"final_features"</k>: [<s>"tenure_months"</s>, <s>"monthly_charges"</s>,
+      <s>"support_tickets_90d"</s>, <s>"region"</s>, <s>"plan_tier"</s>,
+      <s>"account_status_code"</s>],   <c># the leak is still in</c>
+  <k>"dropped_features"</k>: [<s>"customer_id"</s>],
+  <k>"node_trace"</k>: [NodeEvent(node=<s>"feature_eng"</s>, cost_usd=<n>0.0034</n>)]
+}`,
+    why:"It kept <code>account_status_code</code>. Remember this list &mdash; section 2 comes back to it.",
+    trace:{node:"feature_eng", cost:0.0034} },
+
+  { node:"modeler", ret:
+`{
+  <k>"chosen_model"</k>: ModelResult(name=<s>"GradientBoosting"</s>,
+      cv_scores=[<n>0.97</n>, <n>0.96</n>, <n>0.98</n>],
+      claimed_holdout_score=<n>0.97</n>),
+  <k>"node_trace"</k>: [NodeEvent(node=<s>"modeler"</s>, cost_usd=<n>0.0029</n>)]
+}`,
+    why:"0.97 AUC on a churn toy set is the leak talking, not the model. That is the trap working as designed.",
+    trace:{node:"modeler", cost:0.0029} },
+
+  { node:"reviewer", ret:
+`{
+  <k>"objections"</k>: [Objection(category=<s>"leakage"</s>,
+      target_node=<s>"feature_eng"</s>, severity=<s>"high"</s>,
+      columns=[<s>"account_status_code"</s>],
+      evidence=<s>"assigned after the churn decision"</s>)],
+  <k>"reviewer_claim"</k>: <s>"block"</s>,
+  <k>"node_trace"</k>: [NodeEvent(node=<s>"reviewer"</s>, cost_usd=<n>0.0041</n>)]
+}`,
+    why:"<code>objections</code> is annotated too, so it appends the same way. Next loop&rsquo;s objections will land <i>beside</i> this one, not on top of it.",
+    trace:{node:"reviewer", cost:0.0041},
+    obj:{cat:"leakage", col:"account_status_code", it:0} },
+
+  { node:"router", rt:true, ret:
+`{
+  <k>"review_iterations"</k>: <n>1</n>,        <c># absolute, not "+1"</c>
+  <k>"review_verdict"</k>: <s>"pending"</s>,
+  <k>"review_passes"</k>: [ReviewPass(iteration=<n>0</n>, claim=<s>"block"</s>,
+      routed_to=<s>"feature_eng"</s>)]
+}`,
+    why:"The router, not the reviewer, owns the count &mdash; so the thing being tested cannot raise its own cap. It writes no <code>node_trace</code> event, so the right pane does not move.",
+    obj:null }
+];
+
+let i = 0, reducer = true, tab = "A";
+
+function render(){
+  const s = STEPS[i];
+  document.getElementById("pos").textContent = "step " + (i+1) + " of " + STEPS.length;
+  document.getElementById("prev").disabled = i === 0;
+  document.getElementById("next").disabled = i === STEPS.length-1;
+  const nn = document.getElementById("nname");
+  nn.textContent = s.rt ? "router  (a plain function, not an agent)" : s.node + "()";
+  nn.className = "nodename" + (s.rt ? " rt" : "");
+  document.getElementById("ret").innerHTML = s.ret
+    .replace(/<k>/g,'<span class="str">').replace(/<s>/g,'<span class="str">')
+    .replace(/<n>/g,'<span class="num">').replace(/<c>/g,'<span class="cmt">')
+    .replace(/<\/k>|<\/s>|<\/n>|<\/c>/g,'</span>');
+  document.getElementById("why").innerHTML = s.why;
+
+  // accumulate
+  const traces = [], objs = [];
+  for (let k = 0; k <= i; k++){
+    if (STEPS[k].trace) traces.push({...STEPS[k].trace, step:k});
+    if (STEPS[k].obj) objs.push({...STEPS[k].obj, step:k});
+  }
+  const shown = reducer ? traces : traces.slice(-1);
+  const dropped = reducer ? [] : traces.slice(0, -1);
+
+  let html = '<div class="field"><div class="fname">state.node_trace &nbsp;<em>' +
+    shown.length + (shown.length===1?" event":" events") + '</em></div>';
+  dropped.forEach(t => { html += '<div class="gone">&times; NodeEvent(' + t.node + ')  discarded by the last merge</div>'; });
+  shown.forEach(t => {
+    html += '<div class="row' + (t.step === i ? ' new' : '') + '"><span>NodeEvent(node=&quot;' +
+      t.node + '&quot;)</span><span class="c">' + F(t.cost) + '</span></div>';
+  });
+  html += '</div>';
+
+  if (objs.length){
+    html += '<div class="field"><div class="fname">state.objections &nbsp;<em>' + objs.length +
+      ' &mdash; always appends</em></div>';
+    objs.forEach(o => {
+      html += '<div class="row' + (o.step === i ? ' new' : '') + '"><span>Objection(' + o.cat +
+        ')</span><span class="c">' + o.col + '</span></div>';
+    });
+    html += '</div>';
+  }
+  document.getElementById("state").innerHTML = html;
+
+  const total = shown.reduce((a,t) => a + t.cost, 0);
+  const truth = traces.reduce((a,t) => a + t.cost, 0);
+  document.getElementById("tot").textContent = F(total);
+  document.getElementById("tot").className = "v" + (reducer ? "" : " bad");
+  const v = document.getElementById("verdict");
+  if (reducer){
+    v.className = "verdict ok";
+    v.innerHTML = i >= 1 ? "Every node that ran is still in the list. The cost table is real." : "";
+  } else {
+    v.className = "verdict";
+    v.innerHTML = dropped.length
+      ? "The run really cost " + F(truth) + ". The results row will say " + F(total) +
+        " &mdash; and it will say it without erroring, without a warning, and without ever looking wrong."
+      : "";
+  }
+}
+
+document.getElementById("prev").onclick = () => { i = Math.max(0, i-1); render(); };
+document.getElementById("next").onclick = () => { i = Math.min(STEPS.length-1, i+1); render(); };
+document.getElementById("tOn").onclick = () => { reducer = true;
+  document.getElementById("tOn").className = "on";
+  document.getElementById("tOff").className = ""; render(); };
+document.getElementById("tOff").onclick = () => { reducer = false;
+  document.getElementById("tOff").className = "on bad";
+  document.getElementById("tOn").className = ""; render(); };
+
+const TABS = {
+A: `<p class="look" style="color:var(--dim)">The reviewer blocked, feature_eng ran a second time and dropped the leak. Now the second write lands on the first.</p>
+<div class="card"><pre class="seq">loop 1  feature_eng returns {"final_features": [tenure_months, monthly_charges,
+                             support_tickets_90d, region, plan_tier, <span class="num">account_status_code</span>]}
+        reviewer blocks on <span class="num">account_status_code</span>
+loop 2  feature_eng returns {"final_features": [tenure_months, monthly_charges,
+                             support_tickets_90d, region, plan_tier]}   <span class="cmt"># fixed</span></pre>
+<div class="two">
+  <div class="ok"><h3>replace &mdash; what state.py does</h3>
+    <div class="out ok">final_features = [tenure_months, monthly_charges,<br>&nbsp;&nbsp;support_tickets_90d, region, plan_tier]<br><br>
+    <span class="cmt">results_row():</span><br>planted &amp; set(final_features) = <span class="str">set()</span><br>
+    <b>leakage_remediated = <span class="str">True</span></b></div>
+    <p class="punch ok">The results file says the team caught it and fixed it. Which is what happened.</p></div>
+  <div class="bad"><h3>operator.add &mdash; the naive version</h3>
+    <div class="out bad">final_features = [tenure_months, monthly_charges,<br>&nbsp;&nbsp;support_tickets_90d, region, plan_tier,<br>&nbsp;&nbsp;<span class="num">account_status_code</span>,<br>&nbsp;&nbsp;tenure_months, monthly_charges, ...]<br><br>
+    <span class="cmt">results_row():</span><br>planted &amp; set(final_features) = <span class="num">{account_status_code}</span><br>
+    <b>leakage_remediated = <span class="num">False</span></b></div>
+    <p class="punch bad">The agents did the right thing and the benchmark records a failure. The one headline finding this repo exists to produce, inverted by an annotation.</p></div>
+</div></div>`,
+
+B: `<p class="look" style="color:var(--dim)">The open question from last time. <code>review_iterations</code> is a number, and a number is exactly where the reflex to reach for <code>operator.add</code> is strongest. <code>loop_cap = 3</code>.</p>
+<div class="card"><pre class="seq">the router writes the <b>absolute</b> count after each reviewer pass:  <span class="num">1</span>, then <span class="num">2</span>, then <span class="num">3</span>
+loop_exhausted = review_iterations &gt;= config.loop_cap</pre>
+<div class="two">
+  <div class="ok"><h3>replace &mdash; what state.py does</h3>
+    <div class="out ok">after loop 1 &rarr; <span class="num">1</span>&nbsp;&nbsp;exhausted? 1&gt;=3 <span class="cmt">no</span><br>
+    after loop 2 &rarr; <span class="num">2</span>&nbsp;&nbsp;exhausted? 2&gt;=3 <span class="cmt">no</span><br>
+    after loop 3 &rarr; <span class="num">3</span>&nbsp;&nbsp;exhausted? 3&gt;=3 <span class="str">yes, stop</span><br><br>
+    <b>3 loops, exactly as configured.</b></div>
+    <p class="punch ok">One owner writes the current truth. A later write can correct an earlier one.</p></div>
+  <div class="bad"><h3>operator.add &mdash; the naive version</h3>
+    <div class="out bad">after loop 1 &rarr; 0+1 = <span class="num">1</span>&nbsp;&nbsp;exhausted? <span class="cmt">no</span><br>
+    after loop 2 &rarr; 1+2 = <span class="num">3</span>&nbsp;&nbsp;exhausted? <span class="num">yes, stop</span><br>
+    <span class="cmt">loop 3 never happens</span><br><br>
+    <b>loop_cap=3 silently became 2.</b></div>
+    <p class="punch bad">Worse: results_row reports <code>review_loops: 3</code> when two ran. Every loop_cap ablation would then be comparing numbers that do not mean what their column says.</p></div>
+</div>
+<p class="note">There is a second reason, and it is the one the docstring cares about. A reducer field has <b>no single owner</b> &mdash; any node returning that key contributes, and nothing can ever subtract. The reviewer is the system under test. It must not be able to touch its own cap, even by accident. Replace gives the router sole authorship; add gives it a share.</p>
+</div>`
+};
+
+function tabs(){
+  document.getElementById("tabA").className = tab === "A" ? "on" : "";
+  document.getElementById("tabB").className = tab === "B" ? "on" : "";
+  document.getElementById("tabbody").innerHTML = TABS[tab];
+}
+document.getElementById("tabA").onclick = () => { tab = "A"; tabs(); };
+document.getElementById("tabB").onclick = () => { tab = "B"; tabs(); };
+
+render(); tabs();
+</script>
+</body>
+</html>

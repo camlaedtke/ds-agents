@@ -15,11 +15,22 @@ Phases 0 to 2 are plumbing; keep prompts tight and do not let sessions explore.
 - [x] First DECISIONS.md entries.
 
 ## Phase 1: Linear skeleton (2 to 3 sessions)
-- [ ] intake, profiler, modeler, reporter nodes, in-process tools for now (a `tools/local.py`
-      shim with the same signatures the MCP server will expose)
-- [ ] graph.py wiring, `ds-agents run --dataset toy` prints a node trace
-- [ ] LangSmith tracing wired, NodeEvent cost accounting
+Scope note: the router turned out to need `NodeName` and a real seat in the graph, so it is listed
+here rather than appearing for the first time in Phase 3. `verified_holdout_score` requires the
+harness to withhold rows before the graph starts and re-apply `feature_code_artifact` to score
+them; that is Phase 4 scope that PLAN.md did not previously name.
+- [x] `tools/local.py` shim with the four MCP signatures, behind a `Tools` Protocol. Subprocess
+      execution, stripped environment, artifact store, both asserted in tests.
+- [x] `tools/llm.py`: `StructuredModel` Protocol plus `StubModel`, so the graph runs with no API
+      key. The concrete LangChain-vs-Anthropic adapter is still not written.
+- [x] intake node (spec from the dataset artifact's schema) and profiler node (deterministic stats
+      via `run_python`, model nominates leakage candidates, pins `split_artifact`), unit tests each
+- [x] graph.py wiring for intake -> profiler, `ds-agents run --dataset toy` prints a node trace
+- [ ] modeler, reporter nodes
 - [ ] feature_eng node (can be minimal: pass-through plus one-hot)
+- [ ] router as a pass-through, so the loop contract is honest before Phase 3 needs it
+- [ ] LangSmith tracing wired, NodeEvent cost accounting (blocked: needs a real model client)
+- [ ] real model client, and a harness guard that refuses a results row containing `model="stub"`
 
 ## Phase 2: MCP server (2 to 3 sessions)
 - [ ] mcp_server/ with run_python sandbox (Docker, subprocess, timeout, no network), artifact

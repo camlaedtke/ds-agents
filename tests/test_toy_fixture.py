@@ -31,6 +31,11 @@ def test_target_is_binary_and_imbalanced_but_not_degenerate(toy, manifest):
     assert 0.15 < toy[target].mean() < 0.45
 
 
+def test_positive_rate_matches_manifest(toy, manifest):
+    """The committed positive_rate is a number, not a comment. Nothing else checks it drifted."""
+    assert toy[manifest["target"]].mean() == pytest.approx(manifest["positive_rate"], abs=1e-4)
+
+
 def test_planted_leak_is_present_and_agrees_at_the_recorded_rate(toy, manifest):
     """The whole point of the fixture.
 

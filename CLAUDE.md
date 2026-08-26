@@ -39,6 +39,7 @@ docs/             # ARCHITECTURE.md, PLAN.md, DECISIONS.md, NEXT.md, LEARNING.md
 - New nodes follow /add-node. Benchmark runs follow /run-eval. End every session with /session-wrap.
 - Log architecture choices in `docs/DECISIONS.md`, one paragraph each, when they are made.
 - Cost discipline: default agent model is Haiku. Sonnet only for the reviewer, and only when testing that ablation.
+- If Cameron says he is confused or asks what something is, use /explain-visual rather than explaining in prose.
 
 ## Working mode
 

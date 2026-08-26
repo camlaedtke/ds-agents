@@ -7,9 +7,12 @@ import pytest
 from pydantic import ValidationError
 
 from ds_agents.state import (
+    ColumnProfile,
+    LeakageCandidate,
     ModelResult,
     NodeEvent,
     Objection,
+    PipelineError,
     PipelineState,
     ProfileReport,
     ReviewPass,
@@ -35,11 +38,40 @@ def leak_objection(**overrides) -> Objection:
 
 def populated_state() -> PipelineState:
     """Every optional field set, so round-tripping actually exercises the schema."""
+    objection = leak_objection()
     return PipelineState(
         dataset_id="toy",
         task_description="predict churn",
         spec=TaskSpec(target="churned", task_type="binary", metric="roc_auc"),
-        profile=ProfileReport(n_rows=200, n_columns=8),
+        profile=ProfileReport(
+            n_rows=200,
+            n_columns=8,
+            columns=[
+                ColumnProfile(
+                    name="account_status_code",
+                    dtype="object",
+                    missing_fraction=0.0,
+                    n_unique=4,
+                    sample_values=["CLOSED_R2", "ACTIVE_S1"],
+                ),
+                ColumnProfile(
+                    name="monthly_charges",
+                    dtype="float64",
+                    missing_fraction=0.03,
+                    n_unique=187,
+                    sample_values=["77.72", "35.30"],
+                ),
+            ],
+            leakage_candidates=[
+                LeakageCandidate(
+                    column="account_status_code",
+                    reason="assigned after the churn decision, not available at predict time",
+                    evidence="agrees with target on 91% of rows",
+                    suspicion="high",
+                )
+            ],
+            target_balance={"0": 0.745, "1": 0.255},
+        ),
         split_artifact="art-split-1",
         feature_code_artifact="art-features-1",
         feature_summary="one-hot region and plan_tier",
@@ -50,13 +82,28 @@ def populated_state() -> PipelineState:
         shap_artifact="art-shap-1",
         top_importances=[("support_tickets_90d", 0.62)],
         review_iterations=1,
-        objections=[leak_objection()],
+        objections=[objection],
+        review_passes=[
+            ReviewPass(
+                iteration=1,
+                claim="block",
+                routed_to="feature_eng",
+                dispositions={objection.id: "still_open"},
+                new_objection_ids=[objection.id],
+            )
+        ],
         reviewer_claim="block",
         review_verdict="block",
         report_artifact="art-report-1",
         planted_leakage_columns=["account_status_code"],
         verified_holdout_score=0.74,
         baseline_score=0.70,
+        errors=[
+            PipelineError(
+                node="profiler",
+                message="monthly_charges has missing values; imputed with median",
+            )
+        ],
         node_trace=[NodeEvent(node="intake", started=datetime(2026, 8, 22, tzinfo=UTC))],
         ended_at=datetime(2026, 8, 22, 0, 5, tzinfo=UTC),
     )
@@ -130,8 +177,6 @@ class TestContractEnforcement:
         assert result.params["max_depth"] == [3, 5]
 
     def test_sample_values_are_capped(self):
-        from ds_agents.state import ColumnProfile
-
         with pytest.raises(ValidationError):
             ColumnProfile(
                 name="c",
@@ -189,6 +234,36 @@ class TestReviewLoop:
         assert state.open_objections(target_node="modeler") == []
 
 
+class TestOpenObjectionsOrdering:
+    def test_sorts_by_iteration_not_list_position(self):
+        """Resolved in pass 1, reopened in pass 2: the objection must read as OPEN.
+
+        `review_passes` is built with iteration=2 listed before iteration=1 to prove the
+        method sorts by `iteration`, not by whatever order the list happens to be in.
+        """
+        objection = leak_objection()
+        state = PipelineState(
+            dataset_id="toy",
+            task_description="x",
+            objections=[objection],
+            review_passes=[
+                ReviewPass(
+                    iteration=2,
+                    claim="block",
+                    routed_to="feature_eng",
+                    dispositions={objection.id: "still_open"},
+                ),
+                ReviewPass(
+                    iteration=1,
+                    claim="pass",
+                    routed_to="reporter",
+                    dispositions={objection.id: "resolved"},
+                ),
+            ],
+        )
+        assert state.open_objections() == [objection]
+
+
 class TestDerivedNumbers:
     def test_score_ratio_is_direction_aware(self):
         higher = PipelineState(
@@ -229,6 +304,31 @@ class TestDerivedNumbers:
         """Naive datetimes make committed JSONL inconsistent across machines."""
         assert PipelineState(dataset_id="t", task_description="x").started_at.tzinfo is not None
 
+    def test_zero_baseline_r2_gives_none_ratio_without_raising(self):
+        """The predict-the-mean baseline for r2 is exactly 0.0. A ratio against it is meaningless,
+        not an exception."""
+        state = PipelineState(
+            dataset_id="toy",
+            task_description="x",
+            spec=TaskSpec(target="y", task_type="regression", metric="r2"),
+            verified_holdout_score=0.4,
+            baseline_score=0.0,
+        )
+        assert state.score_ratio is None
+        assert state.results_row()["score_ratio"] is None
+
+    def test_zero_verified_rmse_gives_none_ratio_without_raising(self):
+        """rmse 0.0 is what a perfect leaked copy scores. Dividing by it must not raise."""
+        state = PipelineState(
+            dataset_id="toy",
+            task_description="x",
+            spec=TaskSpec(target="y", task_type="regression", metric="rmse"),
+            verified_holdout_score=0.0,
+            baseline_score=1.2,
+        )
+        assert state.score_ratio is None
+        assert state.results_row()["score_ratio"] is None
+
 
 class TestResultsRow:
     def test_catching_the_planted_leak_scores_as_a_catch(self):
@@ -262,3 +362,82 @@ class TestResultsRow:
 
     def test_row_is_json_serialisable(self):
         json.dumps(populated_state().results_row())
+
+
+class TestResultsRowBranches:
+    """One assertion-focused test per `results_row()` branch that a full `populated_state()`
+    run can never exercise, because its fields are always set together."""
+
+    def test_no_chosen_model_means_no_claim_or_gap(self):
+        state = PipelineState(dataset_id="toy", task_description="x", verified_holdout_score=0.7)
+        row = state.results_row()
+        assert row["claimed_holdout_score"] is None
+        assert row["holdout_claim_gap"] is None
+
+    def test_no_planted_leakage_means_no_recall_or_remediation(self):
+        state = PipelineState(dataset_id="toy", task_description="x", final_features=["a"])
+        row = state.results_row()
+        assert row["leakage_recall"] is None
+        assert row["leakage_remediated"] is None
+
+    def test_no_flags_means_no_precision(self):
+        state = PipelineState(dataset_id="toy", task_description="x", planted_leakage_columns=["c"])
+        row = state.results_row()
+        assert row["leakage_precision"] is None
+
+    def test_empty_final_features_is_not_remediation(self):
+        """A crashed feature_eng leaves final_features=[], which trivially contains no planted
+        column. That must not score as remediation."""
+        state = PipelineState(
+            dataset_id="toy",
+            task_description="x",
+            planted_leakage_columns=["leaky_col"],
+            final_features=[],
+        )
+        row = state.results_row()
+        assert row["leakage_remediated"] is None
+
+    def test_holdout_claim_gap_is_positive_for_overstatement_in_both_directions(self):
+        """Positive must always mean 'the agent overstated itself', whichever way the metric
+        runs. Both states overstate by the same 0.05 margin."""
+        roc_state = PipelineState(
+            dataset_id="toy",
+            task_description="x",
+            spec=TaskSpec(target="y", task_type="binary", metric="roc_auc"),
+            chosen_model=ModelResult(name="m", claimed_holdout_score=0.85),
+            verified_holdout_score=0.80,
+        )
+        rmse_state = PipelineState(
+            dataset_id="toy",
+            task_description="x",
+            spec=TaskSpec(target="y", task_type="regression", metric="rmse"),
+            chosen_model=ModelResult(name="m", claimed_holdout_score=0.80),
+            verified_holdout_score=0.85,
+        )
+        assert roc_state.results_row()["holdout_claim_gap"] == pytest.approx(0.05)
+        assert rmse_state.results_row()["holdout_claim_gap"] == pytest.approx(0.05)
+
+    def test_withdrawn_objection_still_counts_raised_but_not_standing(self):
+        """An objection raised then withdrawn in a later pass stays in the ever-raised numbers
+        but must drop out of the standing ones -- a reviewer that takes back a bad flag is
+        behaving better than one that never looks again."""
+        objection = leak_objection(columns=["region"])
+        state = PipelineState(
+            dataset_id="toy",
+            task_description="x",
+            planted_leakage_columns=["other_col"],
+            objections=[objection],
+            review_passes=[
+                ReviewPass(
+                    iteration=1,
+                    claim="pass",
+                    routed_to="reporter",
+                    dispositions={objection.id: "withdrawn"},
+                )
+            ],
+        )
+        row = state.results_row()
+        assert row["leakage_flagged"] == ["region"]
+        assert row["false_alarm"] == 1
+        assert row["leakage_flagged_standing"] == []
+        assert row["false_alarm_standing"] == 0

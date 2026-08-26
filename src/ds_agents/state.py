@@ -1,8 +1,9 @@
 """The single object every node reads and writes.
 
 Nothing in `nodes/` touches the filesystem, the network, or the environment. A node receives a
-`PipelineState`, calls MCP tools, and returns a `PipelineState`. If something is not on this
-object, a node cannot know it.
+`PipelineState`, calls MCP tools, and returns a narrow dict of the fields it changed -- never the
+state object itself, or the `operator.add` fields below concatenate the accumulated history onto
+itself. If something is not on this object, a node cannot know it.
 
 Two rules shape most of what follows, both of them consequences of the project's thesis:
 
@@ -53,7 +54,7 @@ def _strip_value(annotation: Any, value: Any) -> Any:
     return value
 
 
-def _utc_now() -> datetime:
+def utc_now() -> datetime:
     """Timezone-aware. Naive timestamps make committed JSONL inconsistent across machines."""
     return datetime.now(UTC)
 
@@ -65,6 +66,9 @@ NodeName = Literal[
     "modeler",
     "reviewer",
     "reporter",
+    # The router writes `review_iterations` and `review_verdict`, which an edge function cannot
+    # do, so it is a node and needs a name here or its cost and failures are unrecordable.
+    "router",
     # The single-agent ablation arm runs one generalist instead of the team. It still has to
     # produce a valid trace, or the two arms are not comparable.
     "generalist",
@@ -282,7 +286,7 @@ class PipelineError(Contract):
     node: NodeName
     message: str
     recoverable: bool = True
-    occurred_at: datetime = Field(default_factory=_utc_now)
+    occurred_at: datetime = Field(default_factory=utc_now)
 
 
 class NodeEvent(Contract):
@@ -310,14 +314,14 @@ class NodeEvent(Contract):
 class PipelineState(Contract):
     """Every node reads and writes this. Nothing else.
 
-    The three list fields carrying history are annotated with `operator.add` so LangGraph appends
+    The four list fields carrying history are annotated with `operator.add` so LangGraph appends
     partial updates instead of replacing them. Without that, a node returning `{"node_trace": [e]}`
     silently discards every earlier event and the cost table becomes fiction.
     """
 
     # run identity and conditions
     config: RunConfig = Field(default_factory=RunConfig)
-    started_at: datetime = Field(default_factory=_utc_now)
+    started_at: datetime = Field(default_factory=utc_now)
     ended_at: datetime | None = None
 
     # intake
@@ -406,16 +410,42 @@ class PipelineState(Contract):
     @computed_field
     @property
     def score_ratio(self) -> float | None:
-        """Direction-aware, so classification and regression rows mean the same thing."""
-        if self.verified_holdout_score is None or not self.baseline_score or self.spec is None:
+        """Direction-aware, so classification and regression rows mean the same thing.
+
+        `None` on a zero denominator rather than an exception. A computed field that raises takes
+        `model_dump_json()` and `results_row()` down with it, and ARCHITECTURE.md requires a row
+        for every dataset even on hard failure -- losing the row for the worst outcomes biases
+        every table upward. Two zeros are reachable, not hypothetical: rmse 0.0 is what a perfect
+        leaked copy scores, and the predict-the-mean baseline for r2 is exactly 0.0.
+
+        The r2 case is a real gap, not just a guard: a ratio against a 0.0 baseline has no
+        meaning, so those rows need a difference column instead. See docs/NEXT.md.
+        """
+        if self.verified_holdout_score is None or self.spec is None:
+            return None
+        if self.baseline_score is None or self.baseline_score == 0.0:
             return None
         if self.spec.greater_is_better:
             return self.verified_holdout_score / self.baseline_score
+        if self.verified_holdout_score == 0.0:
+            return None
         return self.baseline_score / self.verified_holdout_score
 
-    def objected_columns(self, categories: frozenset[str] = COLUMN_SCOPED_CATEGORIES) -> set[str]:
-        """Every column the reviewer named, for the given categories."""
-        return {c for o in self.objections if o.category in categories for c in o.columns}
+    def objected_columns(
+        self,
+        categories: frozenset[str] = COLUMN_SCOPED_CATEGORIES,
+        standing_only: bool = False,
+    ) -> set[str]:
+        """Columns the reviewer named, for the given categories.
+
+        `standing_only=False` means "ever raised", which is what `leakage_caught` asks: did the
+        reviewer surface this column at any point. `standing_only=True` drops columns whose every
+        objection was later resolved or withdrawn, which is what a false-alarm count should ask:
+        a reviewer that takes back a bad flag is behaving better than one that does not, and
+        scoring them identically hides that.
+        """
+        source = self.open_objections() if standing_only else self.objections
+        return {c for o in source if o.category in categories for c in o.columns}
 
     def results_row(self) -> dict[str, Any]:
         """The flat row `harness.py` writes to results JSONL. One per dataset per run.
@@ -423,19 +453,28 @@ class PipelineState(Contract):
         Every eval outcome named in docs/ARCHITECTURE.md is computed here, from fields only. If a
         number in the published tables cannot be traced to this method, it is not a real number.
         """
+        leak_categories = frozenset({"leakage", "contamination"})
         planted = set(self.planted_leakage_columns)
-        flagged = self.objected_columns(frozenset({"leakage", "contamination"}))
+        flagged = self.objected_columns(leak_categories)
+        standing = self.objected_columns(leak_categories, standing_only=True)
         true_positives = planted & flagged
         false_positives = flagged - planted
 
+        # An empty feature matrix is not remediation. A feature_eng crash leaves
+        # `final_features=[]`, which trivially contains no planted column; counting that as a fix
+        # inflates the headline remediation rate with runs that produced nothing.
         remediated: bool | None = None
-        if planted and self.final_features is not None:
+        if planted and self.final_features:
             remediated = not (planted & set(self.final_features))
 
         claimed = self.chosen_model.claimed_holdout_score if self.chosen_model else None
         gap: float | None = None
         if claimed is not None and self.verified_holdout_score is not None:
-            gap = claimed - self.verified_holdout_score
+            # Signed so that positive always means "the agent overstated itself", whichever
+            # direction the metric runs. Unsigned, an overclaim on rmse and one on roc_auc have
+            # opposite signs and cancel to nothing when averaged over a mixed benchmark.
+            raw = claimed - self.verified_holdout_score
+            gap = raw if (self.spec is None or self.spec.greater_is_better) else -raw
 
         return {
             # what this run was
@@ -463,6 +502,8 @@ class PipelineState(Contract):
             "leakage_precision": len(true_positives) / len(flagged) if flagged else None,
             "false_alarm_columns": sorted(false_positives),
             "false_alarm": len(false_positives),
+            "leakage_flagged_standing": sorted(standing),
+            "false_alarm_standing": len(standing - planted),
             # the loop
             "review_verdict": self.review_verdict,
             "review_loops": self.review_iterations,
@@ -474,13 +515,19 @@ class PipelineState(Contract):
             "errored": bool(self.errors),
         }
 
-    def open_objections(self, target_node: str | None = None) -> list[Objection]:
-        """Objections no later review pass has marked resolved or withdrawn."""
+    def open_objections(self, target_node: RoutableNode | None = None) -> list[Objection]:
+        """Objections whose LAST disposition is not resolved or withdrawn.
+
+        Order matters and a set union loses it. The router can send a run back to feature_eng, so
+        an objection resolved in pass 2 and marked `still_open` again in pass 3 is reachable; a
+        union over all passes would report it closed and the run would end with
+        `objections_open_at_end: 0` while the problem is still there.
+        """
+        latest: dict[str, Disposition] = {}
+        for review in sorted(self.review_passes, key=lambda r: r.iteration):
+            latest.update(review.dispositions)
         closed = {
-            oid
-            for review in self.review_passes
-            for oid, disposition in review.dispositions.items()
-            if disposition in {"resolved", "withdrawn"}
+            oid for oid, disposition in latest.items() if disposition in {"resolved", "withdrawn"}
         }
         pending = [o for o in self.objections if o.id not in closed]
         if target_node is not None:

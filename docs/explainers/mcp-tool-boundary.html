@@ -1,0 +1,347 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>The tool boundary, traced through one profiler call</title>
+<style>
+  :root{
+    --bg:#1a1a18; --fg:#f0eee6; --dim:#8f8c82; --line:#33322e; --panel:#212120;
+    --teal:#5DCAA5; --coral:#D85A30; --amber:#E8A94B; --purple:#AFA9EC;
+    --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--fg);
+    font:16px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;}
+  .wrap{max-width:1120px;margin:0 auto;padding:40px 24px 80px}
+  h1{font-size:28px;margin:0 0 6px;font-weight:600;letter-spacing:-.01em}
+  .sub{color:var(--dim);margin:0 0 40px}
+  h2{font-size:14px;text-transform:uppercase;letter-spacing:.09em;color:var(--dim);
+    font-weight:600;margin:56px 0 14px;padding-bottom:8px;border-bottom:1px solid var(--line)}
+  .look{color:var(--amber);margin:0 0 16px;font-size:15px}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:18px 20px}
+  code,.mono{font-family:var(--mono);font-size:13.5px}
+  .kw{color:var(--purple)} .str{color:var(--teal)} .coral{color:var(--coral)} .num{color:var(--amber)} .cmt{color:var(--dim)}
+
+  .rule{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:18px}
+  .rule .card b{display:block;font-family:var(--mono);font-size:13px;margin-bottom:8px}
+  .rule .card p{margin:0;color:var(--dim);font-size:14.5px}
+  .tealb{border-left:3px solid var(--teal)} .coralb{border-left:3px solid var(--coral)}
+  .purpleb{border-left:3px solid var(--purple)}
+
+  .ctrl{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:18px}
+  button{font:inherit;font-size:14px;background:#2b2b28;color:var(--fg);border:1px solid var(--line);
+    border-radius:7px;padding:7px 15px;cursor:pointer}
+  button:hover:not(:disabled){border-color:var(--teal)}
+  button:disabled{opacity:.35;cursor:default}
+  .pos{color:var(--dim);font-family:var(--mono);font-size:13px;margin-left:4px}
+  .steptitle{font-size:15px;color:var(--fg);margin-left:8px}
+  .toggle{margin-left:auto;display:flex;align-items:center;gap:9px;font-size:14px;color:var(--dim)}
+  .switch{background:#2b2b28;border:1px solid var(--line);border-radius:99px;padding:3px;display:flex}
+  .switch button{border:none;background:none;padding:5px 13px;border-radius:99px;font-size:13px;color:var(--dim)}
+  .switch button.on{background:var(--teal);color:#12241d;font-weight:600}
+  .switch button.on.bad{background:var(--coral);color:#1c0b04}
+
+  .grid{display:grid;grid-template-columns:minmax(0,1.15fr) minmax(0,1fr);gap:16px;align-items:start}
+  .lbl{font-size:12px;text-transform:uppercase;letter-spacing:.08em;color:var(--dim);margin-bottom:8px}
+  .wire{white-space:pre-wrap;margin:0;font-family:var(--mono);font-size:12.5px;line-height:1.75}
+  .why{color:var(--dim);font-size:14px;margin:14px 0 0;border-top:1px solid var(--line);padding-top:12px}
+  .why b{color:var(--fg);font-weight:600}
+
+  .row{font-family:var(--mono);font-size:12.5px;padding:6px 9px;border-radius:5px;margin-bottom:5px;
+    background:#26261f;border:1px solid transparent;display:flex;justify-content:space-between;gap:12px}
+  .row.new{border-color:var(--amber);background:#2e2a1c}
+  .row .c{color:var(--dim);text-align:right}
+  .blocked{font-family:var(--mono);font-size:12.5px;color:var(--coral);opacity:.8;padding:5px 9px}
+
+  .boundary{display:grid;grid-template-columns:1fr auto 1fr;gap:12px;align-items:center;margin:4px 0}
+  .proc{background:#26261f;border:1px solid var(--line);border-radius:8px;padding:12px 13px}
+  .proc h4{margin:0 0 8px;font-family:var(--mono);font-size:12.5px;font-weight:600}
+  .proc.here h4{color:var(--purple)} .proc.there h4{color:var(--teal)}
+  .proc ul{margin:0;padding-left:16px;font-family:var(--mono);font-size:12px;color:var(--dim);line-height:1.7}
+  .cross{text-align:center;font-family:var(--mono);font-size:11.5px;color:var(--amber);line-height:1.6}
+  .cross .big{display:block;font-size:20px;color:var(--amber)}
+
+  .two{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:16px}
+  .two h3{margin:0 0 10px;font-size:13px;font-family:var(--mono);font-weight:600}
+  .two .ok h3{color:var(--teal)} .two .bad h3{color:var(--coral)}
+  .out{font-family:var(--mono);font-size:12.5px;padding:11px 12px;border-radius:6px;background:#26261f;
+    line-height:1.75;white-space:pre-wrap}
+  .out.ok{border-left:3px solid var(--teal)} .out.bad{border-left:3px solid var(--coral)}
+  .punch{font-size:14.5px;margin:12px 0 0}
+  .punch.bad{color:var(--coral)} .punch.ok{color:var(--dim)}
+  .note{color:var(--dim);font-size:13.5px;margin-top:14px}
+  .note b{color:var(--fg);font-weight:600}
+
+  table{border-collapse:collapse;width:100%;font-size:14px;margin-top:6px}
+  th,td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--line);vertical-align:top}
+  th{color:var(--dim);font-size:12px;text-transform:uppercase;letter-spacing:.07em;font-weight:600}
+  td.m{font-family:var(--mono);font-size:13px}
+  td.q{color:var(--coral);font-family:var(--mono);font-size:13px}
+  @media(max-width:900px){.grid,.two,.rule,.boundary{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>The tool boundary</h1>
+<p class="sub">Why <code>run_python</code> lives in another process, traced through one real call on the toy dataset.</p>
+
+<h2>The one sentence</h2>
+<p class="look">Read this once, then press Next below and watch a single call cross the line.</p>
+<div class="card purpleb">
+  <p style="margin:0 0 10px"><b>MCP</b> (Model Context Protocol &mdash; a fixed message shape for &ldquo;an agent calls a tool&rdquo;) lets an agent call code that is running <b>somewhere else</b>. The agent sends JSON; a separate server process does the work and sends JSON back. Nothing else passes between them.</p>
+  <p style="margin:0;color:var(--dim)">This project puts its four tools behind that boundary instead of importing them as Python functions. It costs a whole phase of plumbing (<code>PLAN.md</code> Phase 2). It buys two things: the agents physically cannot reach the answer key, and a completely different agent can be handed the identical tool surface &mdash; which is what makes the <code>team</code> vs <code>single_agent</code> ablation mean anything.</p>
+</div>
+
+<div class="rule">
+  <div class="card tealb"><b>the tool surface</b><p>Four names, four typed argument lists. That is everything an agent in this system can do to the world.</p></div>
+  <div class="card coralb"><b>never <code>exec</code></b><p>CLAUDE.md rule. Agent-written code never runs in the process that holds <code>PipelineState</code>. Section 2 shows what goes wrong if it does.</p></div>
+</div>
+
+<h2>1. One call, all the way across</h2>
+<p class="look">The profiler wants to know whether <code>account_status_code</code> secretly encodes <code>churned</code>. Left pane is what actually travels between the two processes. Right pane is what each side can see. Amber means new at this step.</p>
+
+<div class="ctrl">
+  <button id="prev">&larr; Back</button>
+  <button id="next">Next &rarr;</button>
+  <span class="pos" id="pos"></span>
+  <span class="steptitle" id="steptitle"></span>
+</div>
+<div class="grid">
+  <div class="card"><div class="lbl" id="wirelbl">over the wire</div><div class="wire" id="wire"></div></div>
+  <div class="card"><div class="lbl" id="sidelbl">what each side holds</div><div id="side"></div></div>
+</div>
+<div class="card" style="margin-top:14px"><p class="why" id="why" style="border:0;padding:0;margin:0"></p></div>
+
+<h2>2. The same call, without the boundary</h2>
+<p class="look">Flip the switch. Same profiler, same code string &mdash; the only change is <i>where</i> it runs. Look at what the code can reach on the left of each pane.</p>
+
+<div class="ctrl">
+  <div class="toggle">
+    <span>run the profiler&rsquo;s code&hellip;</span>
+    <span class="switch">
+      <button id="mMcp">through run_python</button>
+      <button id="mExec">with exec() in-process</button>
+    </span>
+  </div>
+</div>
+<div id="modebody"></div>
+
+<h2>3. What the boundary is actually protecting</h2>
+<p class="look">Two things, and only the second one is about safety.</p>
+
+<table>
+  <tr><th>the thing</th><th>with an MCP server</th><th>with in-process functions</th></tr>
+  <tr>
+    <td><b>The ablation</b><br><span style="color:var(--dim);font-size:13.5px">RunConfig.arm = <code>team</code> vs <code>single_agent</code></span></td>
+    <td class="m">Point Claude Code at the same server. One generalist agent, byte-identical tools.</td>
+    <td class="q">You write run_python twice. A gap in leakage_recall between arms could be the team, or could be the second implementation. Unfalsifiable.</td>
+  </tr>
+  <tr>
+    <td><b>The answer key</b><br><span style="color:var(--dim);font-size:13.5px">planted_leakage_columns, verified_holdout_score</span></td>
+    <td class="m">Not in the container. Not on the mounted filesystem. Not reachable.</td>
+    <td class="q">Sitting on the PipelineState object in the same Python heap the agent&rsquo;s code runs in.</td>
+  </tr>
+  <tr>
+    <td><b>A runaway</b></td>
+    <td class="m">timeout_s kills the subprocess &rarr; exit_code &ne; 0 &rarr; a PipelineError row.</td>
+    <td class="q">A model-written <code>while True</code> hangs the whole eval. The hardest datasets vanish from the table.</td>
+  </tr>
+</table>
+<p class="note">The first row is the one DECISIONS.md leads with, and it is the one worth carrying: this is not primarily a security story. It is a <b>measurement</b> story. Findings are the product, and a finding that rests on two different tool implementations is not a finding.</p>
+
+<h2>4. What actually exists right now</h2>
+<p class="look">Being honest about the gap between this drawing and the repo.</p>
+<div class="rule">
+  <div class="card tealb"><b>decided</b><p>The four signatures in ARCHITECTURE.md. Those <i>are</i> the boundary &mdash; MCP is only how the call travels.</p></div>
+  <div class="card coralb"><b>not built</b><p><code>mcp_server/</code> and <code>src/ds_agents/tools/</code> are empty. Phase 1 calls <code>tools/local.py</code>, a shim with the same signatures. Phase 2 swaps the transport underneath and the toy run must stay green.</p></div>
+</div>
+<p class="note"><b>Still open</b> (NEXT.md): Docker-per-run or one long-lived container. Per-run is cleaner to reason about and slower; long-lived is faster and lets state bleed between runs, which is exactly the kind of contamination the <code>split_artifact</code> pin exists to make falsifiable.</p>
+<p class="note"><b>Surfaced while building this:</b> two small gaps went to NEXT.md &mdash; <code>intake</code> is listed with only <code>read_artifact</code> but has to name the target column, and nothing in <code>NodeEvent</code> records that a tool was called at all.</p>
+
+</div>
+
+<script>
+const STEPS = [
+{
+  title: "The server hands over its menu",
+  wirelbl: "over the wire — connect",
+  wire: `<span class="cmt">// client → server, once, at connect</span>
+{<span class="str">"method"</span>: <span class="str">"tools/list"</span>}
+
+<span class="cmt">// server → client</span>
+{<span class="str">"tools"</span>: [
+  {<span class="str">"name"</span>: <span class="str">"run_python"</span>,
+   <span class="str">"input_schema"</span>: {<span class="str">"code"</span>: <span class="kw">string</span>, <span class="str">"timeout_s"</span>: <span class="kw">integer</span>}},
+  {<span class="str">"name"</span>: <span class="str">"read_artifact"</span>,
+   <span class="str">"input_schema"</span>: {<span class="str">"id"</span>: <span class="kw">string</span>}},
+  {<span class="str">"name"</span>: <span class="str">"write_artifact"</span>,
+   <span class="str">"input_schema"</span>: {<span class="str">"name"</span>: <span class="kw">string</span>, <span class="str">"content"</span>: <span class="kw">string</span>}},
+  {<span class="str">"name"</span>: <span class="str">"log_metric"</span>,
+   <span class="str">"input_schema"</span>: {<span class="str">"run_id"</span>: <span class="kw">string</span>, <span class="str">"name"</span>: <span class="kw">string</span>, <span class="str">"value"</span>: <span class="kw">number</span>}}
+]}`,
+  sidelbl: "what the profiler node can now do",
+  side: `<div class="row new"><span>run_python</span><span class="c">run code in the sandbox</span></div>
+<div class="row new"><span>read_artifact</span><span class="c">fetch something by id</span></div>
+<div class="row new"><span>write_artifact</span><span class="c">store something, get an id</span></div>
+<div class="row new"><span>log_metric</span><span class="c">record a number for this run_id</span></div>
+<div class="blocked">— and nothing else. no open(), no import, no network</div>`,
+  why: `This list is <b>data the server sends</b>, not imports written into the node. That is the whole idea of MCP: the tools describe themselves at connect time, so any client that speaks the protocol gets the same four. Claude Code can connect to this exact server &mdash; that is how the <code>single_agent</code> baseline gets an honest tool surface later.`
+},
+{
+  title: "The model writes a call",
+  wirelbl: "over the wire — the request",
+  wire: `{<span class="str">"method"</span>: <span class="str">"tools/call"</span>,
+ <span class="str">"params"</span>: {
+   <span class="str">"name"</span>: <span class="str">"run_python"</span>,
+   <span class="str">"arguments"</span>: {
+     <span class="str">"timeout_s"</span>: <span class="num">30</span>,
+     <span class="str">"code"</span>: <span class="cmt">// one string, newlines and all</span>
+       <span class="str">"import pandas as pd
+        df = pd.read_csv('/data/toy.csv')
+        leak = (df.account_status_code == 'CLOSED_R2').astype(int)
+        print((leak == df.churned).mean())"</span>
+   }}}`,
+  sidelbl: "what this actually is",
+  side: `<div class="row new"><span>a string</span><span class="c">the model typed it</span></div>
+<div class="row"><span>checked against input_schema</span><span class="c">before it is sent</span></div>
+<div class="row"><span>haiku</span><span class="c">config.default_model</span></div>
+<div class="blocked">not yet executed. not yet trusted.</div>`,
+  why: `The profiler is a Haiku call that produced <b>text</b>. It has not run anything. The schema from step 0 is checked first, so a missing <code>timeout_s</code> is a loud error here rather than a hung eval twenty minutes later. Everything the model can express, it expresses as arguments to one of four names.`
+},
+{
+  title: "It crosses a process boundary",
+  wirelbl: "the boundary",
+  wire: `__BOUNDARY__`,
+  sidelbl: "what crosses",
+  side: `<div class="row new"><span>one JSON object</span><span class="c">bytes on a pipe</span></div>
+<div class="blocked">PipelineState — does not cross</div>
+<div class="blocked">planted_leakage_columns — does not cross</div>
+<div class="blocked">verified_holdout_score — does not cross</div>
+<div class="blocked">the Python heap — does not cross</div>
+<div class="blocked">open file handles — do not cross</div>`,
+  why: `This is the step the phrase &ldquo;tool boundary&rdquo; is naming. The two sides share <b>no memory</b>. They share a pipe carrying text. Whatever the agent-written code does on the right, it cannot see or touch anything on the left, because there is no reference to reach through &mdash; only messages.`
+},
+{
+  title: "It runs where the agent has no say",
+  wirelbl: "inside the sandbox container",
+  wire: `<span class="cmt"># the server, not the agent, decides all of this</span>
+/data/toy.csv        <span class="str">read-only mount</span>   <span class="cmt">200 rows, 8 columns</span>
+/artifacts/          <span class="str">read-write mount</span>
+network              <span class="coral">off</span>
+timeout              <span class="num">30s</span> <span class="cmt">→ SIGKILL</span>
+process              <span class="cmt">subprocess, not this interpreter</span>
+
+<span class="cmt"># what is NOT in this container:</span>
+<span class="cmt">#   manifest.json    (says the leak is account_status_code)</span>
+<span class="cmt">#   the holdout the harness scores on</span>
+<span class="cmt">#   anything about churned that is not in the csv</span>`,
+  sidelbl: "the run, as the agent experiences it",
+  side: `<div class="row new"><span>reads /data/toy.csv</span><span class="c">allowed</span></div>
+<div class="row new"><span>writes /artifacts/split.json</span><span class="c">allowed</span></div>
+<div class="blocked">reads manifest.json — not mounted</div>
+<div class="blocked">pip install — no network</div>
+<div class="blocked">while True: — killed at 30s</div>`,
+  why: `The toy fixture ships with <code>manifest.json</code>, which names <code>account_status_code</code> as the planted leak. The container never sees that file. So when the reviewer catches the leak, &ldquo;it reasoned about the data&rdquo; and &ldquo;it read the answer key&rdquo; are not two explanations you have to choose between &mdash; the second one is <b>structurally impossible</b>. That is what makes the eval number worth publishing.`
+},
+{
+  title: "Text and ids come back, and only then does state change",
+  wirelbl: "over the wire — the response",
+  wire: `{<span class="str">"stdout"</span>: <span class="str">"0.91\\n"</span>,
+ <span class="str">"stderr"</span>: <span class="str">""</span>,
+ <span class="str">"exit_code"</span>: <span class="num">0</span>,
+ <span class="str">"artifacts_written"</span>: [<span class="str">"art_9c1e40"</span>]}
+
+<span class="cmt">// an id is a name, not a handle.</span>
+<span class="cmt">// to see inside it you must ask again:</span>
+<span class="cmt">//   read_artifact("art_9c1e40")</span>`,
+  sidelbl: "PipelineState after the profiler returns",
+  side: `<div class="row new"><span>profile.leakage_candidates[0]</span><span class="c">new</span></div>
+<div class="row" style="display:block;color:var(--dim)">&nbsp;&nbsp;column: <span style="color:var(--fg)">account_status_code</span><br>
+&nbsp;&nbsp;evidence: <span style="color:var(--fg)">"agrees with churned on 91% of 200 rows"</span><br>
+&nbsp;&nbsp;suspicion: <span style="color:var(--fg)">high</span></div>
+<div class="row new"><span>split_artifact</span><span class="c">"art_9c1e40"</span></div>
+<div class="row new"><span>node_trace += NodeEvent</span><span class="c">node="profiler", model="haiku"</span></div>`,
+  why: `<code>stdout</code> is a string; the node parses <span class="num">0.91</span> out of it and writes a typed <code>LeakageCandidate</code>. The artifact comes back as an <b>id</b>, so the split lives on the server and the state carries only a name for it. Note what the profiler did <i>not</i> do: it flagged. Deciding the column is leakage is the reviewer's job, and whether the reviewer agrees is the thing being measured.`
+}
+];
+
+const BOUNDARY = `<div class="boundary">
+  <div class="proc here"><h4>pipeline process</h4><ul>
+    <li>PipelineState</li><li>planted_leakage_columns</li>
+    <li>verified_holdout_score</li><li>the graph, the harness</li></ul></div>
+  <div class="cross"><span class="big">⇄</span>JSON<br>only</div>
+  <div class="proc there"><h4>mcp server / container</h4><ul>
+    <li>run_python</li><li>/data ro</li>
+    <li>/artifacts rw</li><li>no network</li></ul></div>
+</div>`;
+
+let i = 0;
+function render(){
+  const s = STEPS[i];
+  document.getElementById("pos").textContent = `${i+1} / ${STEPS.length}`;
+  document.getElementById("steptitle").textContent = s.title;
+  document.getElementById("wirelbl").textContent = s.wirelbl;
+  document.getElementById("sidelbl").textContent = s.sidelbl;
+  document.getElementById("wire").innerHTML = s.wire === "__BOUNDARY__" ? BOUNDARY : s.wire;
+  document.getElementById("side").innerHTML = s.side;
+  document.getElementById("why").innerHTML = s.why;
+  document.getElementById("prev").disabled = i === 0;
+  document.getElementById("next").disabled = i === STEPS.length - 1;
+}
+document.getElementById("prev").onclick = () => { if(i>0){i--;render();} };
+document.getElementById("next").onclick = () => { if(i<STEPS.length-1){i++;render();} };
+
+let mode = "mcp";
+const MODES = {
+mcp: `<div class="two">
+  <div class="ok"><h3>run_python — what CLAUDE.md requires</h3>
+    <div class="out ok"><span class="cmt"># runs here:</span> container, separate process
+<span class="cmt"># can see:</span> /data/toy.csv, /artifacts
+<span class="cmt"># cannot see:</span> anything Python-side
+
+result = run_python(code, timeout_s=<span class="num">30</span>)
+<span class="cmt"># → {"stdout": "0.91\\n", "exit_code": 0}</span></div>
+    <p class="punch ok">The node parses <span class="num">0.91</span> out of a string and writes a typed field. The strongest claim available about the run is also a true one: the agents could not have read the answer.</p></div>
+  <div class="bad"><h3>exec() — the tempting shortcut</h3>
+    <div class="out bad"><span class="cmt"># same process as the pipeline</span>
+exec(code, {<span class="str">"df"</span>: df, <span class="str">"state"</span>: state})</div>
+    <p class="punch bad">Flip the switch to see what that one line puts within reach.</p></div>
+</div>
+<p class="note">Both versions compute the same <span class="num">0.91</span>. Nothing about the <i>answer</i> differs. What differs is what you can say afterwards about how it was obtained &mdash; and that is the entire output of this project.</p>`,
+exec: `<div class="two">
+  <div class="bad"><h3>exec() in-process — what is now reachable</h3>
+    <div class="out bad">exec(code, {<span class="str">"df"</span>: df, <span class="str">"state"</span>: state})
+
+<span class="cmt"># model-written code, perfectly ordinary looking:</span>
+answer = state.planted_leakage_columns
+<span class="cmt"># → ['account_status_code']</span>
+
+target = state.verified_holdout_score
+<span class="cmt"># → the grade, before the run is graded</span></div>
+    <p class="punch bad">This is not hypothetical. <code>cli.py:29</code> puts <code>planted_leakage_columns=["account_status_code"]</code> onto the very state object a run carries.</p></div>
+  <div class="ok"><h3>what that does to the results row</h3>
+    <div class="out ok">leakage_caught: <span class="str">true</span>
+leakage_recall: <span class="num">1.0</span>
+<span class="cmt"># a perfect score.</span>
+
+<span class="cmt"># produced by a reviewer that reasoned?</span>
+<span class="cmt"># or by code that read the manifest?</span>
+<span class="coral">the row looks identical either way</span></div>
+    <p class="punch bad">And you would never find out, because you cannot grep a model's intent. The number stops being evidence.</p></div>
+</div>
+<p class="note"><b>Two more, less dramatic and more likely:</b> agent code that mutates <code>df</code> in place quietly changes the data every later node sees, and a model-written <code>while True</code> hangs the eval with no timeout to kill it &mdash; so the hardest datasets drop out of the table and every average biases upward.</p>`
+};
+function modes(){
+  document.getElementById("mMcp").className = mode === "mcp" ? "on" : "";
+  document.getElementById("mExec").className = mode === "exec" ? "on bad" : "";
+  document.getElementById("modebody").innerHTML = MODES[mode];
+}
+document.getElementById("mMcp").onclick = () => { mode = "mcp"; modes(); };
+document.getElementById("mExec").onclick = () => { mode = "exec"; modes(); };
+
+render(); modes();
+</script>
+</body>
+</html>
