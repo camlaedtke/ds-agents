@@ -544,3 +544,114 @@ objections in one `reissued_ids` run), the shape of the failure is that the revi
 the numbers it is shown and does not interrogate what the columns mean, which is the one thing the
 matrix cannot tell it. This is the finding Phase 3 exists to produce; it should be reproduced with a
 larger n and against a Sonnet reviewer before it goes in a README.
+
+## 2026-08-27: name transparency becomes a run condition, applied at load time.
+
+The previous session established that trap difficulty in this project is set mostly by what the
+fixture author called a column: two traps tuned until their association with the target was
+indistinguishable from a legitimate strong feature were nominated anyway, and renaming them defeated
+the profiler where no amount of association tuning had. That makes the column name an uncontrolled
+variable under every leakage number, so it had to become a condition that gets recorded. Three
+shapes were available. A paired fixture -- a second committed CSV with opaque headers -- is
+reproducible but differs from its partner in the names *and* in whatever its generator's noise drew,
+so a difference between the arms would have two candidate explanations. A `naming` field on the
+manifest has the same problem plus a maintenance one: two files that are supposed to be identical
+below the header, kept in step by hand. What landed instead is `src/ds_agents/naming.py`, which
+rewrites the header line and copies every remaining byte of the CSV through unchanged. The arms
+differ in one line of one file, which is the only shape in which the comparison isolates the
+variable. Two tests hold that claim up rather than asserting it in a comment: the file body is
+compared character for character, and both arms are required to produce identical permutation
+importances under `StubModel` -- if they ever diverge, something other than the names moved.
+
+The rename is applied above the tools boundary, in `cli.py`, and `nodes/`, `tools/` and
+`mcp_server/` are untouched by it: the only thing that reaches them is a different CSV path. That is
+also what keeps the fixture rule intact, since nothing in `nodes/` may import `naming.py` any more
+than it may import `fixtures.py`. It lives outside `fixtures.py` because that module commits to
+never reading the CSV and the map needs the header -- `claims_timing` has a column no manifest field
+declares, so the manifest could not have been the source. Two consequences worth stating. First,
+*all* non-target columns are renamed, not just the traps: renaming only the traps, which is what the
+previous session's ad hoc ablation did, makes an opaque name the thing only traps have and hands the
+profiler a replacement cue for the one it lost. The cost is that the new rate is not directly
+comparable to the earlier 3-of-3 versus 1-of-3, and it should not be quoted against it. Second, the
+target keeps its name, because intake is given prose and inferring the target from it is the node's
+actual job; renaming it would change the task rather than the condition.
+
+Ground truth follows the rename. `_fixture_state` maps `planted_leakage_columns` through the same
+dictionary the CSV got, because otherwise `results_row()` would compare objections against columns
+that do not exist in the opaque arm's data and every opaque run would score a silent zero -- a name
+effect that was entirely an artefact of the bookkeeping. NEXT.md's reproducibility objection to a
+load-time rename resolves itself: `ArtifactStore.register_dataset` already copies the dataset the
+agents saw into `<artifacts-dir>/data/`, so the exact renamed CSV is on disk for any run started
+with `--artifacts-dir`.
+
+## 2026-08-27: results rows start being written, and learn to see the profiler.
+
+Two things were fixed because without them the naming session would have produced prose over ad hoc
+runs for the third time. `ds-agents run` grew `--repeat N` and `--results PATH`, which appends one
+`results_row()` line per run behind the same `publishable()` gate the Phase 4 harness will apply.
+This does not preempt that harness, which is about the OpenML benchmark set and its baselines; it is
+the smallest thing that makes a number in a doc traceable to a committed row.
+
+The second is more substantive. `results_row()` scored leakage from *reviewer objections only*, and
+the dependent variable in a naming ablation is a **profiler** decision -- so twenty runs would have
+produced a results file with the effect being measured entirely invisible in it. Four fields now
+come off `profile.leakage_candidates`: `profiler_nominated`, `profiler_caught`, `profiler_recall`
+and `profiler_false_alarm`. They are deliberately separate from the reviewer's numbers rather than
+folded into `leakage_caught`, because on the trap fixtures the two nodes give different answers to
+the same run -- the profiler nominates the planted column and the reviewer, shown the result, says
+nothing -- and one combined number would report a team that catches leaks while hiding which member
+caught it. All four are null rather than zero when `profile` is None, because a profiler that
+crashed nominated nothing in a different sense than one that looked and declined, and averaging
+those together over a benchmark would be a lie. This closes the narrow half of the open question
+about `results_row()` being unable to see a profiler false alarm; the first live opaque run scored
+`profiler_false_alarm: 1` on the fixture's honest id column, which is the first time that
+long-standing blind spot has appeared in a row rather than in a note.
+
+## 2026-08-27: the name effect is real, it is large, and it decides whether the reviewer is tested.
+
+Twenty live Haiku runs on `claims_timing`, ten a side, over byte-identical rows differing only in
+the header. The 3-of-3 versus 1-of-3 from the previous session was directional; this is a rate, and
+it is bigger than the directional version suggested. The profiler nominated at least one planted
+trap in **10 of 10 descriptive runs and 2 of 10 opaque** ones; mean `profiler_recall` 0.95 against
+0.10. The traps are the same columns with the same values and the same mutual information with the
+target in both arms. Renaming them was worth roughly the entire signal.
+
+The consequence is not confined to the profiler, which is what makes this worth acting on rather
+than noting. Because `feature_eng` drops what the profiler nominates, the trap **survived into the
+model matrix in 2 of 10 descriptive runs and 10 of 10 opaque** ones, and mean claimed roc_auc rose
+from 0.840 to 0.974 against a legitimate ceiling near 0.82. A benchmark built from descriptively
+named fixtures therefore mostly does not test the reviewer at all: upstream cleans the matrix first
+and the reviewer is handed a clean problem. That is the mechanism behind three sessions of "the
+reviewer never gets a leaky matrix", stated as a number for the first time.
+
+One control makes the mechanism specific rather than vague. The honest identifier `claim_ref` was
+nominated in 10 of 10 descriptive runs and, as `var_01`, in 9 of 10 opaque ones -- essentially
+name-invariant, because its distinctness is visible in the profile statistics the model is given.
+The traps collapse from 10 to 2. So the profiler is not simply flagging less when it loses the
+names, and it is not hedging more either (mean false alarms 1.0 against 1.2). It detects
+*statistically* visible leakage regardless of naming and *semantically* visible leakage only when
+the name says so. Both traps were deliberately tuned to be statistically ordinary, which is exactly
+the class it cannot see.
+
+## 2026-08-27: the reviewer misses the leak in 12 of 12 runs where it had one, and looks in the
+wrong place while doing it.
+
+The previous session's 3-of-3 is now 12-of-12. Across all twenty runs the planted trap survived
+into the matrix twelve times, and in **zero** of those twelve did the reviewer raise a `leakage` or
+`contamination` objection naming any column. It is not that the reviewer is passive: the opaque arm
+raised nine objections to the descriptive arm's two, because a claimed 0.974 is conspicuous. It
+noticed. One run at a claimed 0.9886 is the whole failure in one artifact: the reviewer raised
+`metric_mismatch` ("a 0.074-point improvement ... not credible without evidence of how it was
+computed") and `implausible_importance` naming `var_05, var_06` -- the two *noise* columns, flagged
+because their importance was near zero -- while `var_07` and `var_08`, the planted traps sitting at
+the top of the importance table and solely responsible for the inflated score, are not mentioned in
+either objection. The reviewer has the number that says the score is too good, reasons about it
+correctly, and then searches the bottom of the importance ranking instead of the top. That is a
+sharper and more actionable finding than "it misses leaks", and it points at the prompt: nothing
+asks it to explain *which column* produced an implausible score.
+
+Two things follow for Phase 5 and neither is taken now. The Haiku-versus-Sonnet reviewer arm is now
+clearly worth running -- `--reviewer-model` exists, is unexercised, and this is the first result
+that makes the comparison interesting. And the opaque arm is the configuration in which the
+reviewer ablation is actually measurable, because it is the only one that reliably puts a leaky
+matrix in front of the reviewer; the descriptive arm answers a question about the profiler.

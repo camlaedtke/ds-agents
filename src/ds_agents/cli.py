@@ -11,6 +11,7 @@ run, because a results row built from a stub would look like a system that never
 """
 
 import argparse
+import json
 import sys
 import tempfile
 from pathlib import Path
@@ -19,6 +20,8 @@ from dotenv import load_dotenv
 
 from ds_agents.fixtures import Fixture, available, load_fixture
 from ds_agents.graph import run_pipeline
+from ds_agents.naming import NAMINGS, Naming, materialize, rename_map
+from ds_agents.naming import apply as apply_rename
 from ds_agents.state import PipelineState, RunConfig
 from ds_agents.tools.llm import AnthropicModel, StubModel, api_key_present
 from ds_agents.tools.local import LocalTools
@@ -30,11 +33,30 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 def _fixture_state(
-    fixture: Fixture, model_name: str = "haiku", reviewer_model_name: str | None = None
+    fixture: Fixture,
+    model_name: str = "haiku",
+    reviewer_model_name: str | None = None,
+    naming: Naming = "descriptive",
 ) -> PipelineState:
+    """The starting state for one run of `fixture` under one naming condition.
+
+    The rename map is derived here from `naming` rather than passed in alongside it. An earlier
+    version took both and let the caller supply them, which meant `naming="opaque"` with an empty
+    map was constructible: the config would claim the opaque arm while the ground truth still
+    carried the fixture's real column names, every objection would be compared against columns that
+    do not exist in that arm's data, and the arm would score a silent zero. That is precisely the
+    failure this whole change exists to prevent, so the two cannot be separate arguments.
+    `rename_map` is pure and reads one line of the CSV, and its determinism is pinned by test, so
+    deriving it twice costs nothing and cannot disagree with what `materialize` wrote.
+    """
+    rename = rename_map(fixture, naming)
     return PipelineState(
         config=RunConfig(
             reviewer_enabled=True,
+            # Which column names the agents saw. Same reason as `reviewer_model` below: the two
+            # naming arms run over byte-identical rows, so a row that did not carry this would be
+            # indistinguishable from a row in the other arm.
+            naming=naming,
             # Recorded, not decorative. `results_row()` reports `reviewer_model` straight off this
             # object, so a config that says "haiku" while --model sonnet ran would publish a
             # Sonnet-everywhere run under a Haiku label and silently corrupt the ablation table.
@@ -47,8 +69,11 @@ def _fixture_state(
         # node under test. The description is what a person would actually say.
         task_description=fixture.task_description,
         # Ground truth, written at construction so a bare run can grade itself. Nodes never set
-        # this; the reviewer must find the leak without being told where it is.
-        planted_leakage_columns=fixture.manifest.planted_columns,
+        # this; the reviewer must find the leak without being told where it is. Renamed to match
+        # what the agents were actually shown -- without the map applied here, `results_row()`
+        # would compare objections against names that do not exist in the opaque arm's data and
+        # every opaque run would score a silent zero.
+        planted_leakage_columns=apply_rename(fixture.manifest.planted_columns, rename),
     )
 
 
@@ -144,9 +169,53 @@ def cmd_run(args: argparse.Namespace) -> int:
         print(str(exc), file=sys.stderr)
         return 2
 
+    if args.repeat < 1:
+        print(f"--repeat must be at least 1, got {args.repeat}", file=sys.stderr)
+        return 2
+
     root = Path(args.artifacts_dir) if args.artifacts_dir else Path(tempfile.mkdtemp())
-    tools = _select_tools(args.tools, root, fixture.csv_path, fixture.dataset_id)
-    state = _fixture_state(fixture, args.model, args.reviewer_model)
+    # Materialised once per invocation, not once per repetition: every run in an arm must see the
+    # same bytes, and rewriting the file ten times is ten chances for them not to.
+    dataset_path, rename = materialize(fixture, args.naming, root / "input")
+    if rename:
+        print(f"naming: {args.naming} -- {dataset_path}", file=sys.stderr)
+
+    exit_code = 0
+    width = len(str(args.repeat - 1))
+    for index in range(args.repeat):
+        # One artifact store per run, because the store is per-run: a shared root would let run 2
+        # read run 1's artifact ids, which is the one way these repetitions could stop being
+        # independent.
+        run_root = root if args.repeat == 1 else root / f"run-{index:0{width}d}"
+        if args.repeat > 1:
+            print(f"\n=== run {index + 1} of {args.repeat} ===", file=sys.stderr)
+        state = _run_once(args, fixture, run_root, dataset_path)
+
+        if args.repeat == 1:
+            print(state.model_dump_json(indent=2, exclude_none=True))
+        _print_trace(state)
+        _print_summary(state, run_root)
+        if args.results:
+            _append_results_row(state, Path(args.results))
+        if any(not e.recoverable for e in state.errors):
+            exit_code = 1
+    return exit_code
+
+
+def _run_once(
+    args: argparse.Namespace,
+    fixture: Fixture,
+    root: Path,
+    dataset_path: Path,
+) -> PipelineState:
+    """One pipeline run, start to finish. Extracted so `--repeat` is a loop and not a second path.
+
+    `dataset_path` rather than `fixture.csv_path`: under `--naming opaque` the agents see a
+    materialised copy with a rewritten header. Nothing below this line knows that -- the rename is
+    entirely above the tools boundary, which is why no node, tool or MCP change was needed for it.
+    """
+    tools = _select_tools(args.tools, root, dataset_path, fixture.dataset_id)
+    state = _fixture_state(fixture, args.model, args.reviewer_model, args.naming)
     model = _select_model(state.config, no_live=args.no_live)
     reviewer_model = _select_reviewer_model(state.config, model, no_live=args.no_live)
     if isinstance(model, StubModel):
@@ -161,17 +230,29 @@ def cmd_run(args: argparse.Namespace) -> int:
             print(f"reviewer running live against {reviewer_model.name}", file=sys.stderr)
 
     try:
-        state = run_pipeline(state, tools=tools, model=model, reviewer_model=reviewer_model)
+        return run_pipeline(state, tools=tools, model=model, reviewer_model=reviewer_model)
     finally:
         # Releases this run's claim on the tools. Under `local` that leaves the shared sandbox
         # worker running, which is the point of sharing it -- it exits with this process. Under
         # `mcp` it disconnects the session and the server subprocess, and its worker, exit with it.
         tools.close()
 
-    print(state.model_dump_json(indent=2, exclude_none=True))
-    _print_trace(state)
-    _print_summary(state, root)
-    return 1 if any(not e.recoverable for e in state.errors) else 0
+
+def _append_results_row(state: PipelineState, path: Path) -> None:
+    """One JSONL line per run, behind the same gate the Phase 4 harness will apply.
+
+    `publishable()` is checked here and not by the caller because this is the only place a number
+    leaves a run and lands in a file someone will later average. A stub run refused at this line is
+    the difference between a results file and a file that looks like one.
+    """
+    publishable, reason = state.publishable()
+    if not publishable:
+        print(f"  results row  : REFUSED -- {reason}", file=sys.stderr)
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(state.results_row()) + "\n")
+    print(f"  results row  : appended to {path}", file=sys.stderr)
 
 
 def _print_summary(state: PipelineState, root: Path) -> None:
@@ -219,11 +300,10 @@ def cmd_eval(args: argparse.Namespace) -> int:
     return 2
 
 
-def main() -> int:
-    # The one environment read in the whole package. `override=False` so an explicitly exported
-    # key beats the file, which is what makes a one-off `ANTHROPIC_API_KEY=... uv run` work.
-    load_dotenv(REPO_ROOT / ".env", override=False)
-
+def _build_parser() -> argparse.ArgumentParser:
+    """Built here rather than inline in `main` so the flags can be tested without running a
+    pipeline. `--naming`, `--repeat` and `--results` between them decide what a benchmark row
+    means, and a typo in one of them is not something to discover from a wrong number later."""
     parser = argparse.ArgumentParser(prog="ds-agents", description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
 
@@ -254,6 +334,26 @@ def main() -> int:
         help="how nodes reach the sandbox and the store: over MCP (default) or in-process",
     )
     run.add_argument(
+        "--naming",
+        default="descriptive",
+        choices=NAMINGS,
+        help="column names the agents see: the fixture's own (default) or var_NN over identical "
+        "rows. This is the name-transparency ablation; the arms differ in the header row only.",
+    )
+    run.add_argument(
+        "--repeat",
+        type=int,
+        default=1,
+        help="run the pipeline N times (default: 1). Each repetition gets its own artifacts "
+        "directory. Model nondeterminism is the whole variance here -- the seed does not move.",
+    )
+    run.add_argument(
+        "--results",
+        default=None,
+        help="append one results_row() JSONL line per run to this path. Rows that fail "
+        "publishable() are refused, not written.",
+    )
+    run.add_argument(
         "--no-live",
         action="store_true",
         help="force the placeholder model even when a key is available",
@@ -263,8 +363,14 @@ def main() -> int:
     ev = sub.add_parser("eval", help="run the benchmark harness")
     ev.add_argument("--subset", default="ci")
     ev.set_defaults(func=cmd_eval)
+    return parser
 
-    args = parser.parse_args()
+
+def main() -> int:
+    # The one environment read in the whole package. `override=False` so an explicitly exported
+    # key beats the file, which is what makes a one-off `ANTHROPIC_API_KEY=... uv run` work.
+    load_dotenv(REPO_ROOT / ".env", override=False)
+    args = _build_parser().parse_args()
     return int(args.func(args))
 
 

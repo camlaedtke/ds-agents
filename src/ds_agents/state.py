@@ -151,6 +151,14 @@ class RunConfig(Contract):
         description="Whether the reviewer may read the feature engineering code, not just its "
         "outputs. Starts on; becomes an ablation later.",
     )
+    naming: Literal["descriptive", "opaque"] = Field(
+        default="descriptive",
+        description="Whether the agents saw the fixture's real column names or `var_NN`. The "
+        "profiler nominates leakage largely off column names, so this sets trap difficulty more "
+        "than any statistical property of the data does. It lives here, on the frozen config, "
+        "because a leakage number without it is not interpretable and the two arms are otherwise "
+        "byte-identical -- see `ds_agents.naming`.",
+    )
     random_seed: int = 20260822
     dataset_hash: str | None = None
 
@@ -492,6 +500,15 @@ class PipelineState(Contract):
         if planted and self.final_features:
             remediated = not (planted & set(self.final_features))
 
+        # The profiler's nominations, scored separately from the reviewer's objections. They are
+        # different questions with different answers: on the trap fixtures the profiler nominates
+        # the planted column and the reviewer, shown the same run, says nothing. Folding them into
+        # one `leakage_caught` would report a team that catches leaks while hiding which member
+        # caught it, and the name-transparency arm moves this number and not the reviewer's.
+        nominated: set[str] | None = None
+        if self.profile is not None:
+            nominated = {c.column for c in self.profile.leakage_candidates}
+
         claimed = self.chosen_model.claimed_holdout_score if self.chosen_model else None
         gap: float | None = None
         if claimed is not None and self.verified_holdout_score is not None:
@@ -509,6 +526,7 @@ class PipelineState(Contract):
             "reviewer_enabled": self.config.reviewer_enabled,
             "reviewer_model": self.config.reviewer_model,
             "reviewer_sees_code": self.config.reviewer_sees_code,
+            "naming": self.config.naming,
             "loop_cap": self.config.loop_cap,
             "random_seed": self.config.random_seed,
             # scores. `claimed` is what the agent said; `verified` is what we measured.
@@ -529,6 +547,17 @@ class PipelineState(Contract):
             "false_alarm": len(false_positives),
             "leakage_flagged_standing": sorted(standing),
             "false_alarm_standing": len(standing - planted),
+            # the same comparison one node upstream. `None` rather than empty when the profiler
+            # never ran: a node that crashed nominated nothing in a different sense than a node
+            # that looked and declined, and averaging those together would be a lie.
+            "profiler_nominated": sorted(nominated) if nominated is not None else None,
+            "profiler_caught": bool(nominated & planted) if nominated is not None else None,
+            "profiler_recall": (
+                len(nominated & planted) / len(planted)
+                if nominated is not None and planted
+                else None
+            ),
+            "profiler_false_alarm": len(nominated - planted) if nominated is not None else None,
             # the loop
             "review_verdict": self.review_verdict,
             "review_loops": self.review_iterations,

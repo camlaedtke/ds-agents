@@ -103,12 +103,14 @@ read a manifest could read the answer key.
       split is deferred, not skipped: the reviewer is never shown the split or any rows, so it is
       structurally uncatchable today, and `results_row()` scores leakage as a set comparison over
       columns and cannot score a trap with no guilty column.
-- [ ] Name transparency as an explicit ablation axis. The traps were tuned to be statistically
-      invisible and got caught anyway; renaming them defeated the profiler far more effectively than
-      any amount of association tuning did (3 of 3 nominated with descriptive names, 1 of 3 with
-      opaque ones, n=3 a side). Difficulty is currently an unrecorded property of what the fixture
-      author called a column, which is an uncontrolled variable under every leakage number we plan
-      to publish. Needs a manifest field and a harness condition. Now the priority.
+- [x] Name transparency as an explicit ablation axis. Landed as a load-time rename
+      (`src/ds_agents/naming.py`) rather than a manifest field or a paired fixture: the header line
+      is rewritten and every other byte of the CSV is copied through, so the arms differ in one line
+      of one file and nothing else. All non-target columns are renamed, not just the traps -- an
+      opaque name that only traps carry is a replacement cue, not the absence of one. `naming` is on
+      the frozen `RunConfig` and in `results_row()`. Nothing in `nodes/`, `tools/` or `mcp_server/`
+      changed; the rename lives above the tools boundary and the only thing that reaches them is a
+      different CSV path. See DECISIONS.md 2026-08-27.
 
 ## Phase 4: Eval harness (3 to 5 sessions, plan mode)
 - [ ] evals/datasets/manifest.yaml with 10 to 15 OpenML / Kaggle playground datasets and

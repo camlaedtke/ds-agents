@@ -298,7 +298,7 @@ Priority: **load-bearing** means the thesis breaks if this is wrong and you cann
 ### semantic-vs-statistical-leakage — the agents flag a leak by what the column is called, not by what it correlates with
 - Priority: load-bearing
 - Came up: 2026-08-27, building the `claims_timing` and `reissued_ids` trap fixtures
-- Status: flagged
+- Status: flagged (acted on 2026-08-27: it is now a recorded run condition, see [[controlled-ablation]])
 - Why it matters here: two fixtures were tuned so the planted column's association with the target
   sits exactly where a legitimate strong feature sits — `member_number` at 0.0945 against
   `credit_score` at 0.0952 — and the profiler flagged the planted one anyway, 6 of 6 live runs. The
@@ -337,3 +337,25 @@ Priority: **load-bearing** means the thesis breaks if this is wrong and you cann
   quietly corrupts the Phase 5 ablations it exists to support. The way out is to make difficulty an
   explicit, recorded condition rather than a property of how hard the author tried. Related:
   [[semantic-vs-statistical-leakage]], [[eval-baselines]].
+
+### controlled-ablation — what makes two runs comparable
+- Priority: load-bearing
+- Came up: 2026-08-27, turning name transparency into a recorded condition
+- Status: flagged
+- Why it matters here: an ablation is a claim that one thing differed. The value of the claim is
+  entirely in how few other things did. Three shapes were available for the naming arm and they are
+  not equally good: a *paired fixture* (two CSVs, one descriptive and one opaque) would differ in
+  the names and also in whatever the second generator's noise drew; a *manifest field* would mean
+  maintaining two committed files that are supposed to be identical and eventually will not be; a
+  *rename applied at load time* rewrites one line of one file and copies every remaining byte
+  through, so the arms differ in the header row and provably nowhere else. Only the third makes
+  "the profiler behaved differently because of the names" a statement with one candidate
+  explanation. The assertion that buys this is not a comment, it is
+  `test_only_the_header_line_differs` and its sibling `test_the_two_arms_produce_the_same
+  _importances`: identical rows must produce identical permutation importances, and if they ever
+  stop doing so, something other than the names moved and every number in the arm is suspect. The
+  second half is bookkeeping and matters just as much: the condition has to be recorded on the
+  frozen `RunConfig` and land in `results_row()`, because two rows that ran under different
+  conditions and do not say so are worse than no rows -- they will be averaged together by someone
+  who has forgotten, including by us. Related: [[semantic-vs-statistical-leakage]],
+  [[fixture-difficulty]], [[measurement-independence]], [[eval-baselines]].

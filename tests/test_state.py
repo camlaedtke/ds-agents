@@ -364,6 +364,87 @@ class TestResultsRow:
     def test_row_is_json_serialisable(self):
         json.dumps(populated_state().results_row())
 
+    def test_the_naming_condition_is_on_the_row(self):
+        """A leakage number is not interpretable without it. The two naming arms run over
+        byte-identical rows, so a row missing this is indistinguishable from the other arm's."""
+        assert populated_state().results_row()["naming"] == "descriptive"
+
+    def test_an_opaque_run_says_so(self):
+        state = populated_state()
+        state.config = RunConfig(naming="opaque")
+        assert state.results_row()["naming"] == "opaque"
+
+
+class TestProfilerColumnsOnTheRow:
+    """The profiler's nominations, scored separately from the reviewer's objections.
+
+    They answer different questions and on the trap fixtures they give different answers: the
+    profiler nominates the planted column and the reviewer, shown the same run, says nothing. The
+    name-transparency ablation moves this number and not the reviewer's, so without these fields
+    the experiment's dependent variable is absent from its own results file.
+    """
+
+    def _state(self, nominated: list[str], planted: list[str]) -> PipelineState:
+        return PipelineState(
+            dataset_id="toy",
+            task_description="x",
+            planted_leakage_columns=planted,
+            profile=ProfileReport(
+                n_rows=200,
+                n_columns=8,
+                leakage_candidates=[
+                    LeakageCandidate(
+                        column=column, reason="looks post hoc", evidence="nmi 0.4", suspicion="high"
+                    )
+                    for column in nominated
+                ],
+            ),
+        )
+
+    def test_nominating_the_planted_column_scores_as_a_catch(self):
+        row = self._state(["leaky_col"], ["leaky_col"]).results_row()
+        assert row["profiler_caught"] is True
+        assert row["profiler_recall"] == 1.0
+        assert row["profiler_false_alarm"] == 0
+        assert row["profiler_nominated"] == ["leaky_col"]
+
+    def test_one_of_two_traps_is_half_recall(self):
+        """claims_timing plants two columns, so this is a real value and not a rounding of 1.0."""
+        row = self._state(["trap_a"], ["trap_a", "trap_b"]).results_row()
+        assert row["profiler_recall"] == 0.5
+        assert row["profiler_caught"] is True
+
+    def test_nominating_a_clean_column_is_a_profiler_false_alarm(self):
+        """The blind spot this closes: an id column flagged upstream never reached a results row,
+        because the reviewer never objected to it and nothing else was counting."""
+        row = self._state(["customer_id"], ["leaky_col"]).results_row()
+        assert row["profiler_caught"] is False
+        assert row["profiler_false_alarm"] == 1
+        assert row["profiler_recall"] == 0.0
+
+    def test_looking_and_finding_nothing_is_zero_not_null(self):
+        row = self._state([], ["leaky_col"]).results_row()
+        assert row["profiler_caught"] is False
+        assert row["profiler_recall"] == 0.0
+        assert row["profiler_nominated"] == []
+
+    def test_a_profiler_that_never_ran_is_null_not_zero(self):
+        """A node that crashed nominated nothing in a different sense than one that declined to,
+        and averaging those together over a benchmark would be a lie."""
+        state = PipelineState(
+            dataset_id="toy", task_description="x", planted_leakage_columns=["leaky_col"]
+        )
+        row = state.results_row()
+        assert row["profiler_nominated"] is None
+        assert row["profiler_caught"] is None
+        assert row["profiler_recall"] is None
+        assert row["profiler_false_alarm"] is None
+
+    def test_no_planted_columns_means_no_recall(self):
+        row = self._state(["a"], []).results_row()
+        assert row["profiler_recall"] is None
+        assert row["profiler_false_alarm"] == 1
+
 
 class TestResultsRowBranches:
     """One assertion-focused test per `results_row()` branch that a full `populated_state()`

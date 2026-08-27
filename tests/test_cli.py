@@ -10,10 +10,20 @@ No test here makes a network call: `AnthropicModel.__post_init__` only construct
 only inside `generate()`, which nothing here calls.
 """
 
+import argparse
+import json
+
 import pytest
 
-from ds_agents.cli import _select_model
-from ds_agents.state import RunConfig
+from ds_agents.cli import (
+    _append_results_row,
+    _build_parser,
+    _fixture_state,
+    _select_model,
+)
+from ds_agents.fixtures import load_fixture
+from ds_agents.naming import NAMINGS, header_of, materialize
+from ds_agents.state import NodeEvent, PipelineState, RunConfig, utc_now
 from ds_agents.tools.llm import AnthropicModel, StubModel
 
 pytestmark = pytest.mark.fast
@@ -59,3 +69,122 @@ def test_an_unpriced_model_raises_systemexit_rather_than_running_unbilled(monkey
 
     with pytest.raises(SystemExit):
         _select_model(RunConfig(default_model="not-a-real-model"))
+
+
+class TestGroundTruthFollowsTheRename:
+    """`_fixture_state` has to write the names the agents will actually see.
+
+    Under `--naming opaque` the planted column is `var_07`, not `adjuster_touches`. If the state
+    kept the manifest's names, `results_row()` would compare the reviewer's objections against
+    columns that do not exist in that arm's data, every opaque run would score a silent zero, and
+    the ablation would report a name effect that was entirely an artefact of the bookkeeping.
+    """
+
+    def test_descriptive_keeps_the_manifest_names(self):
+        fixture = load_fixture("claims_timing")
+        state = _fixture_state(fixture)
+        assert state.planted_leakage_columns == fixture.manifest.planted_columns
+        assert state.config.naming == "descriptive"
+
+    def test_opaque_carries_the_renamed_columns(self, tmp_path):
+        fixture = load_fixture("claims_timing")
+        _, rename = materialize(fixture, "opaque", tmp_path)
+        state = _fixture_state(fixture, naming="opaque")
+
+        assert state.config.naming == "opaque"
+        assert state.planted_leakage_columns == [
+            rename[c] for c in fixture.manifest.planted_columns
+        ]
+        assert all(c.startswith("var_") for c in state.planted_leakage_columns)
+
+    def test_the_planted_columns_exist_in_the_data_the_agents_see(self, tmp_path):
+        """The whole point of the previous test, stated against the file rather than the map."""
+        fixture = load_fixture("claims_timing")
+        path, _ = materialize(fixture, "opaque", tmp_path)
+        state = _fixture_state(fixture, naming="opaque")
+        assert set(state.planted_leakage_columns) <= set(header_of(path))
+
+    def test_the_task_description_is_unaffected(self):
+        """It names only the target, and the target is never renamed -- intake still has to infer
+        it from prose, which is the node's actual job."""
+        fixture = load_fixture("claims_timing")
+        assert (
+            _fixture_state(fixture, naming="opaque").task_description
+            == _fixture_state(fixture).task_description
+        )
+
+    def test_the_arm_cannot_be_claimed_without_the_rename_being_applied(self):
+        """The footgun the signature used to allow.
+
+        `naming` and the map were once two independent arguments, which made a state constructible
+        that said `opaque` while carrying the fixture's real column names -- config and ground truth
+        disagreeing, every objection compared against columns absent from that arm's data, and the
+        arm scoring a silent zero that looks exactly like a profiler success. There is now no way to
+        express it: the map is derived from `naming` inside the function.
+        """
+        fixture = load_fixture("claims_timing")
+        for naming in NAMINGS:
+            state = _fixture_state(fixture, naming=naming)
+            renamed = state.planted_leakage_columns != fixture.manifest.planted_columns
+            assert renamed == (naming == "opaque")
+
+
+class TestTheRunParser:
+    def _parse(self, argv: list[str]) -> argparse.Namespace:
+        parser = _build_parser()
+        return parser.parse_args(argv)
+
+    def test_the_defaults_are_the_old_behaviour(self):
+        args = self._parse(["run"])
+        assert args.naming == "descriptive"
+        assert args.repeat == 1
+        assert args.results is None
+
+    def test_the_ablation_flags_parse(self):
+        args = self._parse(
+            ["run", "--dataset", "claims_timing", "--naming", "opaque", "--repeat", "10",
+             "--results", "evals/results/x.jsonl"]
+        )
+        assert (args.naming, args.repeat, args.results) == (
+            "opaque",
+            10,
+            "evals/results/x.jsonl",
+        )
+
+    def test_an_unknown_naming_is_refused(self):
+        with pytest.raises(SystemExit):
+            self._parse(["run", "--naming", "scrambled"])
+
+
+class TestTheResultsWriter:
+    def test_a_stub_run_is_refused_not_written(self, tmp_path, capsys):
+        """The same gate the Phase 4 harness applies. A results file that quietly accepted stub
+        rows would look exactly like a results file."""
+        state = PipelineState(dataset_id="toy", task_description="x")
+        path = tmp_path / "results.jsonl"
+
+        _append_results_row(state, path)
+
+        assert not path.exists()
+        assert "REFUSED" in capsys.readouterr().err
+
+    def test_a_publishable_run_appends_one_line_per_call(self, tmp_path):
+        state = PipelineState(
+            dataset_id="toy",
+            task_description="x",
+            node_trace=[
+                NodeEvent(
+                    node="intake", model="claude-haiku-4-5-20251001", started=utc_now()
+                )
+            ],
+        )
+        assert state.publishable()[0] is True
+        path = tmp_path / "nested" / "results.jsonl"
+
+        _append_results_row(state, path)
+        _append_results_row(state, path)
+
+        rows = [json.loads(line) for line in path.read_text().splitlines()]
+        assert len(rows) == 2
+        assert rows[0]["dataset_id"] == "toy"
+        assert rows[0]["naming"] == "descriptive"

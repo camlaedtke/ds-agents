@@ -36,8 +36,10 @@ See `src/ds_agents/state.py`. Two rules shape it:
 Invariants worth stating explicitly:
 
 - `RunConfig` is frozen. It carries `run_id`, `arm`, `reviewer_enabled`, `reviewer_model`,
-  `loop_cap`, `reviewer_sees_code`, and `random_seed`. Every results row is self-describing from
-  the state object alone — without it, "reviewer disabled" and "reviewer crashed" are the same row.
+  `default_model`, `loop_cap`, `reviewer_sees_code`, `naming`, `random_seed` and `dataset_hash`.
+  Every results row is self-describing from the state object alone — without it, "reviewer
+  disabled" and "reviewer crashed" are the same row, and a descriptive run and an opaque one over
+  byte-identical rows are the same row too.
 - `split_artifact` is pinned by the profiler before `feature_eng` runs and never rewritten. Without
   a pinned split the `contamination` category is unfalsifiable and no run is reproducible. It
   partitions the rows the AGENTS were given, and is *not* the independent holdout behind
@@ -265,6 +267,17 @@ The `_standing` pair drops columns whose every objection was later resolved or w
 a leak at any point is a genuine catch, but taking back a false alarm is better behaviour than
 leaving it standing, and one number cannot say both. A binary pair cannot express "caught the real one and also
 flagged three clean columns."
+
+Profiler nominations, scored separately from the reviewer's objections: `profiler_nominated`,
+`profiler_caught`, `profiler_recall`, `profiler_false_alarm`. Separate because the two nodes give
+different answers to the same run — measured on 2026-08-27, the profiler nominates the planted
+column and the reviewer, shown the result, says nothing — and one combined `leakage_caught` would
+report a team that catches leaks while hiding which member caught it. All four are null rather than
+zero when `profile` is None: a profiler that crashed nominated nothing in a different sense than one
+that looked and declined.
+
+Conditions: `arm`, `reviewer_enabled`, `reviewer_model`, `reviewer_sees_code`, `loop_cap`,
+`naming`, `random_seed`, straight off the frozen `RunConfig`.
 
 Loop: `review_verdict`, `review_loops`, `objections_raised`, `objections_open_at_end`.
 
