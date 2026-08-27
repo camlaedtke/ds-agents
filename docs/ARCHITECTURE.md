@@ -130,10 +130,50 @@ Two things the table does not show:
 
 ## MCP server (ours)
 
-Phase 1 satisfies this surface in-process with `src/ds_agents/tools/local.py`, which has the same
-signatures and none of the isolation. Nodes type-hint against the `Tools` Protocol and never
-import a concrete implementation, so both arms of the single-agent-vs-team ablation are guaranteed
-the same surface and the Phase 2 swap does not reach into `nodes/`.
+Nodes type-hint against the `Tools` Protocol and never import a concrete implementation, so both
+arms of the single-agent-vs-team ablation are guaranteed the same surface and the swap to the MCP
+client does not reach into `nodes/`.
+
+The server's two halves exist as of 2026-08-27 and the protocol skin does not yet.
+`mcp_server/store.py` holds the artifact store and the metric log; `mcp_server/sandbox.py` and
+`mcp_server/_worker.py` hold the sandbox. `src/ds_agents/tools/local.py` is now a thin in-process
+binding of those same two objects to the `Tools` Protocol, which is the point of the split: the
+MCP client will bind the *same* objects over the protocol, so "we swapped the shim for the server"
+cannot quietly mean "we wrote a second implementation and hoped it matched."
+
+### How the sandbox runs a snippet
+
+One worker process per interpreter, launched with an environment built from nothing. It imports
+pandas and scikit-learn once, then `fork()`s a fresh child for each snippet; the child redirects
+fds 0, 1 and 2, calls `setsid`, replaces `os.environ` wholesale, `chdir`s into the run's work
+directory, and `exec`s the code. Every snippet therefore gets a genuinely separate process — no
+globals, no imported modules, and no `sys.path` edits survive from one to the next — while paying
+the library imports once. Measured: 0.898s per call before, 0.04s after. See DECISIONS.md
+2026-08-27 for why this beats both Docker options, and why it does not violate the CLAUDE.md rule
+against `exec` in-process.
+
+Four properties are enforced rather than assumed, each with a test in `tests/mcp_server/`:
+
+- **The worker never imports `ds_agents`.** The child inherits the worker's memory, so the
+  worker's import list is part of the boundary. `PipelineState` — and `planted_leakage_columns`
+  with it — lives in the orchestrator process, which is not an ancestor of any snippet.
+- **The repo is pruned off `sys.path`.** An editable install puts the repo root and `src/` on the
+  path through a `.pth` file in site-packages, which no amount of environment stripping removes;
+  the Phase 1 shim's snippets could `import ds_agents` despite its docstring saying otherwise.
+  `_prune_sys_path` keeps only the standard library and site-packages.
+- **The protocol channel is not writable by a snippet.** Requests and replies are line-delimited
+  JSON on the worker's stdin/stdout. The child redirects its fds before running anything, so a
+  snippet cannot forge a reply, and stdin points at `/dev/null` so it cannot eat the next request.
+- **A timeout kills the process group.** `setsid` in the child means a snippet that spawned
+  helpers cannot leave them running past the deadline. The worker survives the kill and answers
+  the next request.
+
+What it still is not: a container. There is no memory cap and no network block, because every
+snippet through Phase 2 is templated by us. Both become load-bearing when model-authored feature
+code runs, and `SandboxPool` is the seam a Docker backend would land behind.
+
+The worker is shared process-wide rather than created per run, because it holds no run state: the
+environment a snippet sees, its working directory, and its output paths all ride on the request.
 
 Tools exposed:
 

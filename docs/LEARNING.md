@@ -208,3 +208,34 @@ Priority: **load-bearing** means the thesis breaks if this is wrong and you cann
   patience look identical in a results table to one that was satisfied, and those are opposite
   findings. The cap is enforced by the router and the graph edge together rather than by a guard
   inside the router, deliberately: see docs/DECISIONS.md 2026-08-26.
+
+### warm-fork-sandbox — why the sandbox forks instead of starting a new interpreter
+- Priority: useful
+- Came up: 2026-08-27, `mcp_server/sandbox.py`
+- Status: flagged
+- Why it matters here: `run_python` used to start a whole new Python for each snippet, and each
+  one paid 0.898s to import pandas and scikit-learn against 0.013s for a bare interpreter. The
+  sandbox now keeps one worker process that has already done those imports and calls `fork()` for
+  each snippet, so the child starts with the libraries already in memory and costs 0.04s. The part
+  that is worth understanding rather than trusting is *why forking rather than just reusing the
+  interpreter*: a fork produces a genuinely separate process, so nothing the profiler's snippet did
+  to its globals, its imported modules, or `sys.path` can reach the modeler's. Reusing one
+  interpreter would save the same second and quietly make runs depend on what ran before them.
+  Related: [[mcp-tool-boundary]], [[protocol-not-implementation]].
+
+### sys-path-is-not-the-environment — why stripping env vars did not stop the sandbox reading the repo
+- Priority: load-bearing
+- Came up: 2026-08-27, building the Phase 2 sandbox
+- Status: flagged
+- Why it matters here: `tools/local.py` handed each snippet an environment built from scratch — no
+  `PYTHONPATH`, no API key — and its docstring said agent code therefore could not see the repo it
+  is being graded in. That was wrong, and the new sandbox tests prove it: an editable install
+  writes a `.pth` file into site-packages that puts `/ds-agents` and `/ds-agents/src` on `sys.path`
+  at startup, and a `.pth` is read by the interpreter regardless of the environment. Snippets could
+  `import ds_agents`. Nothing handed them the live `PipelineState`, so no number published so far
+  is wrong — but "the agent read the grading code" and "the agent reasoned about the columns" are
+  the same `leakage_recall` in a results table, and that is the distinction this whole project
+  exists to make. The transferable idea is that an isolation argument phrased entirely in terms of
+  environment variables is incomplete by construction, because import paths, the current working
+  directory, and inherited file descriptors are all reachable without an env var. Builds on
+  [[mcp-tool-boundary]].

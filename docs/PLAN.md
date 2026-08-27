@@ -43,8 +43,16 @@ First live Haiku runs done: the profiler flagged the planted leak in 9 of 9 runs
 acted on it in 8 of 9.
 
 ## Phase 2: MCP server (2 to 3 sessions)
-- [ ] mcp_server/ with run_python sandbox (Docker, subprocess, timeout, no network), artifact
-      store, log_metric
+Scope note: the Docker-versus-long-lived-container question resolved to neither. The sandbox is a
+warm worker process that forks per snippet — same isolation per snippet, one twentieth the cost,
+and it does not make `pytest -m fast` depend on a running Docker daemon. Docker is deferred behind
+the `SandboxPool` seam until model-authored feature code needs a memory cap and a network block.
+See DECISIONS.md 2026-08-27.
+- [x] `mcp_server/` sandbox and store: `_worker.py` (fork-per-snippet, stripped env, pruned
+      `sys.path`, process-group timeout), `sandbox.py` (worker lifetime, request protocol,
+      outer deadline), `store.py` (artifact store, `sandbox_path` in metadata, metric log to
+      JSONL). 25 tests. `tools/local.py` rewritten as a thin binding of the same two objects.
+- [ ] `mcp_server/server.py`: the four tools over the MCP protocol, wrapping the objects above
 - [ ] swap `tools/local.py` for MCP client wrappers; toy run still green
 - [ ] verify Claude Code can connect to the same server (this is the generalist-agent baseline later)
 

@@ -118,7 +118,13 @@ def cmd_run(args: argparse.Namespace) -> int:
     else:
         print(f"running live against {model.name}", file=sys.stderr)
 
-    state = run_pipeline(state, tools=tools, model=model)
+    try:
+        state = run_pipeline(state, tools=tools, model=model)
+    finally:
+        # Releases this run's claim on the sandbox; it does not stop the shared worker, which is
+        # the point of sharing it. The worker exits with this process, via atexit or via its
+        # request pipe closing.
+        tools.close()
 
     print(state.model_dump_json(indent=2, exclude_none=True))
     _print_trace(state)

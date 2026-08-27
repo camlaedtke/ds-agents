@@ -1,9 +1,11 @@
-"""The Phase 1 tool shim.
+"""The `Tools` surface a node sees.
 
-The test that carries weight here is the environment one. `LocalTools` is not a sandbox -- no
-container, no network block -- so the two properties it does guarantee have to be asserted, or
-Phase 2 will inherit a shim nobody checked: code runs in a subprocess, and that subprocess cannot
-see the environment it is being graded in.
+`LocalTools` is no longer a standalone shim: it binds `mcp_server.sandbox.SandboxPool` and
+`mcp_server.store.ArtifactStore` to the Protocol in-process, and the MCP client will bind the same
+two objects over the wire. So these tests assert the *surface* -- that a `RunResult` carries what a
+node reads off it, that artifacts round-trip, that a metric records its run id. The properties the
+surface rests on are asserted against the sandbox and the store directly, in `tests/mcp_server/`,
+because that is where the MCP swap will have to keep them.
 """
 
 from pathlib import Path

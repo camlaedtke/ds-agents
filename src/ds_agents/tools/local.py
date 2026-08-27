@@ -1,159 +1,100 @@
-"""In-process implementation of the tool surface, for Phase 1.
+"""In-process adapter over the sandbox and the artifact store.
 
-This is a shim, not a sandbox. It has the signatures the MCP server will expose and none of the
-isolation: no container, no memory cap, no network block. What it does keep is the two properties
-the thesis actually rests on:
+This used to be a standalone shim that ran each snippet with `subprocess.run`. It is now a thin
+binding of `mcp_server.sandbox.SandboxPool` and `mcp_server.store.ArtifactStore` to the `Tools`
+Protocol, which is the point: when the MCP client arrives in the next session it binds the *same*
+two objects over the protocol, so "we swapped the shim for the server" cannot quietly mean "we
+wrote a second implementation and hoped it matched."
 
-- **Code runs in a subprocess, never `exec`.** An in-process `exec` would put `PipelineState` --
-  including `planted_leakage_columns` -- inside the agent's reach, and a leakage_recall of 1.0
-  would no longer distinguish reasoning from reading the answer key.
-- **The environment is stripped.** The snippet gets a minimal env with the dataset and artifact
-  paths and nothing else, so agent code cannot read API keys or the repo it is being graded in.
-
-Phase 2 replaces this file with an MCP client. Nothing in `nodes/` should need to change.
+What it still is not: a container. There is no memory cap and no network block. What it does keep,
+and now enforces more strictly than the subprocess version did, is the isolation the thesis rests
+on -- snippets run in a forked child of a worker that has never imported `ds_agents`, with the
+repo pruned off `sys.path` and an environment built from nothing. See `mcp_server/_worker.py`.
 """
 
-import json
-import os
-import re
-import shutil
-import subprocess
-import sys
-import time
 from pathlib import Path
 from typing import Any
 
-import pandas as pd
-
 from ds_agents.state import ArtifactId
-from ds_agents.tools.protocol import ArtifactMeta, ArtifactPayload, RunResult, ToolError
+from ds_agents.tools.protocol import ArtifactPayload, RunResult
+from mcp_server.sandbox import SandboxPool
+from mcp_server.store import ArtifactStore, MetricLog, dataset_artifact_id
 
-_SLUG = re.compile(r"[^a-z0-9]+")
-
-
-def dataset_artifact_id(dataset_id: str) -> ArtifactId:
-    """The artifact id a dataset is registered under at run start.
-
-    docs/ARCHITECTURE.md gives intake only `read_artifact`, but intake has to name `spec.target`,
-    which means seeing the columns. Registering the dataset as an artifact is the smaller of the
-    two fixes; the other was giving intake `run_python`, which would let the first node in the
-    graph execute arbitrary code before anything has been profiled.
-    """
-    return f"dataset:{dataset_id}"
-
-
-def _slug(text: str) -> str:
-    return _SLUG.sub("-", text.lower()).strip("-") or "artifact"
+__all__ = ["LocalTools", "dataset_artifact_id"]
 
 
 class LocalTools:
-    """Satisfies `Tools`. One instance per run; `root` holds the artifacts for that run."""
+    """Satisfies `Tools`. One instance per run; `root` holds the artifacts for that run.
+
+    The sandbox worker boots lazily on the first `run_python`, so a test that only reads and
+    writes artifacts does not pay the ~1.5s import. Close it when the run ends, or let `atexit`
+    do it.
+    """
 
     def __init__(self, root: Path, dataset_path: Path | None = None, dataset_id: str = "") -> None:
         self.root = Path(root)
-        self.artifacts_dir = self.root / "artifacts"
+        self.store = ArtifactStore(self.root)
         self.work_dir = self.root / "work"
-        self.data_dir = self.root / "data"
-        for directory in (self.artifacts_dir, self.work_dir, self.data_dir):
-            directory.mkdir(parents=True, exist_ok=True)
-        self._index: dict[ArtifactId, ArtifactMeta] = {}
-        self._paths: dict[ArtifactId, Path] = {}
-        self._counter = 0
-        self.metrics: list[tuple[str, str, float]] = []
+        self.work_dir.mkdir(parents=True, exist_ok=True)
+        self.metric_log = MetricLog(self.root / "metrics.jsonl")
         self.dataset_path: Path | None = None
         if dataset_path is not None:
             self.dataset_path = self.register_dataset(Path(dataset_path), dataset_id)
-
-    # ---- run-start registration -------------------------------------------------------------
-
-    def register_dataset(self, path: Path, dataset_id: str) -> Path:
-        """Copy the dataset into the run's read-only mount and index it as an artifact.
-
-        The copy is what makes "read-only" true for the shim: agent code that writes to the
-        dataset corrupts its own scratch copy, not `tests/fixtures/`.
-        """
-        landed = self.data_dir / path.name
-        shutil.copyfile(path, landed)
-        landed.chmod(0o444)
-        artifact_id = dataset_artifact_id(dataset_id)
-        frame = pd.read_csv(landed)
-        self._index[artifact_id] = ArtifactMeta(
-            id=artifact_id,
-            name=path.name,
-            kind="table",
-            n_bytes=landed.stat().st_size,
-            extra={
-                "columns": list(frame.columns),
-                "n_rows": int(len(frame)),
-                "dtypes": {c: str(d) for c, d in frame.dtypes.items()},
-                # n_unique at registration so intake can tell a target from an id column without
-                # spending a `run_python` call before anything has been profiled.
-                "n_unique": {c: int(frame[c].nunique(dropna=True)) for c in frame.columns},
-                "sandbox_path": str(landed),
+        self.sandbox = SandboxPool(
+            work_dir=self.work_dir,
+            base_env={
+                "DS_DATASET": str(self.dataset_path) if self.dataset_path else "",
+                "DS_ARTIFACTS": str(self.store.artifacts_dir),
             },
         )
-        self._paths[artifact_id] = landed
-        return landed
+
+    # ---- convenience passthroughs used by the CLI and the tests -----------------------------
+
+    @property
+    def artifacts_dir(self) -> Path:
+        return self.store.artifacts_dir
+
+    @property
+    def data_dir(self) -> Path:
+        return self.store.data_dir
+
+    @property
+    def metrics(self) -> list[tuple[str, str, float]]:
+        return self.metric_log.records
+
+    def register_dataset(self, path: Path, dataset_id: str) -> Path:
+        return self.store.register_dataset(path, dataset_id)
+
+    def close(self) -> None:
+        self.sandbox.close()
+
+    def __enter__(self) -> "LocalTools":
+        return self
+
+    def __exit__(self, *_exc: object) -> None:
+        self.close()
 
     # ---- Tools ------------------------------------------------------------------------------
 
     def run_python(self, code: str, timeout_s: int = 60) -> RunResult:
-        self._counter += 1
-        script = self.work_dir / f"snippet_{self._counter:03d}.py"
-        script.write_text(code)
-        before = self._artifact_state()
-        env = {
-            "PATH": os.defpath,
-            "HOME": str(self.work_dir),
-            "PYTHONHASHSEED": "0",
-            "DS_DATASET": str(self.dataset_path) if self.dataset_path else "",
-            "DS_ARTIFACTS": str(self.artifacts_dir),
-        }
-        started = time.monotonic()
-        timed_out = False
-        try:
-            completed = subprocess.run(  # noqa: S603 - the point of this call is running the snippet
-                [sys.executable, str(script)],
-                capture_output=True,
-                text=True,
-                cwd=self.work_dir,
-                env=env,
-                timeout=timeout_s,
-                check=False,
-            )
-            stdout, stderr, exit_code = completed.stdout, completed.stderr, completed.returncode
-        except subprocess.TimeoutExpired as exc:
-            timed_out = True
-            stdout = exc.stdout.decode() if isinstance(exc.stdout, bytes) else (exc.stdout or "")
-            stderr = exc.stderr.decode() if isinstance(exc.stderr, bytes) else (exc.stderr or "")
-            exit_code = 124
-        duration = time.monotonic() - started
-        after = self._artifact_state()
-        # New files AND changed ones. A path-set diff alone misses a snippet that overwrites a
-        # name it wrote before -- `split_manifest.json` is a fixed name -- which would report
-        # nothing written while silently mutating the content behind an already-issued id.
-        changed = sorted(path for path, stamp in after.items() if before.get(path) != stamp)
-        written = [self._index_file(path) for path in changed]
+        before = self.store.snapshot()
+        # A `SandboxError` deliberately propagates instead of becoming a `ToolError`: a sandbox
+        # that cannot run at all is not a snippet failure, and a node that recorded it as one
+        # would put "the model wrote bad code" in the results row for a broken machine.
+        outcome = self.sandbox.execute(code, timeout_s=timeout_s)
         return RunResult(
-            stdout=stdout,
-            stderr=stderr,
-            exit_code=exit_code,
-            timed_out=timed_out,
-            duration_s=duration,
-            artifacts_written=written,
+            stdout=outcome.stdout,
+            stderr=outcome.stderr,
+            exit_code=outcome.exit_code,
+            timed_out=outcome.timed_out,
+            duration_s=outcome.duration_s,
+            artifacts_written=self.store.scan(before),
         )
 
     def read_artifact(
         self, artifact_id: ArtifactId, max_bytes: int | None = None
     ) -> ArtifactPayload:
-        meta = self._index.get(artifact_id)
-        if meta is None:
-            raise ToolError(f"no artifact {artifact_id!r}")
-        text = self._paths[artifact_id].read_text()
-        truncated = max_bytes is not None and len(text) > max_bytes
-        return ArtifactPayload(
-            meta=meta, content=text[:max_bytes] if truncated else text, truncated=truncated
-        )
+        return self.store.read(artifact_id, max_bytes=max_bytes)
 
     def write_artifact(
         self,
@@ -162,59 +103,7 @@ class LocalTools:
         kind: str = "text",
         extra: dict[str, Any] | None = None,
     ) -> ArtifactId:
-        self._counter += 1
-        artifact_id = f"art-{self._counter:03d}-{_slug(name)}"
-        path = self.artifacts_dir / f"{artifact_id}-{name}"
-        path.write_text(content)
-        self._index[artifact_id] = ArtifactMeta(
-            id=artifact_id,
-            name=name,
-            kind=kind,
-            n_bytes=path.stat().st_size,
-            extra=extra or {},
-        )
-        self._paths[artifact_id] = path
-        return artifact_id
+        return self.store.write(name, content, kind=kind, extra=extra)
 
     def log_metric(self, run_id: str, name: str, value: float) -> None:
-        self.metrics.append((run_id, name, float(value)))
-
-    # ---- internals --------------------------------------------------------------------------
-
-    def _artifact_state(self) -> dict[Path, tuple[int, int]]:
-        """Path -> (mtime, size), so an overwrite is as visible as a new file."""
-        return {
-            path: (path.stat().st_mtime_ns, path.stat().st_size)
-            for path in self.artifacts_dir.iterdir()
-            if path.is_file()
-        }
-
-    def _index_file(self, path: Path) -> ArtifactId:
-        """Register a file a snippet dropped into DS_ARTIFACTS itself.
-
-        The file is COPIED under its artifact id rather than indexed where it lies. An artifact
-        has to be immutable once issued: `split_artifact` is pinned before feature_eng runs and
-        never rewritten, and that invariant is worth nothing if a later snippet can change the
-        bytes behind the id by writing the same filename again.
-        """
-        self._counter += 1
-        artifact_id = f"art-{self._counter:03d}-{_slug(path.stem)}"
-        frozen = self.artifacts_dir / f"{artifact_id}-{path.name}"
-        shutil.copyfile(path, frozen)
-        extra: dict[str, Any] = {}
-        if path.suffix == ".json":
-            try:
-                payload = json.loads(frozen.read_text())
-            except json.JSONDecodeError:
-                payload = None
-            if isinstance(payload, dict):
-                extra = {"keys": sorted(payload)}
-        self._index[artifact_id] = ArtifactMeta(
-            id=artifact_id,
-            name=path.name,
-            kind="json" if path.suffix == ".json" else "text",
-            n_bytes=frozen.stat().st_size,
-            extra=extra,
-        )
-        self._paths[artifact_id] = frozen
-        return artifact_id
+        self.metric_log.log(run_id, name, value)

@@ -335,3 +335,45 @@ results row is written. That deletes exactly the runs that looped the most, whic
 published table upward. `run_pipeline` now derives the limit from `loop_cap`. Same principle as the
 reporter never being allowed to fail: a dataset that vanishes from the results is worse than one
 that reports badly.
+
+## 2026-08-27: the sandbox forks from one warm worker, and Docker is not the Phase 2 backend.
+
+The choice PLAN.md posed was Docker-per-run versus one long-lived container. Both lose to a third
+option once the numbers are in front of you. A fresh interpreter costs 0.013s; a fresh interpreter
+that imports pandas and scikit-learn costs 0.898s, and a toy run makes four `run_python` calls, so
+imports alone were about 3.6s of a 16s run and would be multiplied by every dataset in Phase 4. The
+implementation is one long-lived worker process, launched with a built-from-nothing environment,
+that pays the imports once and then `fork()`s a fresh child per snippet. Measured per-call cost
+including a RandomForest fit: 0.04s, against 0.898s cold — and a live toy run went from ~16s to
+14.15s, the rest being Haiku latency. The worker is shared process-wide rather than per run,
+because it holds no run state: the environment, the working directory, and the output paths all
+ride on the request. Booting one per run cost 0.87s per unit test and would cost that per dataset
+in a benchmark.
+
+The alternative that looks equivalent and is not is a long-lived interpreter that `exec`s each
+snippet in a fresh namespace. It saves the same imports and loses the property that pays for them:
+globals, imported modules, monkeypatched libraries, and a mutated `sys.path` would all survive from
+the profiler's snippet into the modeler's, and a run would stop being reproducible from its inputs.
+Forking gives a genuinely new process per snippet, so `test_globals_do_not_survive_between_snippets`
+is an assertion rather than a hope. This is also why the CLAUDE.md rule against `exec` in-process
+is not violated by `_worker.py` calling `exec`: the process doing it is a forked child of a process
+that has never imported `ds_agents`, so `PipelineState` is not merely out of scope, it is in another
+process's memory.
+
+Docker is deferred, not rejected, and the reason is scoped: the daemon is not even running on the
+development machine, so requiring it would make `pytest -m fast` unrunnable on every edit, which is
+the one test contract this repo actually enforces. What Docker buys that this does not is a memory
+cap and a network block — neither of which the current snippets need, because every snippet through
+Phase 2 is templated by us. It becomes load-bearing the moment model-authored feature code runs
+(the parking-lot item in NEXT.md), and the `SandboxPool` interface is the seam it would land behind.
+
+The build also closed a hole the Phase 1 shim's docstring claimed was already closed. `local.py`
+stripped the environment and asserted a snippet "cannot see the repo it is being graded in" — but
+an editable install puts the repo root and `src/` on `sys.path` through a `.pth` file in
+site-packages, which no environment stripping touches. Snippets could `import ds_agents`. Nothing
+handed them the live state object, so no result to date is wrong, but "the agent could read the
+scoring code" and "the agent reasoned" are not distinguishable after the fact from a results table.
+`_worker._prune_sys_path` now keeps only the standard library and site-packages, and
+`test_the_repo_is_not_importable_from_a_snippet` is the regression test. The general lesson is
+worth more than the fix: `sys.path` is not part of the environment, so an environment-based
+isolation argument is incomplete by construction.
