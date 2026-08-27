@@ -269,3 +269,23 @@ Priority: **load-bearing** means the thesis breaks if this is wrong and you cann
   the same task that entered it. Closing it from the caller's thread does not disconnect, it
   raises — and it raises at the end of the run, after the numbers are computed, which is the
   worst possible time to discover a lifetime bug. Related: [[protocol-not-implementation]].
+
+### adversarial-review-loop — one model grading another model's work, and being allowed to send it back around the graph
+- Priority: load-bearing
+- Came up: 2026-08-27, `src/ds_agents/nodes/reviewer.py`
+- Status: flagged
+- Why it matters here: this is the project's central claim under test. The reviewer is a model
+  under test, not a trusted judge — which is exactly why it cannot write its own verdict or count
+  its own loops, and why the router exists at all. The interesting failure mode is not the reviewer
+  giving a wrong answer, it's giving an unfalsifiable one: a claim the contract has no way to check
+  against anything. Related: [[measurement-independence]], [[caught-vs-remediated]].
+
+### dispositions-as-audit-trail — why every pass records a verdict on every objection open at entry, including the one the model never says
+- Priority: useful
+- Came up: 2026-08-27, `src/ds_agents/state.py`
+- Status: flagged
+- Why it matters here: `ReviewPass.dispositions` fills every open objection the model's list left
+  silent with `not_reviewed`, a label the model itself is never allowed to produce. The point is
+  that silence and agreement are different events, and a record that only stores what the model
+  said cannot tell them apart — an objection the reviewer never looked at again would otherwise
+  read identically to one it actively decided was fine.

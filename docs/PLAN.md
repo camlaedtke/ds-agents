@@ -72,11 +72,26 @@ See DECISIONS.md 2026-08-27.
       so a fresh terminal session prompts once. See DECISIONS.md 2026-08-27.
 
 ## Phase 3: Adversarial reviewer (4 to 6 sessions, plan mode)
-- [ ] reviewer node with structured Objection output and conditional routing
-- [ ] loop cap, `exhausted` verdict
-- [ ] feature_eng and modeler consume objections
-- [ ] reviewer catches the toy leakage; test that it does
-- [ ] 2 to 3 more leakage-trap variants (timestamp after label, ID-encoded target, duplicate rows across split)
+Scope note: the `ReviewPass` split-ownership problem was settled before the node was written, and
+it changed who writes what. The router now mints the whole `ReviewPass` and the reviewer hands its
+dispositions across on a new narrow field, `reviewer_dispositions`. `routed_to` got a single
+authority at the same time: the router computes the destination and `route_target` reads it back.
+See DECISIONS.md 2026-08-27.
+- [x] reviewer node with structured Objection output and conditional routing
+- [x] loop cap, `exhausted` verdict. Both reached live, not just in tests: 2 of 7 live Haiku runs
+      ended `exhausted` at `loop_cap=3` on a `metric_mismatch` objection the modeler never
+      satisfied.
+- [x] feature_eng and modeler consume objections. Wired in Phase 1; this session is the first
+      evidence it works end to end, in `tests/test_review_loop.py` (block once, drop the objected
+      column, pass) and in the live runs that took the cycle edge back to `modeler` twice.
+- [ ] reviewer catches the toy leakage; test that it does. **Not demonstrable on the toy fixture as
+      it stands, and this is the finding rather than a gap in the work.** The profiler flags the
+      planted leak and `feature_eng` drops it before the reviewer is ever called, so in 7 live runs
+      the reviewer never saw a leaky matrix and raised no leakage objection at all. Testing the
+      reviewer on leakage needs a run where the upstream nodes fail to remove it, which is what the
+      next box is for.
+- [ ] 2 to 3 more leakage-trap variants (timestamp after label, ID-encoded target, duplicate rows
+      across split). Now the priority: these are what give the reviewer something upstream missed.
 
 ## Phase 4: Eval harness (3 to 5 sessions, plan mode)
 - [ ] evals/datasets/manifest.yaml with 10 to 15 OpenML / Kaggle playground datasets and

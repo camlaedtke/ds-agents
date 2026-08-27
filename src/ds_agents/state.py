@@ -384,6 +384,14 @@ class PipelineState(Contract):
         default=None,
         description="The reviewer's own last word. Input to the verdict, not the verdict.",
     )
+    reviewer_dispositions: dict[str, Disposition] = Field(
+        default_factory=dict,
+        description="Handoff, not history: the reviewer's raw disposition-per-objection-id from "
+        "its most recent pass, overwritten wholesale on every pass (deliberately not "
+        "`operator.add`). The router is the sole reader -- it folds this into the `ReviewPass` it "
+        "mints and never clears it. `ReviewPass.dispositions` is the durable record; this field is "
+        "just how the disposition gets from the reviewer to the router within one invocation.",
+    )
     review_verdict: ReviewVerdict = Field(
         default="pending",
         description="Derived by the router. 'exhausted' means the reviewer still wanted to block "

@@ -30,7 +30,7 @@ FIXTURES = Path(__file__).resolve().parents[2] / "tests" / "fixtures"
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
-def _toy_state(model_name: str = "haiku") -> PipelineState:
+def _toy_state(model_name: str = "haiku", reviewer_model_name: str | None = None) -> PipelineState:
     manifest_path = FIXTURES / "toy" / "manifest.json"
     if not manifest_path.exists():
         raise SystemExit(
@@ -39,19 +39,14 @@ def _toy_state(model_name: str = "haiku") -> PipelineState:
         )
     manifest = json.loads(manifest_path.read_text())
     return PipelineState(
-        # The reviewer node does not exist until Phase 3, so saying it is enabled would be the
-        # config lying about the run. The router correctly treats "enabled but silent" as an
-        # error, which would otherwise fire on every Phase 1 and 2 run and make `errored` true in
-        # every results row -- burying the first real error under two phases of noise. Flip this
-        # back when `reviewer` is wired.
         config=RunConfig(
-            reviewer_enabled=False,
+            reviewer_enabled=True,
             # Recorded, not decorative. `results_row()` reports `reviewer_model` straight off this
             # object, so a config that says "haiku" while --model sonnet ran would publish a
             # Sonnet-everywhere run under a Haiku label and silently corrupt the ablation table.
             # ARCHITECTURE.md's rule is that a row is self-describing from the state alone.
             default_model=model_name,
-            reviewer_model=model_name,
+            reviewer_model=reviewer_model_name or model_name,
         ),
         dataset_id="toy",
         # No `spec`: naming the target is intake's job, and pre-filling it here would skip the
@@ -102,6 +97,29 @@ def _select_model(config: RunConfig, *, no_live: bool = False):
         raise SystemExit(str(exc)) from exc
 
 
+def _select_reviewer_model(
+    config: RunConfig, base: StubModel | AnthropicModel, *, no_live: bool = False
+):
+    """The reviewer's own client -- a second `AnthropicModel`, only when its name actually differs
+    from the base model's.
+
+    Returns `base` unchanged when `config.reviewer_model == config.default_model` (a second client
+    for the identical id would just double the object, not the behaviour) or when `base` is
+    already the placeholder (`--no-live`, or no key: nothing live for the reviewer to diverge to
+    either). Otherwise this is `_select_model`'s twin -- same `--no-live` override, same refusal
+    via `UnknownModelError` on an unpriced id -- so the Haiku/Sonnet reviewer ablation is a config
+    change, never a second code path.
+    """
+    if no_live or isinstance(base, StubModel):
+        return base
+    if config.reviewer_model == config.default_model:
+        return base
+    try:
+        return AnthropicModel(model=config.reviewer_model)
+    except UnknownModelError as exc:
+        raise SystemExit(str(exc)) from exc
+
+
 def _select_tools(transport: str, root: Path, dataset: Path, dataset_id: str) -> Tools:
     """Same implementation either way; `mcp` puts a process boundary in front of it.
 
@@ -127,8 +145,9 @@ def cmd_run(args: argparse.Namespace) -> int:
 
     root = Path(args.artifacts_dir) if args.artifacts_dir else Path(tempfile.mkdtemp())
     tools = _select_tools(args.tools, root, FIXTURES / "toy" / "toy.csv", "toy")
-    state = _toy_state(args.model)
+    state = _toy_state(args.model, args.reviewer_model)
     model = _select_model(state.config, no_live=args.no_live)
+    reviewer_model = _select_reviewer_model(state.config, model, no_live=args.no_live)
     if isinstance(model, StubModel):
         print(
             f"WARNING: running with {model.name!r}, which is a placeholder and not a model. It "
@@ -137,9 +156,11 @@ def cmd_run(args: argparse.Namespace) -> int:
         )
     else:
         print(f"running live against {model.name}", file=sys.stderr)
+        if reviewer_model is not model:
+            print(f"reviewer running live against {reviewer_model.name}", file=sys.stderr)
 
     try:
-        state = run_pipeline(state, tools=tools, model=model)
+        state = run_pipeline(state, tools=tools, model=model, reviewer_model=reviewer_model)
     finally:
         # Releases this run's claim on the tools. Under `local` that leaves the shared sandbox
         # worker running, which is the point of sharing it -- it exits with this process. Under
@@ -175,6 +196,10 @@ def _print_summary(state: PipelineState, root: Path) -> None:
         top = ", ".join(f"{n} {v:.3f}" for n, v in state.top_importances[:3])
         print(f"  top features : {top}", file=sys.stderr)
     print(f"  verdict      : {state.review_verdict}", file=sys.stderr)
+    print(
+        f"  objections   : {len(state.objections)} raised, {len(state.open_objections())} open",
+        file=sys.stderr,
+    )
     if state.report_artifact:
         print(f"  report       : {state.report_artifact}", file=sys.stderr)
     print(f"  artifacts    : {root}", file=sys.stderr)
@@ -210,6 +235,12 @@ def main() -> int:
         "--model",
         default="haiku",
         help="model for every node: a short name (haiku, sonnet) or a full id (default: haiku)",
+    )
+    run.add_argument(
+        "--reviewer-model",
+        default=None,
+        help="model for the reviewer node only (default: --model). Set this and --model "
+        "differently to run the Haiku/Sonnet reviewer ablation.",
     )
     run.add_argument(
         "--tools",

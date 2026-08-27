@@ -45,6 +45,7 @@ def test_the_toy_run_finishes_clean(toy_run):
         "profiler",
         "feature_eng",
         "modeler",
+        "reviewer",
         "router",
         "reporter",
     ]

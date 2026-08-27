@@ -126,6 +126,18 @@ class StubModel:
             best = candidates[0]["name"] if candidates else ""
         return ModelChoice(chosen=best, rationale="stub: best cv_mean, no model was called")
 
+    def _for_ReviewFinding(self, payload: dict[str, Any]) -> Any:  # noqa: N802 - schema name
+        from ds_agents.nodes.reviewer import ReviewFinding
+
+        # Always "pass", no objections proposed, no dispositions offered. A stub that blocked, or
+        # that echoed the open_objections it was shown back as findings, would exercise the review
+        # loop with a reviewer that never actually looked at anything -- the same "looks like a
+        # working pipeline that found nothing" problem `_for_LeakageNomination` exists to avoid,
+        # one node downstream.
+        return ReviewFinding(
+            claim="pass", objections=[], dispositions=[], summary="stub: no model was called"
+        )
+
 
 @dataclass
 class AnthropicModel:

@@ -464,3 +464,42 @@ being precise about which of the two the checkbox was ever asking after. Phase 5
 usable by a generalist agent, which is now demonstrated; it does not need the prompt to have been
 pre-clicked on any particular machine, and a CI arm would supply trust its own way rather than
 through this flag.
+
+## 2026-08-27: the router mints the whole ReviewPass; the reviewer hands dispositions across on one narrow field.
+
+`ReviewPass` needs two things only one node knows: `dispositions`, which only the reviewer produced,
+and `routed_to`, which only the router can compute (it is the sole reader of `reviewer_dispositions`).
+The natural-looking alternative is each node appending its own partial pass. It fails immediately:
+`review_passes` is `operator.add`, so two appends in one iteration mint two records instead of one,
+and every downstream count built on it doubles. The router mints the whole `ReviewPass` instead, and
+the reviewer hands its half across on `reviewer_dispositions`, a field with exactly one writer and
+one reader, deliberately not `operator.add` -- the reviewer overwrites it wholesale every pass
+because it is a handoff for the invocation in progress, not a record of history the way `objections`
+and `review_passes` are. `routed_to` gets the same single-authority treatment for a reason that is
+not cosmetic: the router computes the destination against the state as of its own invocation, before
+this pass's update is merged, while a graph edge re-deriving it would run after the merge. A pass
+that resolves a `feature_eng` objection while raising a new `modeler` one gives the two computations
+different, both locally defensible, answers -- so the router decides once, writes `routed_to` onto
+the pass, and `route_target` reads it back rather than recomputing. The last piece closes a
+staleness hole rather than an ownership one: the reviewer rewrites both `reviewer_claim` and
+`reviewer_dispositions` on every return path, including a failed model call, so a crashed pass reads
+as `pending` rather than leaving the previous pass's claim sitting on the field for the router to
+count a second time.
+
+## 2026-08-27: a malformed objection is filtered one at a time, never by the response schema.
+
+The reviewer node filters each proposed objection's `columns` against the profile's columns minus
+the target, and a column-scoped category (`leakage`, `contamination`, `implausible_importance`) left
+with no surviving column is rejected outright, not downgraded to `other`. Downgrading looks safer
+and is not: it produces an objection `feature_eng` will not act on -- `other` carries no obligation
+-- while the router still counts it as open and keeps blocking on it, which guarantees `exhausted`
+instead of giving the model a real path to `pass`. The first implementation put that same rule on
+`ProposedObjection` as a pydantic validator, one item enforcing itself. On 2026-08-27 Haiku raised an
+`implausible_importance` objection with an empty `columns` list; the validator raised, the whole
+`ReviewFinding` failed to parse, and a pass that carried a real claim and real dispositions alongside
+the one bad objection was recorded as a reviewer crash -- `pending`, not the block it should have
+been. The rule moved to a loop inside the node that filters proposals one at a time, so one bad item
+is dropped and logged while the claim, the dispositions, and every well-formed objection in the same
+pass survive. The transferable point: a per-item rule enforced on the response schema is not actually
+a per-item rule, it is a whole-response rule, and at an LLM boundary that converts one bad item into
+total data loss for the pass.

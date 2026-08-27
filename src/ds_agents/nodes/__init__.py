@@ -16,6 +16,7 @@ from ds_agents.nodes.intake import intake
 from ds_agents.nodes.modeler import modeler
 from ds_agents.nodes.profiler import profiler
 from ds_agents.nodes.reporter import reporter
+from ds_agents.nodes.reviewer import reviewer
 from ds_agents.nodes.router import route_target, router
 
 __all__ = [
@@ -24,6 +25,7 @@ __all__ = [
     "modeler",
     "profiler",
     "reporter",
+    "reviewer",
     "route_target",
     "router",
 ]

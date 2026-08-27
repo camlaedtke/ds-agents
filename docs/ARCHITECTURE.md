@@ -64,8 +64,8 @@ forced to mislabel it.
 | profiler | spec, dataset_id, config.random_seed | profile, split_artifact | run_python | feature_eng |
 | feature_eng | spec, profile, split_artifact, task_description, open objections | feature_code_artifact, feature_summary, final_features, dropped_features | read_artifact, run_python | modeler |
 | modeler | spec, feature_code_artifact, split_artifact, final_features, task_description, config.random_seed, config.run_id, open objections | candidates, chosen_model, importance_artifact, top_importances | read_artifact, run_python, log_metric | reviewer |
-| reviewer | everything above; feature code only if `config.reviewer_sees_code` | objections, reviewer_claim, review_passes | read_artifact | router decides |
-| router | reviewer_claim, review_iterations, config.loop_cap, config.reviewer_enabled, open objections | review_iterations, review_verdict | none | feature_eng / modeler / reporter |
+| reviewer | everything above; feature code only if `config.reviewer_sees_code` | objections, reviewer_claim, reviewer_dispositions | read_artifact | router decides |
+| router | reviewer_claim, reviewer_dispositions, review_iterations, config.loop_cap, config.reviewer_enabled, open objections | review_iterations, review_verdict, review_passes | none | feature_eng / modeler / reporter |
 | reporter | everything except the ground-truth fields below | report_artifact | write_artifact | END |
 
 No node writes `planted_leakage_columns`, `verified_holdout_score`, or `baseline_score`. Those are
@@ -101,6 +101,42 @@ edge `route_target()` reads that *written verdict* and sends an `exhausted` run 
 So the cap is enforced by the two together, not by a clamp inside the router. That is deliberate:
 a defensive clamp would let a mis-wired `graph.py` keep looping while quietly reporting a
 compliant `review_iterations`, turning a topology bug into a wrong number instead of a crash.
+
+### `ReviewPass` has one writer, and `routed_to` has one authority
+
+The router mints the whole `ReviewPass`, including the parts it did not compute itself. `routed_to`
+is known only to the router (it is the sole reader of `reviewer_dispositions`); `dispositions` is
+known only to the reviewer. `review_passes` is `operator.add`, so if both nodes appended their own
+partial pass, every iteration would land two records instead of one. The reviewer hands its half
+across on `reviewer_dispositions` instead: one writer, one reader, deliberately not `operator.add`
+-- the reviewer overwrites it wholesale on every pass, because it is a handoff for the invocation in
+progress, not a history the way `objections` and `review_passes` are.
+
+`routed_to` gets a single authority for the same reason `review_verdict` does. The router computes
+the destination against the *projected* post-pass open set -- `open_objections()` minus whatever
+this pass just resolved or withdrew -- and writes the result onto the pass it mints; `route_target`
+reads that back rather than re-deriving it, extending the existing "`route_target` reads the written
+verdict, never re-derives" rule to `routed_to` as well. This is not belt-and-suspenders: a second,
+independent derivation would genuinely disagree with the first. The router computes against the
+state as of its own invocation, before this pass's update is merged; the edge function runs after
+that merge. A pass that resolves a `feature_eng` objection while raising a new `modeler` one would
+have the router see the still-open `feature_eng` objection and the edge see the merged state with
+only the new `modeler` objection standing -- two different, both locally correct, destinations. The
+whole scheme rests on one invariant: `review_verdict == "block"` implies a `ReviewPass` was minted
+on the same invocation, so `route_target` always has a pass with a `routed_to` to read.
+
+**Both handoff fields are rewritten on every reviewer return path** -- a completed pass, a failed
+model call, and the disabled no-op all set `reviewer_claim` and `reviewer_dispositions` explicitly,
+never leaving either at whatever it held from the previous pass. The router only reads
+`reviewer_claim`; it has no way to tell a fresh value from a stale one. Without the rewrite, a
+pass-2 crash would leave pass 1's `block` sitting on the field, and the router would count it a
+second time. A crashed pass has to read as no pass -- `pending`, not a replay.
+
+**A disabled reviewer is a no-op inside the node, not a graph conditional**, so `graph.py` stays
+logic-free either way. That means the reviewer-off arm's `node_trace` still contains a `reviewer`
+row -- just a zero-cost one, `model: None`. Anything comparing the reviewer-on and reviewer-off arms
+has to read `model` or `cost_usd` off that row, not the presence of `"reviewer"` in the trace, or
+the two arms look identical on a check that was only ever asking whether the graph reached the node.
 
 A node's signature is `node(state, *, tools, model) -> dict`. It returns a **narrow dict of the
 fields it changed**, never the state object: with `operator.add` on the history fields, returning

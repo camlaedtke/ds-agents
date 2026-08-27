@@ -4,6 +4,7 @@ Node tests use these rather than `LocalTools`, so a node test fails for a reason
 A node test that shells out to a real subprocess is testing pandas.
 """
 
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -11,7 +12,7 @@ import pytest
 from pydantic import BaseModel
 
 from ds_agents.state import ArtifactId
-from ds_agents.tools.llm import Completion
+from ds_agents.tools.llm import Completion, StubModel, _payload
 from ds_agents.tools.protocol import ArtifactMeta, ArtifactPayload, RunResult, ToolError
 
 TOY_CSV = Path(__file__).parent / "fixtures" / "toy" / "toy.csv"
@@ -97,6 +98,43 @@ class ScriptedModel:
             raise answer
         return Completion(
             value=answer, model=self.name, input_tokens=11, output_tokens=7, cost_usd=0.0001
+        )
+
+
+class QueuedModel:
+    """Wraps `StubModel` and answers ONE schema from a queue, one answer per call; every other
+    schema falls through to the real stub.
+
+    Built for the review loop, which runs against `LocalTools` and the real toy CSV rather than
+    canned facts: intake, profiler, feature_eng, and modeler need their ordinary stub answers, and
+    only the reviewer's schema needs to be scripted pass-to-pass (block, then pass, say). An
+    answer may be the `BaseModel` value directly, or a callable that receives the prompt's parsed
+    facts (the same JSON block `StubModel` reads) and returns one -- so a later pass can react to
+    ids the node only mints during the run, like an objection's `id`.
+    """
+
+    def __init__(
+        self,
+        schema: type[BaseModel],
+        answers: list[BaseModel | Callable[[dict[str, Any]], BaseModel]],
+        name: str = "queued",
+    ) -> None:
+        self.schema = schema
+        self.answers = list(answers)
+        self.name = name
+        self._stub = StubModel(name=name)
+        self.calls: list[tuple[str, str, type[BaseModel]]] = []
+
+    def generate[M: BaseModel](self, *, system: str, user: str, schema: type[M]) -> Completion[M]:
+        if schema is not self.schema:
+            return self._stub.generate(system=system, user=user, schema=schema)
+        self.calls.append((system, user, schema))
+        if not self.answers:
+            raise AssertionError(f"QueuedModel ran out of scripted answers for {schema.__name__}")
+        answer = self.answers.pop(0)
+        value = answer(_payload(user)) if callable(answer) else answer
+        return Completion(
+            value=value, model=self.name, input_tokens=11, output_tokens=7, cost_usd=0.0001
         )
 
 
