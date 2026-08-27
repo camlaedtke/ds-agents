@@ -439,3 +439,28 @@ itself. The prefix is matched with `partition` rather than `startswith` because 
 its own "Error executing tool <name>: " to an expected tool error. Anything that is *not* one of
 those two types is left to the SDK, which withholds the text — correct, because an unexpected
 exception in the protocol layer is a bug in our code, not a finding about a run.
+
+## 2026-08-27: the generalist baseline is verified by use, not by an approval flag.
+
+The Phase 2 checkbox asked whether Claude Code can connect to the same server, because Phase 5's
+single-agent arm is Claude Code driving these four tools directly and the comparison is only
+honest if both arms face the identical surface. Last session answered it with a hand-rolled
+JSON-RPC client, which proved the protocol was standard but not that a real MCP client would find
+the tools usable. It is now answered the direct way: inside Claude Code the tools resolve as
+`mcp__ds-agents-tools__*` and all four were driven against the toy dataset by an agent sharing no
+code with `tools/mcp_client.py`. What that exercise actually confirmed, beyond "it connects", is
+that the two invariants the sandbox is for survive a client we did not write — `run_python`
+reported the repo absent from `sys.path` and no `ANTHROPIC_API_KEY` in its environment — and that
+the truncation contract is legible from the outside: a 202-byte artifact read with `max_bytes=40`
+came back `truncated: true`, and the same artifact opened whole from inside a snippet at the
+`sandbox_path` its own metadata carried. That last pair is the one thing a hand-rolled client
+could not have shown, since the escape hatch only means anything if the client that hits the cap
+can find it.
+
+The residual is that `claude mcp list` still prints "pending approval" for the project-scoped
+entry, so a fresh terminal session prompts once before the tools appear. That is a per-machine
+trust prompt about running `uv run mcp-server`, not a property of the server, and it is worth
+being precise about which of the two the checkbox was ever asking after. Phase 5 needs the tools
+usable by a generalist agent, which is now demonstrated; it does not need the prompt to have been
+pre-clicked on any particular machine, and a CI arm would supply trust its own way rather than
+through this flag.

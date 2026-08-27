@@ -1,66 +1,48 @@
 # Next session
 
 ## Start here
-**Phase 2 is done apart from one keystroke.** The four tools now cross the MCP protocol.
-`mcp_server/server.py` constructs a `LocalTools` -- the same binding of `SandboxPool` and
-`ArtifactStore` the graph has used since Phase 1 -- and exposes its four methods as MCP tools, so
-the protocol layer decides nothing about how a snippet runs or when a read truncates.
-`src/ds_agents/tools/mcp_client.py` satisfies the same `Tools` Protocol from the other side, and
-`ds-agents run` now defaults to `--tools mcp` (`--tools local` skips the process boundary for
-debugging). Two design choices worth knowing before touching it, both in DECISIONS.md 2026-08-27:
-one server process per run, because a shared server would need a fifth tool to open a run and the
-tool surface is what the Phase 5 ablation holds constant; and `read_artifact` is capped at 1 MiB
-even with no `max_bytes`, in the store rather than in the transport, so the two bindings cannot
-disagree about whether an artifact was whole.
+**Phase 2 is closed.** The last box was "verify Claude Code can connect to the same server", and
+it is now verified from inside Claude Code rather than by proxy: the four tools resolve as
+`mcp__ds-agents-tools__*` and all four were driven against the toy dataset by an agent that shares
+no code with `tools/mcp_client.py`. Worth knowing what that actually established, because it is
+more than "it connects". `run_python` reported the repo absent from `sys.path` and no
+`ANTHROPIC_API_KEY` in its environment, so the two isolation invariants hold for a client we did
+not write. And a 202-byte artifact read with `max_bytes=40` came back `truncated: true`, then
+opened whole from inside a snippet at the `sandbox_path` in its own metadata -- the escape hatch
+is only worth having if the client that hits the cap can find it, and now that is demonstrated
+from the outside. See DECISIONS.md 2026-08-27.
 
-The floor: 203 fast tests in 6.7s, 221 in the full suite, `uv run ds-agents run --dataset toy`
-exits 0 in ~15.8s at $0.0096. Five live Haiku runs today through MCP plus one through
-`--tools local`: `feature_eng` dropped `account_status_code` in all six and claimed roc_auc 0.843
-every time, the same number the in-process runs produced last session -- which is the point, since
-the transport is supposed to be the only thing that changed. The test named
-`test_the_same_run_over_mcp_lands_in_the_same_place` asserts that parity end to end with the stub:
-same spec, same features, same chosen model, same claimed score to the digit.
+One residual, deliberately not treated as blocking: `claude mcp list` still prints "pending
+approval" for the project-scoped entry, so a fresh terminal session prompts once before the tools
+appear. That is a per-machine trust prompt about running `uv run mcp-server`, not a property of
+the server. Click it if the prompt is in the way; nothing in Phase 3 waits on it.
 
-**The one thing left on the Phase 2 checklist.** `.mcp.json` is committed and points Claude Code
-at the same server, but `claude mcp list` reports it as "pending approval" -- a project-scoped MCP
-server needs one interactive `claude` session to accept, which a non-interactive session cannot
-do. Conformance was verified the other way instead: a hand-rolled JSON-RPC client with no SDK on
-its side completes the handshake, lists the four tools and gets real results back, so the surface
-is standard rather than a dialect our own client happens to speak. Start the next session by
-running `claude`, approving the server, and confirming `claude mcp list` says connected.
-
-**A real bug the reviewer caught, worth knowing because it was invisible.** `feature_eng` refused
-to act on a truncated split manifest and `modeler` did not. That gap was dead code while an
-unbounded read was possible and became a silent wrong number the moment the default cap landed:
-the fitting snippet would have trained and scored on a subset of the pinned split while reporting
-`claimed_holdout_score` as if it were the holdout. Both guards now exist with a test each. The
-second finding was an orphaned server subprocess on a failed connect -- one per failed dataset in
-a benchmark, each holding a sandbox worker with pandas resident. Both fixed; the regression test
-for the second was confirmed to fail against the old code.
+The floor: 221 tests pass in 25.1s (full suite). Two live Haiku toy runs today, both exit 0 in
+~15.9s at $0.0098, both dropping `account_status_code` and `customer_id`, both claiming roc_auc
+0.843 and printing `publishable: yes` -- the same number the in-process runs and the first MCP
+runs produced, which remains the point.
 
 ## First prompt
-Read CLAUDE.md, docs/ARCHITECTURE.md and docs/PLAN.md. First, close out Phase 2: approve the
-project MCP server (`claude` interactively, then `claude mcp list` should show `ds-agents-tools`
-connected) and tick the last box. Then start Phase 3 in plan mode -- the adversarial reviewer.
-Follow /add-node. The node reads everything the modeler wrote plus the feature code only when
-`config.reviewer_sees_code`, and writes `objections`, `reviewer_claim` and nothing else: the
-router owns `review_verdict` and `review_iterations`, and `exhausted` is derived, not claimed.
-Before writing the node, settle the `ReviewPass` ownership problem in the parking lot below --
-`dispositions` and `routed_to` currently have different owners on a field annotated
-`operator.add`, so if both nodes append, every iteration writes two records.
+Read CLAUDE.md, docs/ARCHITECTURE.md and docs/PLAN.md, then start Phase 3 in plan mode: the
+adversarial reviewer. Follow /add-node. The node reads everything the modeler wrote plus the
+feature code only when `config.reviewer_sees_code`, and writes `objections`, `reviewer_claim` and
+nothing else -- the router owns `review_verdict` and `review_iterations`, and `exhausted` is
+derived, not claimed.
+
+Settle the `ReviewPass` ownership problem before writing the node; it is the first thing the
+reviewer collides with, and it is in the parking lot below with a recommended fix.
 
 ## Open questions
-- **`customer_id` as a false positive.** Unchanged for three sessions and still unresolved. Every
+- **`customer_id` as a false positive.** Unchanged for four sessions and still unresolved. Every
   toy run flags it, correctly on the merits, and scores it as a false alarm because the manifest
   lists it under `id_columns` rather than `planted_leakage`, so `leakage_precision` reads 0.5
   every time. Options: an `acceptable_flags` set the precision metric forgives; count id columns
   as planted leakage; or publish 0.5 as the honest number and explain it. This changes a published
-  column, which is why it keeps not being decided in passing.
-- **`NodeEvent` records no duration.** Cost per node is there, wall time per node is not. Worth a
-  field before Phase 4 makes wall time a published column. Cheap now, annoying to backfill.
-- **The fast-test budget settled at 6.7s** against the hook's stated <10s, and the MCP tests cost
-  almost none of it (the in-process client tests are milliseconds; everything that spawns is
-  outside `fast`). The three process-lifetime sandbox tests are still ~3.8s of the total. Leaving
+  column, which is why it keeps not being decided in passing. Phase 3 makes it worse, not better:
+  the reviewer will have its own opinion about `customer_id` and there is no rule yet that says
+  who is right.
+- **The fast-test budget was 6.7s** against the hook's stated <10s at last measurement; the full
+  suite is 25.1s. The three process-lifetime sandbox tests are ~3.8s of the fast total. Leaving
   them in `fast` is the current call; revisit only if the hook starts feeling slow.
 - **Does `feature_eng` deserve its own reviewer-independent retry?** Still open, still argues
   against itself: measuring the reviewer's effect is cleaner if the baseline is left alone.
@@ -95,7 +77,12 @@ Before writing the node, settle the `ReviewPass` ownership problem in the parkin
   benchmark set.
 - `feature_eng` picks columns but does not write code. Revisit once a Docker backend gives
   model-authored feature code a smaller blast radius.
+- **`.mcp.json` hardcodes the toy dataset on argv**, which is right for today (it is the only
+  dataset) and wrong for Phase 5, where the generalist arm has to face each benchmark dataset in
+  turn. The server already takes `--dataset` and `--dataset-id`, so the fix is whatever launches
+  the single-agent arm writing the file per dataset, not a change to the server. Noting it here so
+  it is not discovered as a surprise mid-ablation.
 - Hint-injection ablation: tell the reviewer which categories of failure exist vs not.
-- Cost-per-caught-leak as a headline metric. A toy run is ~$0.0096.
+- Cost-per-caught-leak as a headline metric. A toy run is ~$0.0098.
 - ruff formats Python blocks inside `docs/*.md`, so the hook rewrites design docs on every edit.
   Harmless but surprising; scope the hook to `src/ tests/ mcp_server/` if it becomes annoying.

@@ -60,12 +60,16 @@ See DECISIONS.md 2026-08-27.
       satisfies the same Protocol, `ds-agents run` defaults to `--tools mcp`, `--tools local`
       stays for debugging. Three live Haiku runs through MCP: leak dropped 3 of 3, roc_auc 0.843,
       15.4s and $0.0098, all matching the in-process numbers.
-- [~] verify Claude Code can connect to the same server (this is the generalist-agent baseline
-      later). `.mcp.json` is committed and a hand-rolled JSON-RPC client with no SDK completes the
-      handshake, lists the four tools and gets real results, so the surface is standard. What is
-      NOT done: `claude mcp list` reports the project-scoped server as "pending approval", which
-      needs one interactive `claude` session to accept. Do that and then check it lists as
-      connected.
+- [x] verify Claude Code can connect to the same server (this is the generalist-agent baseline
+      later). Done from inside Claude Code itself: the four tools resolve as
+      `mcp__ds-agents-tools__*` and all four were exercised against the toy dataset by an agent
+      that shares no code with `tools/mcp_client.py`. `run_python` saw the dataset at
+      `$DS_DATASET`, the repo off `sys.path` and no API key in the environment; `write_artifact`
+      returned an id and a `sandbox_path`; `read_artifact` with `max_bytes=40` returned
+      `truncated: true` and the same artifact opened whole from inside a snippet at its
+      `sandbox_path`; `log_metric` accepted a number. Residual, and it is a CLI flag rather than a
+      capability: `claude mcp list` still prints "pending approval" for the project-scoped entry,
+      so a fresh terminal session prompts once. See DECISIONS.md 2026-08-27.
 
 ## Phase 3: Adversarial reviewer (4 to 6 sessions, plan mode)
 - [ ] reviewer node with structured Objection output and conditional routing
