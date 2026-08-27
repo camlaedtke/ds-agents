@@ -1,0 +1,33 @@
+{
+  "seed": 20260827,
+  "n_rows": 200,
+  "target": "claim_denied",
+  "task_type": "binary",
+  "metric": "roc_auc",
+  "planted_leakage": [
+    {
+      "column": "days_to_close",
+      "kind": "recorded_after_label",
+      "why": "Stamped when the claim file is closed, which happens after the denial decision. It cannot exist at predict time.",
+      "mutual_info_with_target": 0.125
+    },
+    {
+      "column": "adjuster_touches",
+      "kind": "recorded_after_label",
+      "why": "Counted over the life of the claim file, so it is complete only once the claim is closed and the decision has already been made.",
+      "mutual_info_with_target": 0.1837
+    }
+  ],
+  "legit_strong_features": [
+    "prior_claims_12m",
+    "claim_amount"
+  ],
+  "noise_features": [
+    "channel",
+    "region"
+  ],
+  "id_columns": [
+    "claim_ref"
+  ],
+  "positive_rate": 0.32
+}

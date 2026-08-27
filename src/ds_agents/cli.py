@@ -11,13 +11,13 @@ run, because a results row built from a stub would look like a system that never
 """
 
 import argparse
-import json
 import sys
 import tempfile
 from pathlib import Path
 
 from dotenv import load_dotenv
 
+from ds_agents.fixtures import Fixture, available, load_fixture
 from ds_agents.graph import run_pipeline
 from ds_agents.state import PipelineState, RunConfig
 from ds_agents.tools.llm import AnthropicModel, StubModel, api_key_present
@@ -26,18 +26,12 @@ from ds_agents.tools.mcp_client import MCPTools, stdio_params
 from ds_agents.tools.pricing import UnknownModelError
 from ds_agents.tools.protocol import Tools
 
-FIXTURES = Path(__file__).resolve().parents[2] / "tests" / "fixtures"
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
-def _toy_state(model_name: str = "haiku", reviewer_model_name: str | None = None) -> PipelineState:
-    manifest_path = FIXTURES / "toy" / "manifest.json"
-    if not manifest_path.exists():
-        raise SystemExit(
-            f"toy fixture not found at {manifest_path}. This path assumes an editable install; "
-            f"run from a checkout with `uv run ds-agents`."
-        )
-    manifest = json.loads(manifest_path.read_text())
+def _fixture_state(
+    fixture: Fixture, model_name: str = "haiku", reviewer_model_name: str | None = None
+) -> PipelineState:
     return PipelineState(
         config=RunConfig(
             reviewer_enabled=True,
@@ -48,14 +42,19 @@ def _toy_state(model_name: str = "haiku", reviewer_model_name: str | None = None
             default_model=model_name,
             reviewer_model=reviewer_model_name or model_name,
         ),
-        dataset_id="toy",
+        dataset_id=fixture.dataset_id,
         # No `spec`: naming the target is intake's job, and pre-filling it here would skip the
         # node under test. The description is what a person would actually say.
-        task_description=f"Predict {manifest['target']} and report {manifest['metric']}.",
-        # Ground truth, written at construction so a bare toy run can grade itself. Nodes never
-        # set this; the reviewer must find the leak without being told where it is.
-        planted_leakage_columns=[leak["column"] for leak in manifest["planted_leakage"]],
+        task_description=fixture.task_description,
+        # Ground truth, written at construction so a bare run can grade itself. Nodes never set
+        # this; the reviewer must find the leak without being told where it is.
+        planted_leakage_columns=fixture.manifest.planted_columns,
     )
+
+
+def _toy_state(model_name: str = "haiku", reviewer_model_name: str | None = None) -> PipelineState:
+    """The toy fixture's state, by name. Kept as its own function because tests call it."""
+    return _fixture_state(load_fixture("toy"), model_name, reviewer_model_name)
 
 
 def _print_trace(state: PipelineState) -> None:
@@ -139,13 +138,15 @@ def _select_tools(transport: str, root: Path, dataset: Path, dataset_id: str) ->
 
 
 def cmd_run(args: argparse.Namespace) -> int:
-    if args.dataset != "toy":
-        print(f"only the toy dataset exists so far, not {args.dataset!r}", file=sys.stderr)
+    try:
+        fixture = load_fixture(args.dataset)
+    except SystemExit as exc:
+        print(str(exc), file=sys.stderr)
         return 2
 
     root = Path(args.artifacts_dir) if args.artifacts_dir else Path(tempfile.mkdtemp())
-    tools = _select_tools(args.tools, root, FIXTURES / "toy" / "toy.csv", "toy")
-    state = _toy_state(args.model, args.reviewer_model)
+    tools = _select_tools(args.tools, root, fixture.csv_path, fixture.dataset_id)
+    state = _fixture_state(fixture, args.model, args.reviewer_model)
     model = _select_model(state.config, no_live=args.no_live)
     reviewer_model = _select_reviewer_model(state.config, model, no_live=args.no_live)
     if isinstance(model, StubModel):
@@ -227,7 +228,11 @@ def main() -> int:
     sub = parser.add_subparsers(dest="command", required=True)
 
     run = sub.add_parser("run", help="run the pipeline on one dataset")
-    run.add_argument("--dataset", default="toy")
+    run.add_argument(
+        "--dataset",
+        default="toy",
+        help=f"fixture to run (default: toy). Available: {', '.join(available()) or '(none)'}",
+    )
     run.add_argument(
         "--artifacts-dir", default=None, help="where the run's artifacts land (default: a tempdir)"
     )

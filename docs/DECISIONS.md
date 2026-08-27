@@ -503,3 +503,44 @@ is dropped and logged while the claim, the dispositions, and every well-formed o
 pass survive. The transferable point: a per-item rule enforced on the response schema is not actually
 a per-item rule, it is a whole-response rule, and at an LLM boundary that converts one bad item into
 total data loss for the pass.
+
+## 2026-08-27: trap difficulty is set by the column name, not by the association number.
+
+The two new leakage-trap fixtures were tuned on the wrong axis, and finding that out is the useful
+part. The premise was that the toy leak is caught every time because it screams statistically --
+0.518 normalized mutual information against 0.094 for the legitimate strong feature -- so the new
+traps were built to sit inside the range a good feature occupies. `claims_timing` puts `days_to_close`
+and `adjuster_touches` at 0.125 and 0.184 against a legit 0.080; `reissued_ids` puts `member_number`
+at 0.0945 against `credit_score` at 0.0952, which is as close to statistically indistinguishable as a
+fixture can be built. It made no difference. Across six live Haiku runs the profiler nominated the
+planted column in 6 of 6, `feature_eng` dropped it, and the reviewer was handed a clean matrix again
+-- the same dead end the toy fixture produces, reached from the opposite direction.
+
+A name ablation says why. The same `claims_timing` CSV with `days_to_close` and `adjuster_touches`
+renamed to `metric_a7` and `metric_b3` -- identical values, identical mutual information, identical
+everything the profiler computes -- was nominated in 1 of 3 runs against 3 of 3 for the descriptive
+names. n=3 a side, so this is directional and not a rate, but the direction is not subtle and the
+mechanism is not in doubt: the profiler's prompt contains the column names, and the model is reading
+them. What is being measured when we "plant a leak" is therefore mostly whether the column is
+*named* like a leak, and the association number is closer to a tiebreak than to the evidence base.
+The consequence for the benchmark is that name transparency belongs as an explicit condition -- an
+ablation axis, descriptive versus opaque, held against the same rows -- rather than as an unrecorded
+property of whatever the fixture author happened to call a column. That is a manifest change and a
+harness change, so it is written up for the next session rather than taken in passing here. Both
+fixtures stay as built and honestly labelled; retuning them until Haiku misses would fit the
+benchmark to one model, which is the failure mode the fixtures exist to avoid.
+
+## 2026-08-27: the reviewer misses a top-ranked leak that reaches it, in 3 of 3 runs.
+
+Incidental to the fixture work and more important than it. The point of Phase 3 is unmeasurable while
+upstream cleans the matrix first, so the runs where a trap *did* survive are the only real data the
+project has on its central claim. There are three of them: one live `claims_timing` run where
+`adjuster_touches` survived to a claimed roc_auc of 0.954, and two name-ablation runs where both
+traps survived as the number one and number two permutation importances at a claimed 0.986 against a
+legitimate ceiling near 0.82. In all three the reviewer returned `claim: "pass"` and raised no
+`leakage` or `contamination` objection at all. It is not that the reviewer argued the columns were
+fine -- it never mentioned them. Set against what it does raise unprompted (four `metric_mismatch`
+objections in one `reissued_ids` run), the shape of the failure is that the reviewer reliably audits
+the numbers it is shown and does not interrogate what the columns mean, which is the one thing the
+matrix cannot tell it. This is the finding Phase 3 exists to produce; it should be reproduced with a
+larger n and against a Sonnet reviewer before it goes in a README.

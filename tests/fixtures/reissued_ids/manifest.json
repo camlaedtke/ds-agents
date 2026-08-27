@@ -1,0 +1,28 @@
+{
+  "seed": 20260827,
+  "n_rows": 200,
+  "target": "default_90d",
+  "task_type": "binary",
+  "metric": "roc_auc",
+  "planted_leakage": [
+    {
+      "column": "member_number",
+      "kind": "identifier_reissued_by_outcome",
+      "why": "Files were re-keyed into a 700000 block after the outcome was known, so the number range carries the label. 189 distinct values in 200 rows, which is under the identifier threshold feature_eng drops on.",
+      "agreement_with_target": 0.76,
+      "mutual_info_with_target": 0.0945
+    }
+  ],
+  "legit_strong_features": [
+    "credit_score",
+    "debt_to_income"
+  ],
+  "noise_features": [
+    "branch",
+    "loan_purpose"
+  ],
+  "id_columns": [
+    "application_ref"
+  ],
+  "positive_rate": 0.255
+}

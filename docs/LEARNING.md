@@ -119,12 +119,17 @@ Priority: **load-bearing** means the thesis breaks if this is wrong and you cann
 - Came up: 2026-08-26, `src/ds_agents/nodes/profiler.py`
 - Status: flagged
 - Why it matters here: the profiler computes normalized mutual information between every column
-  and the target, and that number is the entire evidence base the model gets for deciding what to
-  flag. On the toy fixture the planted leak reads 0.518, the legitimate strong feature 0.094, and
-  the meaningless id column 0.194. If you cannot read those three numbers and say which pattern is
-  which, you cannot tell a profiler that reasoned well from one that guessed and got lucky, and
+  and the target, and that number is the entire *numeric* evidence base the model gets for deciding
+  what to flag. On the toy fixture the planted leak reads 0.518, the legitimate strong feature 0.094,
+  and the meaningless id column 0.194. If you cannot read those three numbers and say which pattern
+  is which, you cannot tell a profiler that reasoned well from one that guessed and got lucky, and
   the leakage_recall column stops being interpretable. The distinction it forces — high
   association is not the same as leakage — is the whole task.
+- Correction, 2026-08-27: this entry used to say the number was "the entire evidence base", and that
+  is wrong in a way that matters. The prompt also carries every column *name*, and the name is doing
+  most of the work. `member_number` reads 0.0945 and `credit_score` 0.0952 in `reissued_ids`, and the
+  profiler flags the first and not the second in 3 of 3 runs — a decision the numbers cannot support.
+  See [[semantic-vs-statistical-leakage]] and DECISIONS.md 2026-08-27.
 
 ### two-splits — the agents get a holdout, and the harness keeps a different one
 - Priority: load-bearing
@@ -289,3 +294,46 @@ Priority: **load-bearing** means the thesis breaks if this is wrong and you cann
   that silence and agreement are different events, and a record that only stores what the model
   said cannot tell them apart — an objection the reviewer never looked at again would otherwise
   read identically to one it actively decided was fine.
+
+### semantic-vs-statistical-leakage — the agents flag a leak by what the column is called, not by what it correlates with
+- Priority: load-bearing
+- Came up: 2026-08-27, building the `claims_timing` and `reissued_ids` trap fixtures
+- Status: flagged
+- Why it matters here: two fixtures were tuned so the planted column's association with the target
+  sits exactly where a legitimate strong feature sits — `member_number` at 0.0945 against
+  `credit_score` at 0.0952 — and the profiler flagged the planted one anyway, 6 of 6 live runs. The
+  same CSV with the trap columns renamed to `metric_a7` and `metric_b3` was flagged in 1 of 3. So
+  when we say "the profiler caught the leak" we are mostly measuring whether the column was named
+  like a leak. That is not a bug — a real data scientist reads names too — but it is an
+  uncontrolled variable sitting underneath every leakage number the project plans to publish, and it
+  means a benchmark of "hard" traps can be built or defeated by renaming columns. Related:
+  [[mutual-information]], [[target-leakage]], [[fixture-difficulty]].
+
+### evidence-surface — a reviewer can only object to what its prompt contains
+- Priority: load-bearing
+- Came up: 2026-08-27, deciding which trap variants were buildable
+- Status: flagged
+- Why it matters here: `reviewer._user_message` puts seven things in front of the model — the spec,
+  `feature_summary`, `final_features`, `dropped_features`, per-candidate `cv_mean` and claimed score,
+  `top_importances`, open objections, and optionally the feature code. That list is the reviewer's
+  entire world. It never sees the split manifest, the profile, the mutual-information numbers, or a
+  single row of data. Two consequences that look like model failures and are not: a column the
+  feature snippet skipped as high-cardinality is invisible, so the reviewer cannot object to it; and
+  duplicate rows across the train/holdout boundary are structurally uncatchable, because nothing in
+  the prompt could distinguish a contaminated split from a clean one. Before grading the reviewer on
+  a failure, check whether the evidence for it was in the prompt at all. Related:
+  [[adversarial-review-loop]], [[measurement-independence]], [[caught-vs-remediated]].
+
+### fixture-difficulty — a benchmark whose trap gets cleaned upstream measures nothing
+- Priority: useful
+- Came up: 2026-08-27, the second attempt at a trap the reviewer can see
+- Status: flagged
+- Why it matters here: the reviewer has now been handed a clean matrix on three fixtures in a row,
+  because the profiler flags the leak and `feature_eng` drops it before the reviewer is called. A
+  fixture like that produces a `leakage_recall` of 0.0 for the reviewer that reads exactly like a
+  miss and is actually a fixture that never posed the question. The tempting fix is to tune the
+  fixture until the model stops catching it, and that fails in the other direction: you are then
+  measuring the tuner, and the benchmark is fitted to whichever model it was tuned against, which
+  quietly corrupts the Phase 5 ablations it exists to support. The way out is to make difficulty an
+  explicit, recorded condition rather than a property of how hard the author tried. Related:
+  [[semantic-vs-statistical-leakage]], [[eval-baselines]].

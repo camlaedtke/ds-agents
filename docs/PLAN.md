@@ -77,6 +77,11 @@ it changed who writes what. The router now mints the whole `ReviewPass` and the 
 dispositions across on a new narrow field, `reviewer_dispositions`. `routed_to` got a single
 authority at the same time: the router computes the destination and `route_target` reads it back.
 See DECISIONS.md 2026-08-27.
+
+Scope note: fixtures needed a registry before a second one could be run at all -- `cmd_run` rejected
+every `--dataset` but `toy` and hardcoded the CSV path. `src/ds_agents/fixtures.py` types the
+manifest and resolves a fixture by name; nothing in `nodes/` imports it, because a node that could
+read a manifest could read the answer key.
 - [x] reviewer node with structured Objection output and conditional routing
 - [x] loop cap, `exhausted` verdict. Both reached live, not just in tests: 2 of 7 live Haiku runs
       ended `exhausted` at `loop_cap=3` on a `metric_mismatch` objection the modeler never
@@ -84,14 +89,26 @@ See DECISIONS.md 2026-08-27.
 - [x] feature_eng and modeler consume objections. Wired in Phase 1; this session is the first
       evidence it works end to end, in `tests/test_review_loop.py` (block once, drop the objected
       column, pass) and in the live runs that took the cycle edge back to `modeler` twice.
-- [ ] reviewer catches the toy leakage; test that it does. **Not demonstrable on the toy fixture as
-      it stands, and this is the finding rather than a gap in the work.** The profiler flags the
-      planted leak and `feature_eng` drops it before the reviewer is ever called, so in 7 live runs
-      the reviewer never saw a leaky matrix and raised no leakage objection at all. Testing the
-      reviewer on leakage needs a run where the upstream nodes fail to remove it, which is what the
-      next box is for.
-- [ ] 2 to 3 more leakage-trap variants (timestamp after label, ID-encoded target, duplicate rows
-      across split). Now the priority: these are what give the reviewer something upstream missed.
+- [x] reviewer catches the toy leakage; test that it does. **Answered, and the answer is no.** It
+      took three fixtures to get a leaky matrix in front of the reviewer at all. In the 3 runs where
+      a planted trap did survive upstream and ranked first or second by permutation importance, at a
+      claimed roc_auc of 0.954 to 0.986 against a legitimate ceiling near 0.82, the reviewer returned
+      `pass` and raised no leakage or contamination objection in 3 of 3. It never mentioned the
+      columns. Needs a larger n and a Sonnet arm before publication, but the box is no longer
+      untestable. See DECISIONS.md 2026-08-27.
+- [~] 2 to 3 more leakage-trap variants. Two built: `claims_timing` (timestamp after label, two trap
+      columns) and `reissued_ids` (ID-encoded target, with a genuine unique id alongside as a
+      control). Both ship a seeded generator, a committed CSV and a manifest, and both are proved by
+      test to reach `final_features` and `top_importances` under `StubModel`. Duplicate-rows-across-
+      split is deferred, not skipped: the reviewer is never shown the split or any rows, so it is
+      structurally uncatchable today, and `results_row()` scores leakage as a set comparison over
+      columns and cannot score a trap with no guilty column.
+- [ ] Name transparency as an explicit ablation axis. The traps were tuned to be statistically
+      invisible and got caught anyway; renaming them defeated the profiler far more effectively than
+      any amount of association tuning did (3 of 3 nominated with descriptive names, 1 of 3 with
+      opaque ones, n=3 a side). Difficulty is currently an unrecorded property of what the fixture
+      author called a column, which is an uncontrolled variable under every leakage number we plan
+      to publish. Needs a manifest field and a harness condition. Now the priority.
 
 ## Phase 4: Eval harness (3 to 5 sessions, plan mode)
 - [ ] evals/datasets/manifest.yaml with 10 to 15 OpenML / Kaggle playground datasets and

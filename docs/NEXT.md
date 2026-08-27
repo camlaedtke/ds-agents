@@ -1,114 +1,121 @@
 # Next session
 
 ## Start here
-**The reviewer is live and the loop closes.** `modeler -> reviewer -> router` is wired, the router
-mints the whole `ReviewPass`, and runs cycle back to `feature_eng`/`modeler` and terminate at the
-cap. Phase 3 boxes 1 to 3 are ticked. Two things are worth knowing before touching anything.
+**Phase 3's central question got its first real answer, and the answer is that the reviewer misses.**
+Two new trap fixtures shipped -- `claims_timing` (two columns recorded after the label) and
+`reissued_ids` (an identifier re-keyed by outcome, with a genuine unique id alongside as a control)
+-- plus `src/ds_agents/fixtures.py`, the registry that had to exist before a second dataset could be
+run at all. Three things are worth knowing before touching anything.
 
-First, the ownership question that NEXT.md has been carrying since Phase 1 is settled and it moved
-a contract. The reviewer writes `objections`, `reviewer_claim` and a new field,
-`reviewer_dispositions`; it never writes `review_passes`, `review_verdict` or `review_iterations`.
-The router folds the dispositions into the `ReviewPass` it mints, and it now also owns `routed_to`,
-which `route_target` reads back instead of re-deriving — the two see the state on opposite sides of
-the merge and genuinely disagree on a pass that resolves one node's objection while raising
-another's. See DECISIONS.md 2026-08-27.
+First, **the traps were tuned on the wrong axis.** The premise was that the toy leak gets caught
+every run because it screams statistically, so the new ones were built to sit inside the range a
+legitimate feature occupies: `member_number` reads 0.0945 normalized mutual information against
+`credit_score`'s 0.0952, which is as indistinguishable as a fixture can be made. It changed nothing.
+Across 6 live Haiku runs the profiler nominated the planted column 6 of 6 and `feature_eng` dropped
+it, and the reviewer got a clean matrix again. A name ablation says why: the same `claims_timing` CSV
+with the traps renamed to `metric_a7` and `metric_b3` -- identical values, identical everything the
+profiler computes -- was nominated in 1 of 3 runs against 3 of 3 for the descriptive names. n=3 a
+side, so directional, not a rate. The profiler is reading column names, not the association number.
 
-Second, and this is the real finding of the session: **the reviewer never saw the planted leak.**
-In 7 live Haiku runs it raised zero leakage objections, because the profiler flags
-`account_status_code` and `feature_eng` drops it before the reviewer is called. The toy fixture
-cannot currently demonstrate the thing Phase 3 exists to measure. That is not a bug in the node; it
-is the fixture being too easy, and it makes the leakage-trap variants the next task rather than a
-nice-to-have. What the reviewer did do, in 2 of 7 runs, was raise `metric_mismatch` against the
-modeler and never withdraw it, ending `exhausted` at `loop_cap=3`. I did not capture the evidence
-text and have not judged whether that objection is legitimate; it is the first question below.
+Second, **in the 3 runs where a trap did survive upstream, the reviewer raised nothing.** One live
+`claims_timing` run where `adjuster_touches` survived at a claimed roc_auc of 0.954, and two ablation
+runs where both traps survived as the number one and two permutation importances at a claimed 0.986
+against a legitimate ceiling near 0.82. All three returned `claim: "pass"` with zero `leakage` or
+`contamination` objections. It did not argue the columns were fine; it never mentioned them. Needs a
+bigger n and a Sonnet arm before it goes in a README, but it is the first time the question has been
+asked at all.
 
-The floor: 251 tests pass in 37.0s full, 230 in 6.9s fast. Live Haiku toy runs are now ~$0.013 and
-~18s when the reviewer passes on the first look (5 of 7), ~$0.030 and ~40s when it blocks to the cap
-(2 of 7), against a pre-reviewer floor of $0.0098 and 15.9s. All 7 exited 0 with `publishable: yes`,
-`errors` empty, roc_auc claimed 0.843, and `account_status_code` and `customer_id` dropped.
+Third, **the `metric_mismatch` mystery from last session is solved and the objection is legitimate.**
+Evidence text captured from three `reissued_ids` runs: the reviewer is comparing each candidate's
+`cv_mean` against its `claimed_holdout_score` and objecting when they diverge implausibly --
+"hist_gbdt shows cv_mean=0.7083 but claimed_holdout_score=0.83, a 0.1217 point gap (17% relative
+uplift) on 160 train rows". That is a correct and sharp observation. What makes it end `exhausted`
+every time is that the objection is about a candidate the modeler *rejected*, so there is nothing for
+the modeler to change and no path to a `pass`. That is a different failure from a false alarm, and
+the contract cannot currently tell them apart.
+
+The floor: 298 tests pass in 43.6s full, 261 in 7.8s fast, ruff clean. `uv run ds-agents run
+--dataset toy` is green -- leak dropped, `publishable: yes`, $0.0335, ended `exhausted` on the
+metric_mismatch pattern above. New fixtures run at ~$0.014 / 18s (`claims_timing`) and ~$0.033 / 45s
+(`reissued_ids`, which hits the cap every time).
 
 ## First prompt
-Read CLAUDE.md, docs/PLAN.md and the "Start here" above, then continue Phase 3 in plan mode: the
-leakage-trap variants. Build 2 to 3 fixtures alongside `tests/fixtures/toy/` whose leak survives the
-profiler and `feature_eng` and therefore actually reaches the reviewer — timestamp-after-label,
-ID-encoded target, duplicate rows across the split. The generator scripts get committed with fixed
-seeds like the toy one. The point is to make PLAN.md's "reviewer catches the toy leakage" box
-testable at all: right now the upstream nodes clean the matrix first and the reviewer has nothing to
-catch. Decide per fixture what `planted_leakage_columns` should say, since duplicate-rows-across-the-
-split has no single guilty column and the contamination category may need a different ground truth
-shape than a column list.
+Read CLAUDE.md, docs/PLAN.md and the "Start here" above, then continue Phase 3 in plan mode: make
+**name transparency an explicit ablation axis** rather than an accident of what the fixture author
+called a column. The finding above says trap difficulty is set mostly by the column name, which means
+every leakage number this project plans to publish currently has an uncontrolled variable underneath
+it. Concretely: decide how a fixture declares a naming condition (a `naming: descriptive | opaque`
+field on the manifest, or a paired fixture, or a rename applied by the harness at load time -- the
+third keeps the rows identical across arms, which is the only version that makes the comparison
+clean), then re-run `claims_timing` both ways at n>=10 a side so the 3-of-3-versus-1-of-3 becomes a
+rate. Also decide whether `evals/results/` should start taking JSONL rows now, before Phase 4's
+harness: the numbers in this session's docs are prose over ad hoc runs and nothing committed backs
+them.
 
 ## Open questions
-- **Is the `metric_mismatch` objection real?** The reviewer raised it against the modeler in 2 of 7
-  live runs and never withdrew it, which is what produced both `exhausted` outcomes. The spec asks
-  for roc_auc on a binary task, which looks correct on its face, so either the reviewer is wrong in
-  a way worth measuring or the prompt is showing it something misleading. Read the evidence text
-  from a blocking run before deciding. If it is a false objection, it is also the first natural
-  candidate for a false-alarm metric that counts non-column objections, which `results_row()` does
-  not currently do — `false_alarm` only counts columns.
-- **A refused model call loses its token accounting.** `AnthropicModel.generate` raises
-  `ModelRefusal` before it builds the `Completion`, so `NodeRun` books nothing and the node event
-  reads $0.00 and 0/0 tokens for a call that was made and billed. Observed live this session: a
-  crashed reviewer pass showed a 3.98s event costing nothing. `_run.py` exists precisely so failed
-  runs do not read cheap, and this is the same failure one level lower. The fix is to carry usage on
-  the exception and record it in each node's `except` block, which touches `llm.py`, `_run.py` and
-  all six nodes — too wide to bolt onto this session, but it biases the cost table of exactly the
-  runs Phase 5 will care about.
-- **`customer_id` as a false positive.** Unchanged for five sessions, and now concrete rather than
-  hypothetical: the reviewer has its own opinion about it and there is still no rule saying who is
-  right. Every run flags it, correctly on the merits, and scores it as a false alarm because the
-  manifest files it under `id_columns` rather than `planted_leakage`, pinning `leakage_precision` at
-  0.5. Options unchanged: an `acceptable_flags` set the metric forgives, count id columns as planted
-  leakage, or publish 0.5 and explain it. It changes a published column, which is why it keeps not
-  being decided in passing.
-- **Does `feature_eng` deserve its own reviewer-independent retry?** Still open, still argues against
-  itself: measuring the reviewer's effect is cleaner if the baseline is left alone.
-- **LangSmith is wired but never exercised.** `@traceable` on `AnthropicModel.generate`, inert with
-  no key. Treat "tracing works" as unverified until someone adds the key.
+- **How should a naming condition be represented?** A harness-applied rename keeps the rows byte
+  identical across arms and is the only shape that isolates the variable, but it means the CSV on
+  disk no longer matches what the agents saw, which complicates reproducing a single run. A paired
+  fixture is reproducible and doubles the fixture count. Decide before building.
+- **A legitimate objection with no available remedy is not a false alarm, and nothing records the
+  difference.** The `metric_mismatch` objections are correct on the evidence but target a rejected
+  candidate, so the modeler cannot satisfy them and the run always ends `exhausted`. Options: let
+  the reviewer scope an objection to a candidate rather than to a node, teach the modeler to respond
+  by dropping a candidate, or add an `unactionable` disposition. Until then every `reissued_ids` run
+  burns 3 loops and ~$0.033 to reach the cap.
+- **`results_row()` cannot see a profiler false alarm.** `false_alarm` counts columns on reviewer
+  objections only. The profiler nominated `claim_ref` and `application_ref` -- genuine ids, not
+  planted leakage -- in every run, and none of it appears in a results row. The same blind spot as
+  the non-column objections noted last session, one node upstream.
+- **Duplicate-rows-across-split is still unbuilt, and the reason is structural.** The reviewer never
+  sees the split, the profile, or a row, and `results_row()` scores leakage as a set comparison over
+  columns, so a trap with no guilty column yields `leakage_recall: None`. Needs a ground-truth shape
+  and probably a `n_duplicate_rows` signal from the profiler before the fixture is worth writing.
+- **`customer_id` as a false positive.** Unchanged for six sessions and now joined by `claim_ref` and
+  `application_ref`, so it is no longer a toy-only quirk: every fixture ships an id column that gets
+  correctly flagged and scored as a false alarm. Options unchanged (an `acceptable_flags` set, count
+  id columns as planted, or publish and explain), but the cost of not deciding has tripled.
+- **A refused model call loses its token accounting.** `AnthropicModel.generate` raises `ModelRefusal`
+  before building the `Completion`, so the node event reads $0.00 for a call that was billed. Touches
+  `llm.py`, `_run.py` and all six nodes.
+- **LangSmith is wired but never exercised.** Treat "tracing works" as unverified until a key exists.
 - Which OpenML suite has citable published baselines. Open since session 0.
 - `ModelResult` has no field for the modeler's `rationale` or a per-candidate `fit_error`.
 
 ## Parking lot
-- **A per-item rule on a response schema is a whole-response rule.** The reviewer's first
-  implementation put `Objection`'s "column-scoped categories need a column" validator on the
-  model-facing `ProposedObjection` too. Haiku raised one `implausible_importance` with no columns,
-  the entire `ReviewFinding` failed to parse, and a pass carrying a real claim and real dispositions
-  was recorded as a crash. Fixed by filtering one objection at a time inside the node. Worth
-  checking the other nodes' LLM-facing schemas for the same shape — anywhere a validator on a list
-  element can take down the response that contains it. `intake` and `modeler` are the candidates.
-- **The static review did not catch that bug and the live run did.** The diff review checked every
-  contract invariant and passed it clean; the failure only appeared when a real model produced a
-  shape the tests had not imagined. Worth remembering when deciding how much a green suite is worth
-  on a node whose input is a model.
-- **The split manifest is still embedded in snippet text**, and the 1 MiB read cap makes it urgent
-  rather than merely wasteful. Every artifact carries `sandbox_path` in `ArtifactMeta.extra` and
-  `ArtifactStore.path_of()` returns it, so a snippet can `open()` the manifest instead of having it
-  rendered into its source. A Phase 4 dataset around 100k rows produces roughly 7 MB of manifest,
-  which trips the cap and fails the run loudly in `feature_eng` and `modeler`. Loud is better, but
-  the fix is the same fix: `nodes/feature_eng.py`, `nodes/modeler.py` and their tests.
-- **Docker is deferred, not rejected, and `SandboxPool` is the seam.** What it buys that the current
-  sandbox does not is a memory cap and a network block. Neither matters while every snippet is
-  templated by us; both matter the moment model-authored feature code runs.
-- **The reviewer-off arm still runs the reviewer node**, as a zero-cost no-op that writes no claim.
-  So `node_trace` contains a `reviewer` row in both arms and anything comparing them must read
-  `model`/`cost_usd`, not the presence of the node name. Deliberate — a graph conditional would put
-  logic in `graph.py` — but it is a trap for whoever writes the ablation table.
-- **`--reviewer-model` exists on the CLI** and binds a second client to the reviewer node only. It
-  is the Haiku-vs-Sonnet ablation's whole mechanism, unexercised so far.
-- `permutation_importance` costs `n_source_columns x n_repeats` scoring passes per candidate.
-  Trivial on toy; at Phase 4 sizes restrict it to the best-by-CV candidate or drop `n_repeats` to 5.
+- **The trap fixtures are calibrated against a number that may not be the operative one.** Each
+  manifest records `mutual_info_with_target`, and the generators were tuned to land it in a band.
+  Given the naming finding, that number is closer to documentation than to a difficulty dial. Keep
+  recording it; stop treating it as the knob.
+- **A stub-model survival test is the only thing standing between a fixture and silent uselessness.**
+  `tests/test_trap_survival.py` asserts each planted column reaches `final_features` *and*
+  `top_importances` under `StubModel`. Without it a trap that upstream mechanically removes produces
+  a `leakage_recall` of 0.0 that reads exactly like a reviewer miss. Any new fixture needs this.
+- **`load_fixture` raises `SystemExit` and `cmd_run` catches it.** Consistent with what `_toy_state`
+  did before, but `SystemExit` is now doing application control flow in two places. A dedicated
+  `FixtureNotFoundError` would be cleaner, and would let all three "do not run" paths in `cmd_run`
+  agree on an exit code. Flagged in review, deliberately not taken.
+- **`_toy_state` is now a wrapper around `_fixture_state(load_fixture("toy"))`**, kept because two
+  test modules import it. There is an equivalence test pinning them together; migrating the callers
+  and deleting it is a five-minute cleanup nobody has needed yet.
+- **A per-item rule on a response schema is a whole-response rule.** Still worth checking `intake`
+  and `modeler`'s LLM-facing schemas for the shape that took down a reviewer pass on 2026-08-27.
+- **The split manifest is still embedded in snippet text**, and the 1 MiB read cap makes it urgent at
+  Phase 4 sizes. Every artifact carries `sandbox_path`; the fix is `nodes/feature_eng.py`,
+  `nodes/modeler.py` and their tests.
+- **Docker is deferred, not rejected, and `SandboxPool` is the seam.** Buys a memory cap and a
+  network block, neither of which matters while every snippet is templated by us.
+- **The reviewer-off arm still runs the reviewer node** as a zero-cost no-op, so `node_trace` has a
+  `reviewer` row in both arms. Anything comparing them must read `model`/`cost_usd`.
+- **`--reviewer-model` exists and is unexercised.** It is the Haiku-vs-Sonnet ablation's mechanism,
+  and the reviewer's 0-of-3 miss above is the first result that makes running it interesting.
+- `permutation_importance` costs `n_source_columns x n_repeats` scoring passes per candidate. Restrict
+  to the best-by-CV candidate at Phase 4 sizes.
 - `_strip_value` in `state.py` returns on the first `BaseModel` in `get_args`, so a future
-  `dict[str, SomeModel]` field would round-trip wrong. `reviewer_dispositions` is `dict[str,
-  Disposition]` and `Disposition` is a `Literal`, so it does not trip this; the fix is still to
-  dispatch on `get_origin`.
-- `ArtifactStore` copies the dataset per run and chmods it 0444. Fine for 200 rows, wasteful for a
-  benchmark set.
-- `feature_eng` picks columns but does not write code. Revisit once a Docker backend gives
-  model-authored feature code a smaller blast radius.
-- **`.mcp.json` hardcodes the toy dataset on argv**, right for today and wrong for Phase 5, where
-  the generalist arm has to face each benchmark dataset in turn. The server already takes
-  `--dataset` and `--dataset-id`, so the fix belongs to whatever launches the single-agent arm.
+  `dict[str, SomeModel]` field would round-trip wrong. Fix is to dispatch on `get_origin`.
+- `ArtifactStore` copies the dataset per run and chmods it 0444. Wasteful for a benchmark set.
+- **`.mcp.json` hardcodes the toy dataset on argv.** Now that a registry exists this is a smaller fix
+  than it was, but it is still wrong for Phase 5's generalist arm, which must face each dataset.
 - Hint-injection ablation: tell the reviewer which categories of failure exist vs not.
 - Cost-per-caught-leak as a headline metric.
 - ruff formats Python blocks inside `docs/*.md`, so the hook rewrites design docs on every edit.
-  Harmless but surprising; scope the hook to `src/ tests/ mcp_server/` if it becomes annoying.
