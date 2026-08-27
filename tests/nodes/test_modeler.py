@@ -108,11 +108,11 @@ def feature_code_payload(truncated: bool = False) -> ArtifactPayload:
     )
 
 
-def split_payload() -> ArtifactPayload:
+def split_payload(truncated: bool = False) -> ArtifactPayload:
     return ArtifactPayload(
         meta=ArtifactMeta(id="art-007-split", name="split_manifest.json", kind="json"),
         content=json.dumps(SPLIT_MANIFEST),
-        truncated=False,
+        truncated=truncated,
     )
 
 
@@ -120,6 +120,7 @@ def tools_for(
     snippet_out: dict | None = None,
     run_result: RunResult | Exception | None = None,
     feature_truncated: bool = False,
+    split_truncated: bool = False,
 ) -> FakeTools:
     if run_result is None:
         run_result = RunResult(
@@ -130,7 +131,7 @@ def tools_for(
         run_results=[run_result],
         artifacts={
             "art-009-feature-code": feature_code_payload(feature_truncated),
-            "art-007-split": split_payload(),
+            "art-007-split": split_payload(split_truncated),
         },
     )
 
@@ -387,6 +388,21 @@ def test_a_truncated_feature_code_artifact_is_unrecoverable():
     update = modeler(state(), tools=tools, model=model)
 
     assert update["errors"][0].recoverable is False
+    assert tools.code_run == []
+
+
+def test_a_truncated_split_manifest_is_unrecoverable():
+    """The symmetric guard to `feature_eng`'s. A partial manifest fits and scores on fewer rows
+    than `split_artifact` names, so `claimed_holdout_score` would be measured against a holdout
+    that is not the holdout -- and nothing in the snippet's output would say so."""
+    tools = tools_for(split_truncated=True)
+    tools.run_results = []  # run_python must never be reached
+    model = ScriptedModel({})
+
+    update = modeler(state(), tools=tools, model=model)
+
+    assert update["errors"][0].recoverable is False
+    assert "truncated" in update["errors"][0].message
     assert tools.code_run == []
 
 

@@ -27,7 +27,12 @@ from typing import Any
 import pandas as pd
 
 from ds_agents.state import ArtifactId
-from ds_agents.tools.protocol import ArtifactMeta, ArtifactPayload, ToolError
+from ds_agents.tools.protocol import (
+    DEFAULT_READ_BYTES,
+    ArtifactMeta,
+    ArtifactPayload,
+    ToolError,
+)
 
 _SLUG = re.compile(r"[^a-z0-9]+")
 
@@ -97,13 +102,20 @@ class ArtifactStore:
     # ---- the two artifact tools -------------------------------------------------------------
 
     def read(self, artifact_id: ArtifactId, max_bytes: int | None = None) -> ArtifactPayload:
+        """Read an artifact, capped.
+
+        A caller that names no `max_bytes` still gets one: see `DEFAULT_READ_BYTES`. "No limit"
+        is not an option on purpose -- the two callers that read artifacts render them into a
+        prompt or into snippet source, and neither has a size it could survive.
+        """
         meta = self._index.get(artifact_id)
         if meta is None:
             raise ToolError(f"no artifact {artifact_id!r}")
         text = self._paths[artifact_id].read_text()
-        truncated = max_bytes is not None and len(text) > max_bytes
+        limit = DEFAULT_READ_BYTES if max_bytes is None else max_bytes
+        truncated = len(text) > limit
         return ArtifactPayload(
-            meta=meta, content=text[:max_bytes] if truncated else text, truncated=truncated
+            meta=meta, content=text[:limit] if truncated else text, truncated=truncated
         )
 
     def write(

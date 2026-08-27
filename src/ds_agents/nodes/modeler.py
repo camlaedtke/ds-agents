@@ -369,6 +369,16 @@ def modeler(state: PipelineState, *, tools: Tools, model: StructuredModel) -> di
         split_payload = tools.read_artifact(state.split_artifact)
     except ToolError as exc:
         return run.failure(f"could not read split manifest: {exc}")
+    if split_payload.truncated:
+        # A truncated manifest is a subset of the pinned split, and the snippet below cannot tell
+        # the difference: it would fit and score on fewer rows than `split_artifact` says, and
+        # `claimed_holdout_score` would be computed against a holdout that is not the holdout.
+        # `feature_eng` has the symmetric guard; this one was dead while an unbounded read was
+        # possible, and stopped being dead when `read_artifact` gained a default cap.
+        return run.failure(
+            "split manifest artifact was truncated; refusing to fit on a partial split",
+            recoverable=False,
+        )
 
     scoring = _scoring_for(state.spec.task_type, state.spec.metric)
     specs = CANDIDATE_SPECS[state.spec.task_type]

@@ -1,0 +1,15 @@
+{
+  "mcpServers": {
+    "ds-agents-tools": {
+      "command": "uv",
+      "args": [
+        "run",
+        "mcp-server",
+        "--dataset",
+        "tests/fixtures/toy/toy.csv",
+        "--dataset-id",
+        "toy"
+      ]
+    }
+  }
+}

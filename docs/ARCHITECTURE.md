@@ -134,12 +134,23 @@ Nodes type-hint against the `Tools` Protocol and never import a concrete impleme
 arms of the single-agent-vs-team ablation are guaranteed the same surface and the swap to the MCP
 client does not reach into `nodes/`.
 
-The server's two halves exist as of 2026-08-27 and the protocol skin does not yet.
 `mcp_server/store.py` holds the artifact store and the metric log; `mcp_server/sandbox.py` and
-`mcp_server/_worker.py` hold the sandbox. `src/ds_agents/tools/local.py` is now a thin in-process
-binding of those same two objects to the `Tools` Protocol, which is the point of the split: the
-MCP client will bind the *same* objects over the protocol, so "we swapped the shim for the server"
-cannot quietly mean "we wrote a second implementation and hoped it matched."
+`mcp_server/_worker.py` hold the sandbox. `src/ds_agents/tools/local.py` binds those two objects
+to the `Tools` Protocol in-process, `mcp_server/server.py` wraps *that same object* in the
+protocol, and `src/ds_agents/tools/mcp_client.py` satisfies the Protocol by calling the server. So
+the same implementation is reached two ways and "we swapped the shim for the server" cannot quietly
+mean "we wrote a second implementation and hoped it matched." `ds-agents run` defaults to
+`--tools mcp`; `--tools local` skips the process boundary for debugging.
+
+One server process per run, launched over stdio with the run's root and dataset on argv. The store
+is run state and the sandbox worker is not, so a shared server would have to key stores by
+`run_id` — which needs either a fifth tool or a `run_id` argument on the other four, and the tool
+surface is the thing the single-agent-vs-team ablation holds constant. See DECISIONS.md 2026-08-27.
+
+MCP has one failure channel, and in-process there are two that mean opposite things: a `ToolError`
+is a finding about the agent and a node records it, a `SandboxError` is a finding about us and
+propagates. `SANDBOX_ERROR_PREFIX` is how the second keeps its type across the wire, so a broken
+worker is not filed in the results table as an agent mistake.
 
 ### How the sandbox runs a snippet
 
@@ -180,13 +191,22 @@ Tools exposed:
 - `run_python(code: str, timeout_s: int) -> {stdout, stderr, exit_code, artifacts_written}`
   Runs in a subprocess inside the sandbox container with the dataset mounted read-only and an
   artifacts dir mounted read-write. No network.
-- `read_artifact(id) -> {content | path, meta}`
-- `write_artifact(name, content | path) -> id`
+- `read_artifact(id, max_bytes) -> {content, meta, truncated}`
+  Capped at `DEFAULT_READ_BYTES` (1 MiB) even when the caller names no limit, in the store rather
+  than in the transport, so the two bindings truncate at the same byte. A large artifact is meant
+  to be opened from inside a snippet at `meta.extra["sandbox_path"]`, not pulled through the tool.
+- `write_artifact(name, content, kind, extra) -> meta`
+  Returns the whole `ArtifactMeta` over the wire, not just the id: the id is in it, and an
+  external client gets `n_bytes` and `sandbox_path` without a second call. The MCP client takes
+  `.id` and satisfies the Protocol, which asks for an id.
 - `log_metric(run_id, name, value)` — `run_id` comes from `state.config.run_id`.
 
 Why MCP and not plain Python functions: the agents then have exactly the same tool surface as any
 external MCP client, which makes the "single generalist agent vs team" ablation honest, and lets us
-point Claude Code at the same server as a comparison.
+point Claude Code at the same server as a comparison. `.mcp.json` at the repo root is that
+configuration; a hand-rolled JSON-RPC client with no SDK completes the handshake, lists the four
+tools and gets real results back, so the surface is standard rather than a private dialect our own
+client happens to speak.
 
 ## Observability
 

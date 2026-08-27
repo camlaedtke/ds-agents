@@ -52,9 +52,20 @@ See DECISIONS.md 2026-08-27.
       `sys.path`, process-group timeout), `sandbox.py` (worker lifetime, request protocol,
       outer deadline), `store.py` (artifact store, `sandbox_path` in metadata, metric log to
       JSONL). 25 tests. `tools/local.py` rewritten as a thin binding of the same two objects.
-- [ ] `mcp_server/server.py`: the four tools over the MCP protocol, wrapping the objects above
-- [ ] swap `tools/local.py` for MCP client wrappers; toy run still green
-- [ ] verify Claude Code can connect to the same server (this is the generalist-agent baseline later)
+- [x] `mcp_server/server.py`: the four tools over the MCP protocol, wrapping the objects above.
+      It constructs a `LocalTools` and exposes its four methods, so the protocol layer decides
+      nothing; one server process per run, because keying stores by `run_id` would need a fifth
+      tool and the tool surface is what the Phase 5 ablation holds constant.
+- [x] swap `tools/local.py` for MCP client wrappers; toy run still green. `tools/mcp_client.py`
+      satisfies the same Protocol, `ds-agents run` defaults to `--tools mcp`, `--tools local`
+      stays for debugging. Three live Haiku runs through MCP: leak dropped 3 of 3, roc_auc 0.843,
+      15.4s and $0.0098, all matching the in-process numbers.
+- [~] verify Claude Code can connect to the same server (this is the generalist-agent baseline
+      later). `.mcp.json` is committed and a hand-rolled JSON-RPC client with no SDK completes the
+      handshake, lists the four tools and gets real results, so the surface is standard. What is
+      NOT done: `claude mcp list` reports the project-scoped server as "pending approval", which
+      needs one interactive `claude` session to accept. Do that and then check it lists as
+      connected.
 
 ## Phase 3: Adversarial reviewer (4 to 6 sessions, plan mode)
 - [ ] reviewer node with structured Objection output and conditional routing

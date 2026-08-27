@@ -377,3 +377,65 @@ scoring code" and "the agent reasoned" are not distinguishable after the fact fr
 `test_the_repo_is_not_importable_from_a_snippet` is the regression test. The general lesson is
 worth more than the fix: `sys.path` is not part of the environment, so an environment-based
 isolation argument is incomplete by construction.
+
+## 2026-08-27: the MCP server is a skin over the in-process tools, not a second implementation.
+
+`mcp_server/server.py` constructs a `LocalTools` — the same binding of `SandboxPool` and
+`ArtifactStore` the graph used through Phase 1 — and exposes its four methods as MCP tools.
+Nothing in the protocol layer decides how a snippet runs, what an artifact id looks like, or when
+a read is truncated. The alternative, a server that talks to the store and the sandbox directly,
+reads cleaner and quietly makes "we swapped the shim for the server" mean "a second implementation
+appeared and matched the first by inspection". Since the single-agent-vs-team ablation rests on
+both arms getting the *same* tool surface, sameness has to be a fact about the code rather than a
+claim about it. The cost is a package-level import from `mcp_server` into `ds_agents.tools` and
+back; the rule that actually matters — the sandbox worker never imports `ds_agents` — is
+unaffected, because the worker is a separate process launched from `_worker.py`.
+
+`tools/mcp_client.py` closes the loop from the other side and `cli.py` gained `--tools mcp|local`,
+defaulting to `mcp`. The default is the point: a default that took the in-process shortcut would
+leave the transport exercised only by its own tests, and the numbers would be produced under a
+configuration nothing publishes.
+
+## 2026-08-27: one server process per run, because a fifth tool would change what the ablation holds constant.
+
+The store is run state — it owns the artifact index and the run's directories — while the sandbox
+worker deliberately holds none and is shared process-wide. So a long-lived server would need to
+key stores by `run_id`, which means either a fifth tool to open a run or a `run_id` argument on
+the other four. Both change the agent-facing tool surface, and that surface is exactly the thing
+held constant between the single-agent and team arms; it does not get an extra tool for our
+convenience. One process per run instead, with the run's root and dataset passed on argv, which is
+also the shape an external MCP client is configured with. The cost is one 0.87s worker boot per
+dataset, which a Phase 4 benchmark pays against minutes of fitting. It stops being the right
+trade if a run ever needs to outlive its client or be resumed.
+
+## 2026-08-27: a read with no `max_bytes` is still capped, and the cap lives in the store.
+
+`ArtifactStore.read` now applies `DEFAULT_READ_BYTES` (1 MiB) when the caller names no limit. Two
+reasons it is not a transport concern. First, uncapped is not a thing a caller can actually want:
+the only two consumers render an artifact into a prompt or into snippet source, and neither has a
+size it survives. Second, if the cap lived in the MCP layer, a node would truncate at a different
+byte depending on how it was wired, so `--tools local` and `--tools mcp` could disagree about
+whether an artifact was whole — and both `feature_eng` and `modeler` refuse to act on a truncated
+artifact, meaning the transport could decide whether a run errored.
+
+The cap also found a live gap rather than only preventing a future one. `feature_eng` guarded its
+read of the split manifest and `modeler` did not, which was harmless while an unbounded read was
+possible and became a silent wrong number the moment it was not: the fitting snippet would have
+trained and scored on a subset of the pinned split while reporting `claimed_holdout_score` as if
+it were the holdout. The guard is now symmetric, with a test on each side. The general shape is
+worth noticing — a default that turns an impossible state into a possible one activates every
+unwritten check at once, and the ones that were never written stop being dead code quietly. The escape hatch for a large
+artifact already exists and is not a bigger cap: `ArtifactMeta.extra["sandbox_path"]`, opened from
+inside a snippet. On the toy dataset nothing comes near the cap; the Phase 4 split manifest will,
+which is the parking-lot item this makes urgent rather than a reason to raise the number.
+
+## 2026-08-27: a sandbox failure keeps its type across the wire.
+
+MCP reports failure as an error result carrying a string, so in-process the two failure types —
+`ToolError`, a finding about the agent, and `SandboxError`, a finding about us — would arrive
+identically and every broken worker would be filed as an agent mistake in the results table. The
+server prefixes a `SandboxError` with `SANDBOX_ERROR_PREFIX` and the client raises it back as
+itself. The prefix is matched with `partition` rather than `startswith` because the SDK prepends
+its own "Error executing tool <name>: " to an expected tool error. Anything that is *not* one of
+those two types is left to the SDK, which withholds the text — correct, because an unexpected
+exception in the protocol layer is a bug in our code, not a finding about a run.

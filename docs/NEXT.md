@@ -1,93 +1,91 @@
 # Next session
 
 ## Start here
-**Phase 2 is about half done: the sandbox and the store are real, the MCP protocol layer is not.**
-The session settled the Docker-versus-long-lived-container question by measuring it, and the answer
-was neither. `mcp_server/` now holds `_worker.py` (a long-lived worker that imports pandas and
-scikit-learn once, then `fork()`s a fresh child per snippet), `sandbox.py` (worker lifetime, the
-line-delimited JSON request protocol, the outer deadline), and `store.py` (the artifact store and a
-metric log that writes JSONL). `src/ds_agents/tools/local.py` is no longer a standalone shim; it is
-a thin binding of those same two objects to the `Tools` Protocol, so the MCP client can bind the
-same objects over the wire rather than reimplementing them. Full reasoning in DECISIONS.md
-2026-08-27.
+**Phase 2 is done apart from one keystroke.** The four tools now cross the MCP protocol.
+`mcp_server/server.py` constructs a `LocalTools` -- the same binding of `SandboxPool` and
+`ArtifactStore` the graph has used since Phase 1 -- and exposes its four methods as MCP tools, so
+the protocol layer decides nothing about how a snippet runs or when a read truncates.
+`src/ds_agents/tools/mcp_client.py` satisfies the same `Tools` Protocol from the other side, and
+`ds-agents run` now defaults to `--tools mcp` (`--tools local` skips the process boundary for
+debugging). Two design choices worth knowing before touching it, both in DECISIONS.md 2026-08-27:
+one server process per run, because a shared server would need a fifth tool to open a run and the
+tool surface is what the Phase 5 ablation holds constant; and `read_artifact` is capped at 1 MiB
+even with no `max_bytes`, in the store rather than in the transport, so the two bindings cannot
+disagree about whether an artifact was whole.
 
-The floor: 190 fast tests in 6.4s, 202 in the full suite, `uv run ds-agents run --dataset toy`
-exits 0 in ~15s at about $0.009. Per-snippet cost went from 0.898s (a cold interpreter importing
-pandas and scikit-learn) to 0.04s including a RandomForest fit, against a one-time 0.87s worker
-boot that is now paid once per *process* rather than once per run — which is why it matters much
-more at Phase 4 sizes than it does on toy, where the 16s → 15s change is mostly Haiku latency.
+The floor: 203 fast tests in 6.7s, 221 in the full suite, `uv run ds-agents run --dataset toy`
+exits 0 in ~15.8s at $0.0096. Five live Haiku runs today through MCP plus one through
+`--tools local`: `feature_eng` dropped `account_status_code` in all six and claimed roc_auc 0.843
+every time, the same number the in-process runs produced last session -- which is the point, since
+the transport is supposed to be the only thing that changed. The test named
+`test_the_same_run_over_mcp_lands_in_the_same_place` asserts that parity end to end with the stub:
+same spec, same features, same chosen model, same claimed score to the digit.
 
-**The one finding that changes something already written down.** The Phase 1 shim's docstring
-claimed a snippet "cannot see the repo it is being graded in" because its environment was built
-from scratch. That was false. An editable install writes a `.pth` file into site-packages that puts
-`/ds-agents` and `/ds-agents/src` on `sys.path` at interpreter startup, and a `.pth` is honoured
-regardless of the environment — so every snippet run in Phase 1 could `import ds_agents`. Nothing
-handed one the live `PipelineState`, so no number published so far is wrong, and the two ablation
-arms were equally affected. But "the agent read the grading code" and "the agent reasoned about the
-columns" produce the same `leakage_recall`, and that is the distinction the project exists to make.
-`_worker._prune_sys_path` now keeps only the standard library and site-packages;
-`test_the_repo_is_not_importable_from_a_snippet` is the regression test. See LEARNING.md
-`sys-path-is-not-the-environment`.
+**The one thing left on the Phase 2 checklist.** `.mcp.json` is committed and points Claude Code
+at the same server, but `claude mcp list` reports it as "pending approval" -- a project-scoped MCP
+server needs one interactive `claude` session to accept, which a non-interactive session cannot
+do. Conformance was verified the other way instead: a hand-rolled JSON-RPC client with no SDK on
+its side completes the handshake, lists the four tools and gets real results back, so the surface
+is standard rather than a dialect our own client happens to speak. Start the next session by
+running `claude`, approving the server, and confirming `claude mcp list` says connected.
 
-**Nine live Haiku runs today, and the known behaviour replicated.** The profiler flagged
-`account_status_code` every time. `feature_eng` acted on it in 7 of 9 (previously 8 of 9); the two
-that did not kept the leak and claimed roc_auc 0.983 against 0.843 for the runs that dropped it.
-Same gap, same numbers, no drift attributable to this session — the sandbox change is
-deterministic and nothing model-facing was touched.
+**A real bug the reviewer caught, worth knowing because it was invisible.** `feature_eng` refused
+to act on a truncated split manifest and `modeler` did not. That gap was dead code while an
+unbounded read was possible and became a silent wrong number the moment the default cap landed:
+the fitting snippet would have trained and scored on a subset of the pinned split while reporting
+`claimed_holdout_score` as if it were the holdout. Both guards now exist with a test each. The
+second finding was an orphaned server subprocess on a failed connect -- one per failed dataset in
+a benchmark, each holding a sandbox worker with pandas resident. Both fixed; the regression test
+for the second was confirmed to fail against the old code.
 
 ## First prompt
-Read CLAUDE.md, docs/ARCHITECTURE.md ("MCP server (ours)", which now has a "How the sandbox runs a
-snippet" subsection), and docs/DECISIONS.md 2026-08-27. Then finish Phase 2: write
-`mcp_server/server.py` exposing `run_python`, `read_artifact`, `write_artifact` and `log_metric`
-over MCP, wrapping the existing `SandboxPool` and `ArtifactStore` rather than reimplementing them;
-add the `mcp-server` console script to pyproject; write `src/ds_agents/tools/mcp_client.py`
-satisfying the same `Tools` Protocol; and confirm `uv run ds-agents run --dataset toy` is still
-green through the client. Then point Claude Code at the same server and check it connects, which is
-the generalist-agent baseline for Phase 5.
-
-Two things to decide as you go. First, whether the server owns one `ArtifactStore` per run keyed by
-`run_id` or one process per run — the sandbox worker is already shared process-wide and holds no
-run state, but the store does. Second, what `read_artifact` returns over the wire for a large
-artifact, since `ArtifactPayload.truncated` exists precisely so a node cannot render a partial
-artifact into a prompt as if it were whole.
+Read CLAUDE.md, docs/ARCHITECTURE.md and docs/PLAN.md. First, close out Phase 2: approve the
+project MCP server (`claude` interactively, then `claude mcp list` should show `ds-agents-tools`
+connected) and tick the last box. Then start Phase 3 in plan mode -- the adversarial reviewer.
+Follow /add-node. The node reads everything the modeler wrote plus the feature code only when
+`config.reviewer_sees_code`, and writes `objections`, `reviewer_claim` and nothing else: the
+router owns `review_verdict` and `review_iterations`, and `exhausted` is derived, not claimed.
+Before writing the node, settle the `ReviewPass` ownership problem in the parking lot below --
+`dispositions` and `routed_to` currently have different owners on a field annotated
+`operator.add`, so if both nodes append, every iteration writes two records.
 
 ## Open questions
-- **The fast-test budget went from 1.6s to 6.4s.** Still inside the hook's stated <10s, but the new
-  sandbox tests cost about 4s of it: a deliberate 1s timeout, a 1s process-group kill, a worker
-  reboot, and the one-time 0.87s boot. Those are also the tests most worth running on every edit.
-  Leave it, or move the three process-lifetime ones out of `fast` and accept they only run in the
-  full suite.
-- **`customer_id` as a false positive.** Unchanged from last session and still unresolved. Every
+- **`customer_id` as a false positive.** Unchanged for three sessions and still unresolved. Every
   toy run flags it, correctly on the merits, and scores it as a false alarm because the manifest
-  lists it under `id_columns` rather than `planted_leakage`, so `leakage_precision` reads 0.5 every
-  time. Options: an `acceptable_flags` set the precision metric forgives; count id columns as
-  planted leakage; or publish 0.5 as the honest number and explain it. This changes a published
-  column.
-- **`NodeEvent` records no duration.** Cost per node is there, wall time per node is not, so "where
-  do the 15 seconds go" can only be answered by timing the process from outside. Worth a field
-  before Phase 4 makes wall time a published column.
+  lists it under `id_columns` rather than `planted_leakage`, so `leakage_precision` reads 0.5
+  every time. Options: an `acceptable_flags` set the precision metric forgives; count id columns
+  as planted leakage; or publish 0.5 as the honest number and explain it. This changes a published
+  column, which is why it keeps not being decided in passing.
+- **`NodeEvent` records no duration.** Cost per node is there, wall time per node is not. Worth a
+  field before Phase 4 makes wall time a published column. Cheap now, annoying to backfill.
+- **The fast-test budget settled at 6.7s** against the hook's stated <10s, and the MCP tests cost
+  almost none of it (the in-process client tests are milliseconds; everything that spawns is
+  outside `fast`). The three process-lifetime sandbox tests are still ~3.8s of the total. Leaving
+  them in `fast` is the current call; revisit only if the hook starts feeling slow.
 - **Does `feature_eng` deserve its own reviewer-independent retry?** Still open, still argues
   against itself: measuring the reviewer's effect is cleaner if the baseline is left alone.
-- **LangSmith is wired but never exercised.** Unchanged. `@traceable` on `AnthropicModel.generate`,
-  inert with no key. Treat "tracing works" as unverified until someone adds the key.
+- **LangSmith is wired but never exercised.** `@traceable` on `AnthropicModel.generate`, inert
+  with no key. Treat "tracing works" as unverified until someone adds the key.
 - Which OpenML suite has citable published baselines. Open since session 0.
 - `ModelResult` has no field for the modeler's `rationale` or a per-candidate `fit_error`.
 
 ## Parking lot
-- **The split manifest is still embedded in snippet text, but the fix is now unblocked.** Every
-  artifact carries `sandbox_path` in `ArtifactMeta.extra`, and `ArtifactStore.path_of()` returns
-  it, so a snippet can `open()` the manifest instead of having it rendered into its source. The
-  remaining work is in `nodes/feature_eng.py` and `nodes/modeler.py` and their tests, which is why
-  it was not done here. Still O(n_rows) until it is: roughly 7 MB of snippet on a 100k-row dataset.
-- **Docker is deferred, not rejected, and `SandboxPool` is the seam.** What it buys that the
-  current sandbox does not is a memory cap and a network block. Neither matters while every
-  snippet is templated by us; both matter the moment model-authored feature code runs.
-- **`ReviewPass` has a split ownership problem, and Phase 3 will hit it immediately.** It carries
+- **`ReviewPass` has a split ownership problem, and Phase 3 hits it immediately.** It carries
   `dispositions` (only the reviewer knows them) and `routed_to` (only the router knows it), and
-  `review_passes` is `operator.add` — so if both nodes append, every iteration produces two
+  `review_passes` is `operator.add` -- so if both nodes append, every iteration produces two
   records. Recommended fix when the reviewer lands: the router writes the whole `ReviewPass`, and
   the reviewer hands dispositions across on a new narrow field. Do not add that field before it
   has a writer.
+- **The split manifest is still embedded in snippet text, and the 1 MiB read cap made it
+  urgent rather than merely wasteful.** Every artifact carries `sandbox_path` in
+  `ArtifactMeta.extra` and `ArtifactStore.path_of()` returns it, so a snippet can `open()` the
+  manifest instead of having it rendered into its source. Until that lands, a Phase 4 dataset
+  around 100k rows produces roughly 7 MB of manifest, which now trips the cap and fails the run
+  loudly in `feature_eng` and `modeler` instead of quietly bloating a snippet. Loud is better, but
+  the fix is the same fix: `nodes/feature_eng.py`, `nodes/modeler.py` and their tests.
+- **Docker is deferred, not rejected, and `SandboxPool` is the seam.** What it buys that the
+  current sandbox does not is a memory cap and a network block. Neither matters while every
+  snippet is templated by us; both matter the moment model-authored feature code runs.
 - `permutation_importance` costs `n_source_columns x n_repeats` scoring passes per candidate.
   Trivial on toy; at Phase 4 sizes restrict it to the best-by-CV candidate or drop `n_repeats` to 5.
 - `_strip_value` in `state.py` returns on the first `BaseModel` in `get_args`, so a future
@@ -98,6 +96,6 @@ artifact into a prompt as if it were whole.
 - `feature_eng` picks columns but does not write code. Revisit once a Docker backend gives
   model-authored feature code a smaller blast radius.
 - Hint-injection ablation: tell the reviewer which categories of failure exist vs not.
-- Cost-per-caught-leak as a headline metric. A toy run is ~$0.009.
+- Cost-per-caught-leak as a headline metric. A toy run is ~$0.0096.
 - ruff formats Python blocks inside `docs/*.md`, so the hook rewrites design docs on every edit.
   Harmless but surprising; scope the hook to `src/ tests/ mcp_server/` if it becomes annoying.

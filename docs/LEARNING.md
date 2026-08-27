@@ -239,3 +239,33 @@ Priority: **load-bearing** means the thesis breaks if this is wrong and you cann
   environment variables is incomplete by construction, because import paths, the current working
   directory, and inherited file descriptors are all reachable without an env var. Builds on
   [[mcp-tool-boundary]].
+
+### one-error-channel — a transport with one failure type decides who gets blamed
+- Priority: load-bearing
+- Came up: 2026-08-27, `mcp_server/server.py` and `tools/mcp_client.py`
+- Status: flagged
+- Why it matters here: in-process there are two failure types and they mean opposite things. A
+  `ToolError` is a finding about the agent — it asked for an artifact that does not exist, or its
+  snippet was rejected — and a node catches it and writes a recoverable `PipelineError` into the
+  run. A `SandboxError` is a finding about us: the worker died, the machine is broken, and it
+  propagates rather than being recorded, because a run that failed for our reasons is not a data
+  point about the agent. MCP has exactly one failure channel: an error result carrying a string.
+  Sent naively, every broken sandbox would arrive as a refused tool call and land in the results
+  table as the agent's mistake, quietly inflating whatever failure rate we publish. The fix is
+  small (a prefix on the message, stripped on the way back) and the transferable idea is not: any
+  time a boundary has fewer error types than the code on either side of it, the collapse happens
+  silently and shows up as a wrong number rather than as an exception. Related:
+  [[measurement-independence]], [[caught-vs-remediated]].
+
+### sync-over-async-bridge — why the MCP client owns a thread and an event loop
+- Priority: useful
+- Came up: 2026-08-27, `src/ds_agents/tools/mcp_client.py`
+- Status: flagged
+- Why it matters here: the MCP SDK is async and LangGraph calls our nodes synchronously, so
+  `MCPTools` runs an asyncio event loop on a private thread and every tool call blocks on a
+  future handed back from it. The part worth understanding rather than trusting is why the
+  connection is opened *and closed* by one long-lived coroutine on that loop instead of by the
+  calling thread: the SDK's session is an anyio task group, and a task group must be exited by
+  the same task that entered it. Closing it from the caller's thread does not disconnect, it
+  raises — and it raises at the end of the run, after the numbers are computed, which is the
+  worst possible time to discover a lifetime bug. Related: [[protocol-not-implementation]].

@@ -12,10 +12,12 @@ dependencies = [
     "scikit-learn>=1.9.0",
     "anthropic>=1.0.0",
     "python-dotenv>=1.2.3",
+    "mcp>=1.2",
 ]
 
 [project.scripts]
 ds-agents = "ds_agents.cli:main"
+mcp-server = "mcp_server.server:main"
 
 [dependency-groups]
 dev = [

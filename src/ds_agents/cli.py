@@ -22,7 +22,9 @@ from ds_agents.graph import run_pipeline
 from ds_agents.state import PipelineState, RunConfig
 from ds_agents.tools.llm import AnthropicModel, StubModel, api_key_present
 from ds_agents.tools.local import LocalTools
+from ds_agents.tools.mcp_client import MCPTools, stdio_params
 from ds_agents.tools.pricing import UnknownModelError
+from ds_agents.tools.protocol import Tools
 
 FIXTURES = Path(__file__).resolve().parents[2] / "tests" / "fixtures"
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -100,13 +102,31 @@ def _select_model(config: RunConfig, *, no_live: bool = False):
         raise SystemExit(str(exc)) from exc
 
 
+def _select_tools(transport: str, root: Path, dataset: Path, dataset_id: str) -> Tools:
+    """Same implementation either way; `mcp` puts a process boundary in front of it.
+
+    `mcp` is the default because it is the configuration the results are produced under, and a
+    default that quietly took the shortcut would mean the transport is only exercised by tests.
+    `local` stays for debugging a node without a second process in the traceback.
+    """
+    if transport == "local":
+        return LocalTools(root, dataset_path=dataset, dataset_id=dataset_id)
+    print(f"tools over MCP: {sys.executable} -m mcp_server.server", file=sys.stderr)
+    try:
+        return MCPTools(stdio_params(root, dataset, dataset_id))
+    except Exception as exc:
+        # Same shape as `_select_model` refusing an unpriced model: a run that cannot reach its
+        # tools has not failed, it never started, and a traceback would read like a pipeline bug.
+        raise SystemExit(f"could not start the tool server: {exc!r}") from exc
+
+
 def cmd_run(args: argparse.Namespace) -> int:
     if args.dataset != "toy":
         print(f"only the toy dataset exists so far, not {args.dataset!r}", file=sys.stderr)
         return 2
 
     root = Path(args.artifacts_dir) if args.artifacts_dir else Path(tempfile.mkdtemp())
-    tools = LocalTools(root, dataset_path=FIXTURES / "toy" / "toy.csv", dataset_id="toy")
+    tools = _select_tools(args.tools, root, FIXTURES / "toy" / "toy.csv", "toy")
     state = _toy_state(args.model)
     model = _select_model(state.config, no_live=args.no_live)
     if isinstance(model, StubModel):
@@ -121,9 +141,9 @@ def cmd_run(args: argparse.Namespace) -> int:
     try:
         state = run_pipeline(state, tools=tools, model=model)
     finally:
-        # Releases this run's claim on the sandbox; it does not stop the shared worker, which is
-        # the point of sharing it. The worker exits with this process, via atexit or via its
-        # request pipe closing.
+        # Releases this run's claim on the tools. Under `local` that leaves the shared sandbox
+        # worker running, which is the point of sharing it -- it exits with this process. Under
+        # `mcp` it disconnects the session and the server subprocess, and its worker, exit with it.
         tools.close()
 
     print(state.model_dump_json(indent=2, exclude_none=True))
@@ -190,6 +210,12 @@ def main() -> int:
         "--model",
         default="haiku",
         help="model for every node: a short name (haiku, sonnet) or a full id (default: haiku)",
+    )
+    run.add_argument(
+        "--tools",
+        default="mcp",
+        choices=("mcp", "local"),
+        help="how nodes reach the sandbox and the store: over MCP (default) or in-process",
     )
     run.add_argument(
         "--no-live",

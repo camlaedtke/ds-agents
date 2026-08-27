@@ -20,6 +20,7 @@ from ds_agents.graph import run_pipeline
 from ds_agents.state import PipelineState
 from ds_agents.tools.llm import StubModel
 from ds_agents.tools.local import LocalTools
+from ds_agents.tools.mcp_client import MCPTools, stdio_params
 
 TOY = Path(__file__).parent / "fixtures" / "toy" / "toy.csv"
 
@@ -161,6 +162,31 @@ def test_the_report_does_not_leak_the_planted_answer(toy_run):
     # The column name appears legitimately (it survived into the features). What must not appear
     # is any statement that it was the planted one.
     assert "planted" not in report.lower()
+
+
+def test_the_same_run_over_mcp_lands_in_the_same_place(toy_run, tmp_path: Path):
+    """The transport is supposed to be the only difference between the two bindings.
+
+    They are the same objects reached two ways -- the server wraps a `LocalTools` -- so a
+    divergence here is not a transport bug to be papered over, it means the protocol layer started
+    deciding something. Asserting the claimed score to the digit is deliberate: everything in the
+    run is seeded, so an inexact match is a reproducibility finding either way.
+    """
+    local_state, _tools = toy_run
+
+    with MCPTools(stdio_params(tmp_path / "mcp", TOY, "toy")) as tools:
+        state = run_pipeline(_toy_state(), tools=tools, model=StubModel())
+
+    assert state.errors == []
+    assert [e.node for e in state.node_trace] == [e.node for e in local_state.node_trace]
+    assert state.spec == local_state.spec
+    assert state.final_features == local_state.final_features
+    assert state.dropped_features == local_state.dropped_features
+    assert state.chosen_model.name == local_state.chosen_model.name
+    assert (
+        state.chosen_model.claimed_holdout_score == local_state.chosen_model.claimed_holdout_score
+    )
+    assert state.top_importances == local_state.top_importances
 
 
 def test_a_lower_is_better_metric_reports_scores_in_natural_units(tmp_path: Path):

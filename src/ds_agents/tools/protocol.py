@@ -21,6 +21,24 @@ class ToolError(RuntimeError):
     the graph, because a dataset that hard-fails still has to produce an eval row."""
 
 
+# MCP has exactly one failure channel: an error result carrying a string. That would collapse the
+# one distinction the in-process binding is careful about -- a tool that refused (`ToolError`, the
+# snippet or the request was bad) against a sandbox that could not run at all (`SandboxError`, the
+# machine is broken). Those belong in different columns: the first is a finding about the agent,
+# the second is a finding about us. The server prefixes the second, the client strips the prefix
+# and re-raises the right type, and `tests/tools/test_mcp_client.py` asserts the round trip.
+SANDBOX_ERROR_PREFIX = "sandbox-failure: "
+
+# What `read_artifact` returns when the caller names no limit. Without it a node could pull an
+# arbitrarily large artifact through a JSON response and render it into a prompt; with it the
+# payload comes back `truncated=True`, which `feature_eng` and `modeler` already refuse to use.
+# The cap lives here, not in the transport, so the in-process and the MCP bindings truncate at the
+# same byte and a node cannot behave differently depending on how it was wired. The escape hatch
+# for a genuinely large artifact is `ArtifactMeta.extra["sandbox_path"]`: open it in a snippet
+# rather than asking for a bigger cap.
+DEFAULT_READ_BYTES = 1 << 20
+
+
 class RunResult(Contract):
     """What `run_python` gives back. Deliberately not a Python object: stdout is a string, and a
     node that wants structure has to make its snippet print JSON."""
