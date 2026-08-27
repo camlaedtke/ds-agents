@@ -65,9 +65,7 @@ def runs(tmp_path_factory) -> dict[tuple[str, str], Run]:
         fixture = load_fixture(name)
         case = Path(root / f"{name}-{naming}")
         dataset_path, rename = materialize(fixture, naming, case / "input")
-        tools = LocalTools(
-            case / "run", dataset_path=dataset_path, dataset_id=fixture.dataset_id
-        )
+        tools = LocalTools(case / "run", dataset_path=dataset_path, dataset_id=fixture.dataset_id)
         try:
             state = run_pipeline(
                 _fixture_state(fixture, naming=naming),
@@ -219,6 +217,6 @@ def test_the_two_arms_produce_the_same_importances(runs):
             (opaque.rename.get(column, column), value)
             for column, value in descriptive.state.top_importances
         ]
-        assert translated == pytest.approx(
-            opaque.state.top_importances, abs=0.0
-        ), f"{name}: the arms disagree on importances, so they differ in more than the names"
+        assert translated == pytest.approx(opaque.state.top_importances, abs=0.0), (
+            f"{name}: the arms disagree on importances, so they differ in more than the names"
+        )

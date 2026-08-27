@@ -142,8 +142,17 @@ class TestTheRunParser:
 
     def test_the_ablation_flags_parse(self):
         args = self._parse(
-            ["run", "--dataset", "claims_timing", "--naming", "opaque", "--repeat", "10",
-             "--results", "evals/results/x.jsonl"]
+            [
+                "run",
+                "--dataset",
+                "claims_timing",
+                "--naming",
+                "opaque",
+                "--repeat",
+                "10",
+                "--results",
+                "evals/results/x.jsonl",
+            ]
         )
         assert (args.naming, args.repeat, args.results) == (
             "opaque",
@@ -173,9 +182,7 @@ class TestTheResultsWriter:
             dataset_id="toy",
             task_description="x",
             node_trace=[
-                NodeEvent(
-                    node="intake", model="claude-haiku-4-5-20251001", started=utc_now()
-                )
+                NodeEvent(node="intake", model="claude-haiku-4-5-20251001", started=utc_now())
             ],
         )
         assert state.publishable()[0] is True
