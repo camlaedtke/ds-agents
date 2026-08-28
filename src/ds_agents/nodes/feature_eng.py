@@ -220,10 +220,17 @@ def _forced_drops(state: PipelineState) -> list[FeatureDrop]:
     2. The id-column class: >=98% distinct AND not a float dtype. Purely statistical -- a column
        named `id` that is a real feature (or a float column with high cardinality, like a price)
        must survive. This is what catches `customer_id` on the toy fixture without name heuristics.
-    3. Columns named by an open objection in a leakage-shaped category that ACTS on feature_eng.
-       Under `objection_routing="by_category"` that includes objections the reviewer addressed to
-       `modeler`; `open_objections` resolves who acts and this node does not, so there is exactly
-       one answer to that question in the codebase.
+    3. Columns named by a NOT-WITHDRAWN objection in a leakage-shaped category that ACTS on
+       feature_eng. Under `objection_routing="by_category"` that includes objections the reviewer
+       addressed to `modeler`; `binding_objections` resolves who acts and this node does not, so
+       there is exactly one answer to that question in the codebase.
+
+    Note the predicate in 3 is `binding_objections`, not `open_objections`. This function
+    recomputes from scratch on every entry, and a `resolved` objection that stopped forcing its
+    drop would put the leaked column back the next time the run returned here for any unrelated
+    reason -- resolution un-fixing itself. Only `withdrawn` releases a column. See
+    `PipelineState.binding_objections`, which is the one place that distinction lives, and note
+    that this is its only caller in the graph.
     """
     assert state.spec is not None and state.profile is not None
     target = state.spec.target
@@ -246,7 +253,7 @@ def _forced_drops(state: PipelineState) -> list[FeatureDrop]:
             )
 
     seen = {d.column for d in drops}
-    for objection in state.open_objections("feature_eng"):
+    for objection in state.binding_objections("feature_eng"):
         if objection.category not in COLUMN_SCOPED_CATEGORIES:
             continue
         for column in objection.columns:
@@ -257,9 +264,12 @@ def _forced_drops(state: PipelineState) -> list[FeatureDrop]:
                 FeatureDrop(
                     column=column,
                     reason="leakage",
+                    # "not withdrawn" rather than "open": this string reaches both the snippet
+                    # the model reads and `dropped_features` on the results row, and a resolved
+                    # objection still binds, so calling it open here would be false.
                     justification=(
-                        f"open reviewer objection {objection.id} ({objection.category}): "
-                        f"{objection.evidence}"
+                        f"reviewer objection {objection.id} ({objection.category}), "
+                        f"not withdrawn: {objection.evidence}"
                     ),
                 )
             )

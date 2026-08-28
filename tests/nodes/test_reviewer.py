@@ -8,10 +8,14 @@ count pass 1's "block" again), and a column-scoped objection left with no surviv
 REJECTED, not downgraded to `other`.
 """
 
+import json
+
 import pytest
 from conftest import FakeTools, ScriptedModel
 
+from ds_agents.fixtures import available, load_fixture
 from ds_agents.nodes.reviewer import (
+    CLOSURE_RULE,
     REVIEWER_SYSTEM,
     WHICH_COLUMN_RULE,
     DispositionUpdate,
@@ -250,6 +254,30 @@ def test_a_non_column_scoped_objection_survives_with_empty_columns():
 # --- dispositions --------------------------------------------------------------------------------
 
 
+def test_a_resolved_objection_is_not_re_shown_to_the_reviewer():
+    """The other half of the 2026-08-28 sticky-drop blast-radius guard.
+
+    `feature_eng` now keeps a resolved objection's column dropped via `binding_objections`. The
+    reviewer's own facts must NOT follow it there: an objection it already closed, re-presented in
+    `open_objections` every pass, would be re-adjudicated forever and closure would be a treadmill
+    rather than a termination condition. `_user_message` must keep asking `open_objections`.
+    """
+    ob = objection()
+    closed = ReviewPass(
+        iteration=0, claim="block", routed_to="feature_eng", dispositions={ob.id: "resolved"}
+    )
+    model = ScriptedModel({ReviewFinding: finding()})
+
+    reviewer(
+        state(objections=[ob], review_passes=[closed], review_iterations=1),
+        tools=FakeTools(),
+        model=model,
+    )
+
+    (_system, user, _schema) = model.calls[0]
+    assert json.loads(user)["open_objections"] == []
+
+
 def test_unknown_or_closed_disposition_ids_are_dropped():
     open_obj = objection(oid="open-1")
     closed_obj = objection(oid="closed-1", column="region")
@@ -439,6 +467,56 @@ def test_which_column_appends_exactly_one_rule():
     assert system.startswith(REVIEWER_SYSTEM)
     assert system.removeprefix(REVIEWER_SYSTEM) == WHICH_COLUMN_RULE
     assert "top_importances" in system
+
+
+def _system_for(**config) -> str:
+    model = ScriptedModel({ReviewFinding: finding()})
+    reviewer(
+        state(config=RunConfig(reviewer_enabled=True, **config)),
+        tools=FakeTools(),
+        model=model,
+    )
+    (system, _user, _schema) = model.calls[0]
+    return system
+
+
+def test_closure_appends_exactly_one_rule():
+    system = _system_for(objection_closure="on")
+    assert system.removeprefix(REVIEWER_SYSTEM) == CLOSURE_RULE
+    assert "final_features" in system
+
+
+def test_closure_composes_with_which_column_in_a_fixed_order():
+    """Both rules are independent conditions, so all four cells must be reachable and the order
+    must be pinned -- an order that drifted would make two runs with identical config rows carry
+    different prompts."""
+    system = _system_for(reviewer_prompt="which_column", objection_closure="on")
+    assert system == REVIEWER_SYSTEM + WHICH_COLUMN_RULE + CLOSURE_RULE
+
+
+def test_closure_off_leaves_both_earlier_prompts_byte_identical():
+    """The comparability guarantee. `off` must reproduce what every run before 2026-08-28 saw,
+    under either prompt condition, or no committed reviewer row survives this session."""
+    assert _system_for(reviewer_prompt="base", objection_closure="off") == REVIEWER_SYSTEM
+    assert _system_for(reviewer_prompt="which_column", objection_closure="off") == (
+        REVIEWER_SYSTEM + WHICH_COLUMN_RULE
+    )
+
+
+def test_no_appended_rule_names_a_fixture_column():
+    """The answer-injection guard, absent even for WHICH_COLUMN_RULE until now.
+
+    Both appended rules claim to repair the reviewer's reasoning rather than hand it the answer.
+    That claim is only worth something if it is checked: a rule that named a planted column -- or
+    any column of any registered fixture -- would make its arm measure the hint instead of the
+    reviewer. Iterating every fixture rather than the one under test means a future fixture cannot
+    quietly turn an existing rule into a cheat sheet.
+    """
+    for name in available():
+        manifest = load_fixture(name).manifest
+        for column in manifest.planted_columns:
+            assert column not in WHICH_COLUMN_RULE
+            assert column not in CLOSURE_RULE
 
 
 def test_the_prompt_variant_is_a_config_change_not_a_second_code_path():

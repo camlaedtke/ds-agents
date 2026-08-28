@@ -311,3 +311,104 @@ intended behaviour, and for a single pass it is -- the hazard only appears acros
 is a shape `as_addressed` almost never produced and `by_category` now produces routinely. It needs a
 decision next session: either a drop, once forced, stays forced, or resolution has to be prevented
 from resurrecting a column.
+
+## 2026-08-28 (fifth run of the day): objection-closure arm -- `2026-08-28_objection-closure.jsonl`
+
+**Pre-registered before either cell was run.** Everything from here to the results table below was
+written first; the commit that carries this file carries the pre-registration and the code together.
+
+### The premise changed before the money was spent, and this section is the record of that
+
+The arm was designed against a diagnosis written in NEXT.md and PLAN.md: *the reviewer never
+dispositions an objection `resolved`, so `exhausted` is a default rather than evidence.* Re-reading
+the control cell's own rows before running anything, **that diagnosis does not hold at n=10**:
+
+- **8 of the 10 committed routing rows closed at least one objection** (`objections_raised >
+  objections_open_at_end`), including all 4 that ended `exhausted`.
+- **All 4 `exhausted` runs raised a NEW objection on their FINAL pass** (`new_objections_per_pass`
+  is `[1,1,1]` in three of them and `[2,0,1]` in the fourth). A block at the cap routes to the
+  reporter, so those runs did not exhaust by refusing to close. They exhausted because the reviewer
+  names one trap per pass and the cap cuts the sequence off -- whack-a-mole, not an unfalsifiable
+  standard. The three diagnostic runs the original diagnosis rests on are n=3 and predate the
+  routing arm.
+
+What remains genuinely unknown is **whether those closures are `resolved` or `withdrawn`**. No row
+committed before this session splits them: `objections_open_at_end` conflates the two, and they are
+opposite claims about the reviewer -- one says the fix landed, the other says the objection was
+wrong. `objections_resolved` and `objections_withdrawn` exist from this commit precisely so this
+question stops being unanswerable, and the same gap is why the sticky-drop screen below could not
+resolve its 7 at-risk rows past "at risk".
+
+So the control cell is run **as a decision gate**, and the stopping rule is fixed in advance.
+
+### Commands
+
+```
+uv run ds-agents run --dataset claims_timing --naming opaque --reviewer-prompt which_column \
+  --loop-cap 3 --objection-routing by_category --objection-closure off --repeat 10 --tools mcp \
+  --results evals/results/2026-08-28_objection-closure.jsonl
+# gate evaluated here; then, only if the gate opens, the same with --objection-closure on
+```
+
+**The control is re-run, not reused, and that is a change from the last three cells.**
+`2026-08-28_objection-routing.jsonl` is the same conditions, but this commit also carries the
+unconditional sticky-drop fix (a `resolved` objection keeps forcing its drop; only `withdrawn`
+releases it). A read-only screen over every committed row -- `objections_raised >
+objections_open_at_end` AND `feature_eng` present in `route_sequence[1:]`, the necessary condition
+for the old behaviour to have fired -- puts **7 of 84 rows in the at-risk set, 4 of them inside that
+control cell**. The published routing numbers stand as published and are not amended; they are
+noted as code-boundary-crossed, exactly as the `2d5c1fc` rows are field-boundary-crossed.
+
+### The gate, fixed in advance
+
+Evaluated on the control cell (`--objection-closure off`) alone, before the arm is run:
+
+- **If `objections_resolved > 0` in >=6 of 10 control runs**, the reviewer already closes honestly
+  without being told how, the arm's premise is falsified, and **the arm is not run**. That is the
+  finding, it costs $0.27 instead of $0.55, and the remaining `exhausted` runs are attributed to
+  late detection against the cap -- a different bottleneck needing a different intervention.
+- **If closures are mostly `withdrawn`** (`objections_resolved` 0 in >=6 of 10 while
+  `objections_withdrawn > 0`), the original diagnosis was right about the mechanism and wrong about
+  the vocabulary: the reviewer abandons objections rather than resolving them, which is worse, since
+  under the sticky-drop fix `withdrawn` is the disposition that puts a column BACK. **Run the arm.**
+- **If both are near zero**, the original diagnosis stands as written. **Run the arm.**
+
+### Endpoints for the arm, if it is run
+
+- **Primary: `objections_resolved > 0`,** against the control's measured number rather than an
+  assumed one. **Threshold: +3 runs over control, and >=8/10 absolute.**
+- **Honesty guard, and the arm's falsifier: `objections_falsely_resolved`** -- an objection marked
+  `resolved` while one of its columns is still in `final_features`. **Threshold: 0 across all 10
+  rows.** Any non-zero row means the prompt bought termination by teaching the reviewer to say
+  "fixed", and the arm is a failure whatever else moves. This failure mode is not present in any
+  earlier cell and nothing on an earlier row would have caught it.
+- **Secondary: `review_verdict == "exhausted"` falls.** Control 4/10. **Threshold: <=2/10.** Stated
+  as secondary and not co-primary because of the finding above: those 4 runs exhaust on a late new
+  objection, which closure does not address, so this number may honestly not move.
+- **Guardrail, non-inferiority, explicitly NOT a success metric: `leakage_remediated`.** Control
+  5/10. **>=4/10 acceptable, <=3/10 kills the arm.** **Remediation is allowed to fall, and that is
+  pre-registered.** Closure ends the loop earlier; `claims_timing` plants two trap columns and 4 of
+  the control cell's rows used two `feature_eng` returns, so a reviewer that resolves after the
+  first drop never gets the pass in which it would have named the second. The sticky fix pushes the
+  same number the other way. The net direction is genuinely unknown, and quoting a rise as the arm's
+  success would be reading a coin flip. If it falls, the diagnostic fixed in advance is whether the
+  falling rows have a SHORTER `route_sequence` with `objections_resolved > 0` and a planted column
+  in `objected_columns_unremediated` -- that is "closed too early", a prompt problem, not evidence
+  that closure is wrong.
+- **Harm, carried over: `n_final_features`, `reviewer_false_alarm`, mean `claimed_holdout_score`
+  against the ~0.82 legitimate ceiling.** New sub-item: **`objections_withdrawn > 0` in at least one
+  run.** The sticky fix makes `withdrawn` the only release, so if the reviewer never withdraws, the
+  false-positive drops `by_category` produces (2 of 10 in the control cell, `prior_claims_12m`)
+  become permanent for the rest of a run.
+- **Descriptive, not endpoints:** `objections_by_target_node`, `objections_rerouted`,
+  `route_sequence`, `new_objections_per_pass`, mean loops.
+- **Budget: a range with a direction,** per the parking-lot note that this cost model is
+  non-monotonic. A *successful* intervention moves cost **down**, because closure ends the loop at
+  `pass` instead of grinding to the cap -- the routing arm already showed this ($0.047 predicted,
+  $0.0272 actual, mean loops 2.7 -> 2.2). Control $0.024-0.034/run against a measured $0.0272;
+  arm $0.018-0.030/run, direction down. **$0.27 if the gate closes, $0.42-0.64 if it opens, $0.80
+  hard cap.** If the cap binds, the cell stops where it stops and n is reported as what actually ran.
+
+**Not comparable to any earlier file** on `objection_closure`, `objections_resolved`,
+`objections_withdrawn` or `objections_falsely_resolved`: those fields do not exist before this
+commit and cannot be back-filled. Shared fields are comparable subject to the sticky-drop boundary.

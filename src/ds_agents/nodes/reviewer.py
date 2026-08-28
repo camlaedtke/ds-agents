@@ -89,13 +89,52 @@ name the highest-importance column or columns the score depends on, in a `leakag
 cause a high score, so it is not an answer to this question."""
 
 
+# Appended under `objection_closure="on"`, after WHICH_COLUMN_RULE when both are on, never
+# substituted for either. The observed failure this targets, live on 2026-08-28: across three
+# diagnostic runs the reviewer dispositioned nothing `resolved`. In the clearest of them the
+# pipeline dropped both planted columns and the claimed roc_auc fell 0.986 -> 0.823; the reviewer
+# wrote that the fall "is consistent with removing leakage" and held the objection open anyway, on
+# the grounds that the columns "were never validated as non-leaking, only removed". That is an
+# unfalsifiable standard, and a reviewer holding one can never let a run pass: every run grinds to
+# the cap, and `exhausted` stops being evidence that the fix did not land. The reviewer had no
+# termination condition it could check, so it invented one it could never meet.
+#
+# The rule points only at `final_features`, a field the reviewer is already shown, and names no
+# fixture, no column and no trap type -- the same line WHICH_COLUMN_RULE draws between repairing a
+# prompt and injecting the answer. It states the standard, not the answer.
+#
+# What is deliberately NOT here: a bullet saying `withdrawn` is the only disposition that lets the
+# pipeline put a column back. That is true as of the sticky-drop fix, and it is a pipeline
+# mechanic, not an observable field; putting it here would break the rule this comment just
+# claimed. REVIEWER_SYSTEM already defines `withdrawn` correctly, and `objections_withdrawn` is on
+# the results row so that whether the reviewer finds the escape hatch unaided is measured rather
+# than assumed.
+CLOSURE_RULE = """
+- An objection about a column is answered when that column is no longer in the matrix. Before you \
+disposition, check each open objection's `columns` against `final_features`. If none of them \
+appear there, the column is gone and the objection is `resolved`. Do not hold it open on the \
+grounds that the column was never proved harmless: a column absent from `final_features` cannot \
+affect the model, and a standard that no evidence could satisfy is not a review.
+- Two things are not grounds for `resolved`. Asking for the change is not the change -- resolve on \
+what `final_features` contains now, never on the fact that you raised the objection or that a \
+later step said it would act. And a column listed in `final_features` is still in the matrix \
+whatever any summary says; while it is there, that objection is `still_open`."""
+
+
 def _system_prompt(state: PipelineState) -> str:
-    """`base` must stay byte-identical to what every earlier run used, or rows written under
-    different sessions stop being comparable. One prompt with one optional rule appended, never a
-    second code path."""
+    """`base` with nothing appended must stay byte-identical to what every run before 2026-08-28
+    used, and `base + WHICH_COLUMN_RULE` byte-identical to the reviewer-ablation and routing cells,
+    or rows written under different sessions stop being comparable.
+
+    The two rules are independent conditions on the frozen config, appended in a fixed order.
+    One prompt with optional rules appended, never a second code path.
+    """
+    prompt = REVIEWER_SYSTEM
     if state.config.reviewer_prompt == "which_column":
-        return REVIEWER_SYSTEM + WHICH_COLUMN_RULE
-    return REVIEWER_SYSTEM
+        prompt += WHICH_COLUMN_RULE
+    if state.config.objection_closure == "on":
+        prompt += CLOSURE_RULE
+    return prompt
 
 
 class ProposedObjection(Contract):

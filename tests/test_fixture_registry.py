@@ -185,7 +185,7 @@ class TestResolutionFailures:
         from ds_agents.cli import _fixture_state, _toy_state
 
         wrapped = _toy_state("haiku")
-        direct = _fixture_state(load_fixture("toy"), "haiku")
+        direct = _fixture_state(load_fixture("toy"), model_name="haiku")
         assert wrapped.dataset_id == direct.dataset_id
         assert wrapped.task_description == direct.task_description
         assert wrapped.planted_leakage_columns == direct.planted_leakage_columns

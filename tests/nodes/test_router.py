@@ -323,6 +323,39 @@ def test_the_trace_event_is_written_on_every_branch(kwargs):
 # --- the dual-authority guard: routed_to == where route_target actually sends the run ------------
 
 
+def test_a_resolved_objection_does_not_keep_routing_the_run_upstream():
+    """The termination guard for the 2026-08-28 sticky-drop fix.
+
+    That fix gave `feature_eng._forced_drops` a second predicate, `binding_objections`, which
+    releases only on `withdrawn` so that a resolved objection keeps its column out of the matrix.
+    `_route_for_block` must NOT follow it there and must keep asking `open_objections`: an
+    objection that still routed the run upstream after being resolved would loop to the cap on
+    every run, `exhausted` would become structurally guaranteed, and the signal the closure arm
+    exists to make honest would be gone. This test passed before that fix and must keep passing
+    after it -- it is a guard on the blast radius, not a driver of the change.
+    """
+    ob = objection(target_node="feature_eng")
+    resolved_last_pass = ReviewPass(
+        iteration=0,
+        claim="block",
+        routed_to="feature_eng",
+        dispositions={ob.id: "resolved"},
+    )
+    update = router(
+        state(
+            reviewer_claim="block",
+            objections=[ob],
+            review_passes=[resolved_last_pass],
+            review_iterations=1,
+        ),
+        tools=tools(),
+        model=model(),
+    )
+
+    (pass_,) = update["review_passes"]
+    assert pass_.routed_to == "reporter"
+
+
 def test_a_rerouted_objection_resolved_this_pass_still_routes_to_the_reporter():
     """`_route_for_block` now asks `open_objections(destination)`, which applies the routing
     condition. This pins that the rewrite kept the disposition projection AHEAD of the reroute:

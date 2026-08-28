@@ -244,6 +244,37 @@ class TestTheRoutingConditionIsRecorded:
             _build_parser().parse_args(["run", "--objection-routing", "by_vibes"])
 
 
+class TestTheClosureConditionIsRecorded:
+    """Mirror of TestTheRoutingConditionIsRecorded. `objection_closure` is its own axis and not a
+    third `reviewer_prompt` value, so that closure stays measurable under either prompt rather
+    than only in a bundle with `which_column`."""
+
+    def test_the_default_is_the_old_behaviour(self):
+        """Every row committed before 2026-08-28 ran without the rule, so `off` must be the
+        default and must leave the reviewer prompt byte-identical."""
+        args = _build_parser().parse_args(["run"])
+        assert args.objection_closure == "off"
+        assert _fixture_state(load_fixture("claims_timing")).config.objection_closure == "off"
+
+    def test_fixture_state_records_the_variant(self):
+        state = _fixture_state(load_fixture("claims_timing"), objection_closure="on")
+        assert state.config.objection_closure == "on"
+        assert state.results_row()["objection_closure"] == "on"
+
+    def test_it_is_orthogonal_to_the_prompt_condition(self):
+        """The reason it is not a third `reviewer_prompt` value: both conditions must be settable
+        independently, or the closure effect can never be separated from the which_column one."""
+        state = _fixture_state(
+            load_fixture("claims_timing"), reviewer_prompt="base", objection_closure="on"
+        )
+        assert state.config.reviewer_prompt == "base"
+        assert state.config.objection_closure == "on"
+
+    def test_an_unknown_closure_is_refused_by_the_parser(self):
+        with pytest.raises(SystemExit):
+            _build_parser().parse_args(["run", "--objection-closure", "sometimes"])
+
+
 class TestTheReviewerClient:
     """`_select_reviewer_model`, untested until the session that spends money on it.
 

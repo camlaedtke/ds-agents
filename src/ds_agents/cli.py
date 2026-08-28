@@ -23,8 +23,10 @@ from ds_agents.graph import run_pipeline
 from ds_agents.naming import NAMINGS, Naming, materialize, rename_map
 from ds_agents.naming import apply as apply_rename
 from ds_agents.state import (
+    OBJECTION_CLOSURES,
     OBJECTION_ROUTINGS,
     REVIEWER_PROMPTS,
+    ObjectionClosure,
     ObjectionRouting,
     PipelineState,
     ReviewerPrompt,
@@ -41,14 +43,22 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 
 def _fixture_state(
     fixture: Fixture,
+    *,
     model_name: str = "haiku",
     reviewer_model_name: str | None = None,
     naming: Naming = "descriptive",
     reviewer_prompt: ReviewerPrompt = "base",
     loop_cap: int = 3,
     objection_routing: ObjectionRouting = "as_addressed",
+    objection_closure: ObjectionClosure = "off",
 ) -> PipelineState:
     """The starting state for one run of `fixture` under one naming condition.
+
+    Everything after `fixture` is keyword-only. Every parameter here is a run condition, they are
+    mostly strings, and `_run_once` passed all of them positionally: one transposition would have
+    published a run under the wrong arm's label with nothing to catch it, because every value is
+    individually valid and `RunConfig` is frozen at construction. The parking lot carried this as
+    a hazard for two sessions; the star is the fix.
 
     The rename map is derived here from `naming` rather than passed in alongside it. An earlier
     version took both and let the caller supply them, which meant `naming="opaque"` with an empty
@@ -87,6 +97,10 @@ def _fixture_state(
             # their remediation rates are not comparable and averaging them would report a
             # capability the `as_addressed` arm does not have.
             objection_routing=objection_routing,
+            # Recorded because the arm's whole claim is about the reviewer's behaviour, and a
+            # row that did not carry it would average a reviewer that was told what done
+            # looks like with one that was not.
+            objection_closure=objection_closure,
         ),
         dataset_id=fixture.dataset_id,
         # No `spec`: naming the target is intake's job, and pre-filling it here would skip the
@@ -103,7 +117,9 @@ def _fixture_state(
 
 def _toy_state(model_name: str = "haiku", reviewer_model_name: str | None = None) -> PipelineState:
     """The toy fixture's state, by name. Kept as its own function because tests call it."""
-    return _fixture_state(load_fixture("toy"), model_name, reviewer_model_name)
+    return _fixture_state(
+        load_fixture("toy"), model_name=model_name, reviewer_model_name=reviewer_model_name
+    )
 
 
 def _print_trace(state: PipelineState) -> None:
@@ -247,12 +263,13 @@ def _run_once(
     tools = _select_tools(args.tools, root, dataset_path, fixture.dataset_id)
     state = _fixture_state(
         fixture,
-        args.model,
-        args.reviewer_model,
-        args.naming,
-        args.reviewer_prompt,
-        args.loop_cap,
-        args.objection_routing,
+        model_name=args.model,
+        reviewer_model_name=args.reviewer_model,
+        naming=args.naming,
+        reviewer_prompt=args.reviewer_prompt,
+        loop_cap=args.loop_cap,
+        objection_routing=args.objection_routing,
+        objection_closure=args.objection_closure,
     )
     model = _select_model(state.config, no_live=args.no_live)
     reviewer_model = _select_reviewer_model(state.config, model, no_live=args.no_live)
@@ -407,6 +424,15 @@ def _build_parser() -> argparse.ArgumentParser:
         help="who acts on an objection: as the reviewer addressed it (default, and what every run "
         "before 2026-08-28 did), or by_category, which sends a column-scoped objection to "
         "feature_eng whatever the reviewer chose. This is the objection-routing ablation.",
+    )
+    run.add_argument(
+        "--objection-closure",
+        default="off",
+        choices=OBJECTION_CLOSURES,
+        help="whether the reviewer is told what 'done' looks like: off (default, and what every "
+        "run before 2026-08-28 did), or on, which appends one rule saying an objection about a "
+        "column is answered when that column is absent from final_features. This is the "
+        "objection-closure ablation.",
     )
     run.add_argument(
         "--results",

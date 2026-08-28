@@ -265,6 +265,214 @@ class TestOpenObjectionsOrdering:
         assert state.open_objections() == [objection]
 
 
+class TestClosureIsMeasured:
+    """`objections_resolved`, `objections_withdrawn`, `objections_falsely_resolved`.
+
+    The closure arm's primary endpoint is whether the reviewer closes anything at all, and its
+    falsifier is whether it closes DISHONESTLY -- an objection marked `resolved` while its column
+    is still in `final_features`. That failure mode does not exist in any earlier cell, because no
+    earlier reviewer resolved anything, so nothing on the row would have caught it.
+    """
+
+    def _state(
+        self,
+        objections: list[Objection],
+        dispositions: dict[str, str],
+        final_features: list[str] | None = None,
+        reviewer_enabled: bool = True,
+        with_pass: bool = True,
+    ) -> PipelineState:
+        passes = []
+        if with_pass:
+            passes = [
+                ReviewPass(
+                    iteration=0, claim="pass", routed_to="reporter", dispositions=dispositions
+                )
+            ]
+        return PipelineState(
+            config=RunConfig(reviewer_enabled=reviewer_enabled),
+            dataset_id="toy",
+            task_description="x",
+            planted_leakage_columns=["account_status_code"],
+            objections=objections,
+            review_passes=passes,
+            final_features=final_features,
+        )
+
+    def test_a_reviewer_that_closed_nothing_is_a_real_zero_not_none(self):
+        """The pre-closure finding, as a number. If this were `None` the control cell would have
+        no result at all."""
+        ob = leak_objection()
+        row = self._state([ob], {ob.id: "still_open"}, ["tenure_months"]).results_row()
+        assert row["objections_resolved"] == 0
+        assert row["objections_withdrawn"] == 0
+        assert row["objections_falsely_resolved"] == 0
+
+    def test_a_reviewer_that_never_ran_is_none(self):
+        ob = leak_objection()
+        row = self._state([ob], {}, ["tenure_months"], with_pass=False).results_row()
+        assert row["objections_resolved"] is None
+        assert row["objections_withdrawn"] is None
+        assert row["objections_falsely_resolved"] is None
+
+    def test_the_reviewer_off_arm_is_none(self):
+        """The reviewer-off arm still runs the node as a no-op, so `review_passes` alone is not
+        enough to say the reviewer was asked anything."""
+        row = self._state([], {}, ["tenure_months"], reviewer_enabled=False).results_row()
+        assert row["objections_resolved"] is None
+
+    def test_resolved_and_withdrawn_are_counted_separately(self):
+        """They are opposite claims about the reviewer, and `binding_objections` acts on the
+        difference, so a row that summed them could not be used to reason about what was dropped."""
+        kept = leak_objection(columns=["a"])
+        gone = leak_objection(columns=["b"])
+        row = self._state(
+            [kept, gone], {kept.id: "withdrawn", gone.id: "resolved"}, ["tenure_months"]
+        ).results_row()
+        assert row["objections_resolved"] == 1
+        assert row["objections_withdrawn"] == 1
+
+    def test_an_honest_resolution_does_not_count_as_false(self):
+        ob = leak_objection(columns=["account_status_code"])
+        row = self._state([ob], {ob.id: "resolved"}, ["tenure_months"]).results_row()
+        assert row["objections_falsely_resolved"] == 0
+
+    def test_resolving_an_objection_whose_column_is_still_in_the_matrix_is_false(self):
+        """The arm's falsifier. A prompt that buys termination by teaching the reviewer to say
+        'fixed' is worse than no prompt, and this is the only column that would show it."""
+        ob = leak_objection(columns=["account_status_code"])
+        row = self._state(
+            [ob], {ob.id: "resolved"}, ["tenure_months", "account_status_code"]
+        ).results_row()
+        assert row["objections_falsely_resolved"] == 1
+
+    def test_a_resolved_non_column_scoped_objection_is_never_false(self):
+        """An `overfit` objection names no column, so absence from `final_features` cannot be
+        checked for it and it must not be scored either way."""
+        ob = leak_objection(category="overfit", subcategory="cv_gap", columns=[])
+        row = self._state([ob], {ob.id: "resolved"}, ["tenure_months"]).results_row()
+        assert row["objections_falsely_resolved"] == 0
+
+    def test_an_empty_matrix_makes_false_resolution_unmeasurable(self):
+        """Same rule as `leakage_remediated`: an empty matrix contains no column, so every
+        resolution would score honest and the inflation would flatter the arm under test. The two
+        counts beside it stay real integers."""
+        ob = leak_objection()
+        row = self._state([ob], {ob.id: "resolved"}, []).results_row()
+        assert row["objections_falsely_resolved"] is None
+        assert row["objections_resolved"] == 1
+
+    def test_objections_open_at_end_is_unchanged_by_any_of_this(self):
+        ob = leak_objection()
+        row = self._state([ob], {ob.id: "resolved"}, ["tenure_months"]).results_row()
+        assert row["objections_open_at_end"] == 0
+
+
+class TestABindingObjectionOutlivesItsResolution:
+    """`binding_objections` answers "what must stay OUT of the matrix". `open_objections` answers
+    "what is still being complained about". They are different questions and 2026-08-28 is the day
+    that stopped being a distinction without a difference.
+
+    `_forced_drops` recomputes from scratch on every entry to `feature_eng`, so while it read
+    `open_objections`, a `resolved` objection stopped forcing its drop and the next return to that
+    node -- for any reason at all -- put the leaked column back. Verified live against the node:
+    with the objection open the snippet read `DROP = ['account_status_code', 'churned',
+    'customer_id']`; with it resolved, `DROP = ['churned', 'customer_id']`.
+    """
+
+    def _state(
+        self,
+        objection: Objection,
+        disposition: str | None,
+        routing: str = "as_addressed",
+    ) -> PipelineState:
+        passes = []
+        if disposition is not None:
+            passes = [
+                ReviewPass(
+                    iteration=0,
+                    claim="pass",
+                    routed_to="reporter",
+                    dispositions={objection.id: disposition},
+                )
+            ]
+        return PipelineState(
+            config=RunConfig(objection_routing=routing),
+            dataset_id="toy",
+            task_description="x",
+            planted_leakage_columns=["leaky_col"],
+            objections=[objection],
+            review_passes=passes,
+        )
+
+    def test_a_resolved_objection_is_still_binding(self):
+        """`resolved` means the problem is fixed, and on this pipeline the fix IS the drop. An
+        objection that stopped binding on resolution would un-fix itself."""
+        objection = leak_objection(columns=["leaky_col"])
+        assert self._state(objection, "resolved").binding_objections() == [objection]
+
+    def test_a_withdrawn_objection_is_not_binding(self):
+        """The only release. `withdrawn` is the reviewer saying it was never a problem, which is
+        the opposite claim to `resolved` and the only route back for a false positive."""
+        objection = leak_objection(columns=["leaky_col"])
+        assert self._state(objection, "withdrawn").binding_objections() == []
+
+    def test_a_not_reviewed_objection_is_still_binding(self):
+        objection = leak_objection(columns=["leaky_col"])
+        assert self._state(objection, "not_reviewed").binding_objections() == [objection]
+
+    def test_open_objections_is_unchanged_by_any_of_this(self):
+        """The guard that the two questions stayed separate. `open_objections` must keep closing on
+        `resolved`: the router asks it where to send the run, and an objection that kept routing
+        upstream after being resolved would loop to the cap on every run and make `exhausted`
+        structurally guaranteed -- destroying the signal the closure arm exists to make honest."""
+        objection = leak_objection(columns=["leaky_col"])
+        state = self._state(objection, "resolved")
+        assert state.open_objections() == []
+        assert state.binding_objections() == [objection]
+
+    def test_binding_objections_inherits_the_effective_target(self):
+        """Stops the new method becoming a SECOND answer to "who acts on this". Same misaddressed
+        objection as TestObjectionRouting, resolved, under `by_category`: it must bind on
+        `feature_eng`, because that is the node the graph decided acts."""
+        objection = leak_objection(
+            category="implausible_importance",
+            subcategory="importance_dominance",
+            target_node="modeler",
+            columns=["leaky_col"],
+        )
+        state = self._state(objection, "resolved", routing="by_category")
+        assert state.binding_objections("feature_eng") == [objection]
+        assert state.binding_objections("modeler") == []
+
+    def test_the_last_disposition_wins_not_the_first(self):
+        """Resolved in pass 0, withdrawn in pass 1: the release must land. Same fold, same
+        ordering rule as `open_objections`, because they share one implementation."""
+        objection = leak_objection(columns=["leaky_col"])
+        state = PipelineState(
+            config=RunConfig(),
+            dataset_id="toy",
+            task_description="x",
+            planted_leakage_columns=["leaky_col"],
+            objections=[objection],
+            review_passes=[
+                ReviewPass(
+                    iteration=1,
+                    claim="pass",
+                    routed_to="reporter",
+                    dispositions={objection.id: "withdrawn"},
+                ),
+                ReviewPass(
+                    iteration=0,
+                    claim="block",
+                    routed_to="feature_eng",
+                    dispositions={objection.id: "resolved"},
+                ),
+            ],
+        )
+        assert state.binding_objections() == []
+
+
 class TestObjectionRouting:
     """`config.objection_routing` decides WHO ACTS on an objection, and only that.
 

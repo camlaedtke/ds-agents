@@ -213,9 +213,8 @@ def test_an_open_leakage_objection_forces_the_drop():
     assert "account_status_code" in tools.code_run[0]
 
 
-def test_a_resolved_objection_does_not_force_a_drop():
-    """Guards that `open_objections()` is used, not the raw `objections` list."""
-    objection = Objection(
+def _planted_column_objection() -> Objection:
+    return Objection(
         category="leakage",
         subcategory="planted_status_code",
         target_node="feature_eng",
@@ -224,20 +223,103 @@ def test_a_resolved_objection_does_not_force_a_drop():
         severity="high",
         raised_at_iteration=0,
     )
-    review_pass = ReviewPass(
-        iteration=0,
+
+
+def _pass_disposing(objection: Objection, disposition: str, iteration: int = 0) -> ReviewPass:
+    return ReviewPass(
+        iteration=iteration,
         claim="pass",
         routed_to="reporter",
-        dispositions={objection.id: "resolved"},
+        dispositions={objection.id: disposition},
     )
+
+
+def test_a_resolved_objection_still_forces_its_drop():
+    """DELIBERATE REVERSAL of `test_a_resolved_objection_does_not_force_a_drop`, which pinned the
+    opposite behaviour from the first day this node handled objections until 2026-08-28. Recorded
+    here rather than in a commit message because the old assertion was right about the mechanism
+    and wrong about the intent, and that distinction is the whole content of the change.
+
+    The old test guarded that `open_objections()` was read and not the raw `objections` list. That
+    is still guarded -- `binding_objections` folds the same dispositions in the same order. What
+    changed is WHICH disposition releases a column. On this pipeline the fix for a column objection
+    IS the drop, so `resolved` cannot also mean "put it back": `_forced_drops` recomputes on every
+    invocation, so a resolved objection plus a later return to feature_eng for some unrelated
+    reason silently resurrected the leaked column. Harmless across a single pass, which is why the
+    old test read as correct for so long; reachable across two, which `objection_routing=
+    "by_category"` produces routinely and `objection_closure="on"` produces more.
+
+    `withdrawn` is now the only release, and `test_a_withdrawn_objection_releases_its_drop` below
+    is what stops this from meaning "objections are immortal". See DECISIONS.md 2026-08-28 (fourth
+    entry) and evals/results/LOG.md, "A latent bug found while diagnosing this cell".
+    """
+    objection = _planted_column_objection()
     tools = tools_for()
-    model = empty_plan_model()
 
     feature_eng(
-        state(objections=[objection], review_passes=[review_pass]), tools=tools, model=model
+        state(objections=[objection], review_passes=[_pass_disposing(objection, "resolved")]),
+        tools=tools,
+        model=empty_plan_model(),
+    )
+
+    assert "account_status_code" in tools.code_run[0]
+
+
+def test_a_withdrawn_objection_releases_its_drop():
+    """The escape hatch, and the reason the reversal above is not "objections are immortal".
+
+    `withdrawn` means the reviewer no longer thinks it was a problem, which is the opposite claim
+    to `resolved`. It is also the only route back for a false positive: `by_category` dropped
+    `prior_claims_12m`, a legitimate strong feature, in 2 of 10 runs, and without this a reviewer
+    mistake would be permanent for the rest of the run.
+    """
+    objection = _planted_column_objection()
+    tools = tools_for()
+
+    feature_eng(
+        state(objections=[objection], review_passes=[_pass_disposing(objection, "withdrawn")]),
+        tools=tools,
+        model=empty_plan_model(),
     )
 
     assert "DROP = ['churned', 'customer_id']" in tools.code_run[0]
+
+
+def test_a_not_reviewed_objection_still_forces_its_drop():
+    """Silence is not release, matching REVIEWER_SYSTEM's rule that leaving an objection out of
+    `dispositions` means "I did not look at it again"."""
+    objection = _planted_column_objection()
+    tools = tools_for()
+
+    feature_eng(
+        state(objections=[objection], review_passes=[_pass_disposing(objection, "not_reviewed")]),
+        tools=tools,
+        model=empty_plan_model(),
+    )
+
+    assert "account_status_code" in tools.code_run[0]
+
+
+def test_a_resolved_objection_stays_dropped_across_a_second_return():
+    """The bug's actual shape, as the regression guard: the objection is raised and acted on in
+    pass 0, resolved in pass 1, and the run returns to this node again for some other reason. The
+    column must not come back."""
+    objection = _planted_column_objection()
+    tools = tools_for()
+
+    feature_eng(
+        state(
+            objections=[objection],
+            review_passes=[
+                _pass_disposing(objection, "still_open", iteration=0),
+                _pass_disposing(objection, "resolved", iteration=1),
+            ],
+        ),
+        tools=tools,
+        model=empty_plan_model(),
+    )
+
+    assert "account_status_code" in tools.code_run[0]
 
 
 def _misaddressed_importance_objection() -> Objection:

@@ -135,6 +135,21 @@ REVIEWER_PROMPTS: tuple[ReviewerPrompt, ...] = ("base", "which_column")
 ObjectionRouting = Literal["as_addressed", "by_category"]
 OBJECTION_ROUTINGS: tuple[ObjectionRouting, ...] = ("as_addressed", "by_category")
 
+# Whether the reviewer was told what "done" looks like. The observed failure, live on 2026-08-28:
+# across three diagnostic runs the reviewer dispositioned nothing `resolved`, and in the clearest
+# one the pipeline dropped both planted columns, the claimed roc_auc fell 0.986 -> 0.823, the
+# reviewer WROTE that the fall was consistent with removing leakage -- and held the objection open
+# anyway, because the columns "were never validated as non-leaking, only removed". That is an
+# unfalsifiable standard: a reviewer holding one can never let a run pass, so every run grinds to
+# the cap and `exhausted` stops being evidence that the fix did not land. `on` appends one rule
+# pointing at `final_features`, a field the reviewer is already shown.
+#
+# Its own axis rather than a third `ReviewerPrompt` value, because the two rules are independent
+# conditions: bundling them would mean closure could never be measured without `which_column`
+# attached, and the two effects could never be attributed separately.
+ObjectionClosure = Literal["off", "on"]
+OBJECTION_CLOSURES: tuple[ObjectionClosure, ...] = ("off", "on")
+
 Disposition = Literal["still_open", "resolved", "withdrawn", "not_reviewed"]
 
 
@@ -194,6 +209,16 @@ class RunConfig(Contract):
         "carry this would be averaged with rows from the other. Note it changes what `feature_eng` "
         "and `modeler` are SHOWN as well as where the run goes -- both read "
         "`open_objections(target)` -- so it is not a pure edge change.",
+    )
+    objection_closure: ObjectionClosure = Field(
+        default="off",
+        description="Whether the reviewer was given a termination condition it can check: `off`, "
+        "byte-identical to every prompt before 2026-08-28, or `on`, which appends one rule saying "
+        "an objection about a column is answered when that column is absent from "
+        "`final_features`. On the frozen config for the same reason every other condition is, and "
+        "with a specific hazard of its own: a prompt that buys termination by teaching the "
+        "reviewer to say 'fixed' is worse than no prompt, so `objections_falsely_resolved` is on "
+        "the results row beside it.",
     )
     random_seed: int = 20260822
     dataset_hash: str | None = None
@@ -586,6 +611,48 @@ class PipelineState(Contract):
         if objected is not None and self.final_features:
             unremediated = sorted(objected & set(self.final_features))
 
+        # Closure, as something measured rather than hoped for. `objections_open_at_end` says how
+        # many were never closed; these say HOW the closed ones closed and whether the closure was
+        # honest. `resolved` and `withdrawn` are split because they are opposite claims about the
+        # reviewer -- one says the fix landed, the other says the objection was wrong -- and
+        # because `binding_objections` now acts on that difference, so a row that conflated them
+        # could not be used to reason about what feature_eng actually dropped. No committed row
+        # before 2026-08-28 splits them, which is why the sticky-drop screen of those rows could
+        # not be resolved past "at risk".
+        #
+        # Gated exactly as `reviewer_nominated` and friends are. A reviewer that ran and closed
+        # nothing is a REAL 0, not a `None`: that 0 is the entire pre-closure finding, and
+        # collapsing it into "not measured" would delete the control's result.
+        latest = self.latest_dispositions()
+        by_id = {o.id: o for o in self.objections}
+        n_resolved: int | None = None
+        n_withdrawn: int | None = None
+        falsely_resolved: int | None = None
+        if self.config.reviewer_enabled and self.review_passes:
+            n_resolved = sum(1 for d in latest.values() if d == "resolved")
+            n_withdrawn = sum(1 for d in latest.values() if d == "withdrawn")
+            # The failure mode `objection_closure="on"` creates and nothing before it could: an
+            # objection marked `resolved` whose column is still in the matrix. A prompt that buys
+            # termination by teaching the reviewer to say "fixed" is worse than no prompt, and
+            # this is the only column that would catch it. Counted over objections rather than
+            # columns because the unit being scored is the reviewer's judgement act, and over
+            # column-scoped categories only -- a `resolved` `overfit` objection names no column
+            # and cannot be checked this way.
+            #
+            # `None` on an empty matrix for the same reason as `leakage_remediated`: an empty
+            # matrix contains no column, so every resolution would score honest, and the
+            # inflation would flatter the arm under test.
+            if self.final_features:
+                final = set(self.final_features)
+                falsely_resolved = sum(
+                    1
+                    for oid, disposition in latest.items()
+                    if disposition == "resolved"
+                    and (objection := by_id.get(oid)) is not None
+                    and objection.category in COLUMN_SCOPED_CATEGORIES
+                    and set(objection.columns) & final
+                )
+
         passes = sorted(self.review_passes, key=lambda rp: rp.iteration)
 
         claimed = self.chosen_model.claimed_holdout_score if self.chosen_model else None
@@ -609,6 +676,7 @@ class PipelineState(Contract):
             "naming": self.config.naming,
             "loop_cap": self.config.loop_cap,
             "objection_routing": self.config.objection_routing,
+            "objection_closure": self.config.objection_closure,
             "random_seed": self.config.random_seed,
             # scores. `claimed` is what the agent said; `verified` is what we measured.
             "claimed_holdout_score": claimed,
@@ -660,6 +728,9 @@ class PipelineState(Contract):
             "objections_raised": len(self.objections),
             "objections_by_category": by_category,
             "objections_open_at_end": len(self.open_objections()),
+            "objections_resolved": n_resolved,
+            "objections_withdrawn": n_withdrawn,
+            "objections_falsely_resolved": falsely_resolved,
             # who the reviewer asked to fix it, whether anything was fixed, and where the loop
             # actually went. Between them these separate "the reviewer was wrong" from "the
             # reviewer was right and told a node that has no lever".
@@ -704,16 +775,66 @@ class PipelineState(Contract):
         `config.objection_routing="by_category"` a column-scoped objection answers to
         `feature_eng` whatever the reviewer wrote; see `effective_target`.
         """
-        latest: dict[str, Disposition] = {}
-        for review in sorted(self.review_passes, key=lambda r: r.iteration):
-            latest.update(review.dispositions)
         closed = {
-            oid for oid, disposition in latest.items() if disposition in {"resolved", "withdrawn"}
+            oid
+            for oid, disposition in self.latest_dispositions().items()
+            if disposition in {"resolved", "withdrawn"}
         }
         pending = [o for o in self.objections if o.id not in closed]
         if target_node is not None:
             pending = [o for o in pending if self.effective_target(o) == target_node]
         return pending
+
+    def latest_dispositions(self) -> dict[str, Disposition]:
+        """Last-write-wins disposition per objection id, folded in iteration order.
+
+        One implementation of the fold, because there were three: this, `open_objections`, and
+        `reporter._objection_status`. The ordering is load-bearing rather than incidental -- see
+        `open_objections` for the pass-2-resolved, pass-3-reopened case that a set union gets
+        wrong -- so three copies were three chances to get it wrong differently.
+        """
+        latest: dict[str, Disposition] = {}
+        for review in sorted(self.review_passes, key=lambda r: r.iteration):
+            latest.update(review.dispositions)
+        return latest
+
+    def binding_objections(self, target_node: RoutableNode | None = None) -> list[Objection]:
+        """Objections whose named columns must stay OUT of the feature matrix.
+
+        NOT the same question as `open_objections`, and the difference is the whole point of the
+        method existing. `open_objections` answers "what is still being complained about" and
+        closes on `resolved` OR `withdrawn`. This answers "what must stay dropped" and releases
+        only on `withdrawn`.
+
+        The reason is that on this pipeline the fix for a column objection IS the drop.
+        `feature_eng._forced_drops` recomputes from scratch on every entry, so while it read
+        `open_objections`, an objection the reviewer marked `resolved` stopped forcing its drop and
+        the next return to that node -- for any unrelated reason -- silently put the leaked column
+        back in the matrix. `resolved` would have un-fixed itself. `withdrawn` is the reviewer
+        saying it was never a problem, which is the opposite claim, and it is the only route back
+        for a false positive: `objection_routing="by_category"` dropped a legitimate strong feature
+        in 2 of 10 runs, and without a release that mistake would be permanent for the rest of the
+        run. `not_reviewed` binds, for the same reason REVIEWER_SYSTEM forbids silence-as-approval.
+
+        This has exactly ONE caller in the graph, `feature_eng._forced_drops`, and that is the
+        invariant to check before adding a second. The router's `_route_for_block` and the
+        reviewer's own `_user_message` must keep asking `open_objections`: a resolved objection
+        that still routed the run upstream would loop to the cap on every run and make `exhausted`
+        structurally guaranteed, and one still shown to the reviewer would be re-adjudicated
+        forever. Either would destroy the signal the closure arm exists to make honest.
+
+        `target_node` means who ACTS, resolved through `effective_target`, so this inherits
+        `config.objection_routing` rather than becoming a second answer to that question.
+        """
+        released = {
+            oid
+            for oid, disposition in self.latest_dispositions().items()
+            if disposition == "withdrawn"
+        }
+        binding = [o for o in self.objections if o.id not in released]
+        if target_node is not None:
+            binding = [o for o in binding if self.effective_target(o) == target_node]
+        return binding
 
     def placeholder_models(self) -> list[str]:
         """Model names in the trace that are placeholders rather than a real client.

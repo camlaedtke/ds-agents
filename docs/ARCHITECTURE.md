@@ -36,7 +36,8 @@ See `src/ds_agents/state.py`. Two rules shape it:
 Invariants worth stating explicitly:
 
 - `RunConfig` is frozen. It carries `run_id`, `arm`, `reviewer_enabled`, `reviewer_model`,
-  `default_model`, `loop_cap`, `reviewer_sees_code`, `naming`, `random_seed` and `dataset_hash`.
+  `default_model`, `loop_cap`, `reviewer_sees_code`, `naming`, `reviewer_prompt`,
+  `objection_routing`, `objection_closure`, `random_seed` and `dataset_hash`.
   Every results row is self-describing from the state object alone — without it, "reviewer
   disabled" and "reviewer crashed" are the same row, and a descriptive run and an opaque one over
   byte-identical rows are the same row too.
@@ -277,11 +278,16 @@ zero when `profile` is None: a profiler that crashed nominated nothing in a diff
 that looked and declined.
 
 Conditions: `arm`, `reviewer_enabled`, `reviewer_model`, `reviewer_sees_code`, `loop_cap`,
-`naming`, `random_seed`, straight off the frozen `RunConfig`.
+`naming`, `reviewer_prompt`, `objection_routing`, `objection_closure`, `random_seed`, straight off
+the frozen `RunConfig`.
 
 Loop: `review_verdict`, `review_loops`, `objections_raised`, `objections_by_category`,
-`objections_open_at_end`. Plus four fields that say why a caught leak was not fixed, added
-2026-08-28 after 9-of-10 caught turned out to be 1-of-10 remediated:
+`objections_open_at_end`, and -- added 2026-08-28 with the closure axis, because
+`objections_open_at_end` conflates two opposite claims about the reviewer -- `objections_resolved`,
+`objections_withdrawn` and `objections_falsely_resolved`, the last being an objection marked
+`resolved` while one of its columns is still in `final_features`. Plus four fields that say why a
+caught leak was not fixed, added 2026-08-28 after 9-of-10 caught turned out to be 1-of-10
+remediated:
 `objections_by_target_node` (who the reviewer asked to act -- an objection addressed to `modeler`,
 which has no column lever, is a correct finding that cannot land), `objected_columns_unremediated`
 (column-scoped objected columns still in `final_features`; `None` when no pass completed or the

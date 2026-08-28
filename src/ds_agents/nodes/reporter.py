@@ -200,14 +200,12 @@ def _model_section(state: PipelineState) -> list[str]:
 def _objection_status(state: PipelineState) -> dict[str, str]:
     """Latest disposition per objection id, across every pass, defaulting to `not_reviewed`.
 
-    Mirrors the fold in `PipelineState.open_objections()` but keeps the whole history rather than
-    filtering down to what is still open -- the report needs to show resolved and withdrawn
-    objections too, distinguishably from ones the reviewer never revisited.
+    The fold itself lives on `PipelineState.latest_dispositions()`; this keeps the whole history
+    rather than filtering down to what is still open, because the report needs to show resolved
+    and withdrawn objections too, distinguishably from ones the reviewer never revisited. It was
+    a third copy of the ordering rule until 2026-08-28.
     """
-    latest: dict[str, str] = {}
-    for review in sorted(state.review_passes, key=lambda r: r.iteration):
-        latest.update(review.dispositions)
-    return latest
+    return dict(state.latest_dispositions())
 
 
 def _objection_row(o: Objection, status: str) -> list[Any]:

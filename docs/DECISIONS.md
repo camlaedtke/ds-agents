@@ -807,3 +807,83 @@ number is *reviewer detection plus scripted dispatch*. It is never "the agent te
 10". The claim the arm can support is that the pipeline's contract, not the reviewer's competence,
 was the binding constraint on remediation -- which is a finding about our design and is worth having
 precisely because it is not a finding about the model.
+
+## 2026-08-28 (fourth entry): a resolved objection keeps its column out, and the closure arm's
+## premise gets checked before it gets funded.
+
+Two changes here, one a bug fix and one a condition, plus a finding that arrived between them and
+changed what the condition is for.
+
+**The bug: resolution un-fixed itself.** `feature_eng._forced_drops` recomputes from scratch on
+every entry to the node, and it read `open_objections("feature_eng")`. `open_objections` closes on
+`resolved` OR `withdrawn`, so the moment the reviewer marked a column objection `resolved`, the
+column stopped being force-dropped -- and the next return to `feature_eng`, for any unrelated
+reason, put it back in the matrix. Verified directly against the node: with the objection open the
+snippet reads `DROP = ['account_status_code', 'churned', 'customer_id']`; with it resolved,
+`DROP = ['churned', 'customer_id']`. `test_a_resolved_objection_does_not_force_a_drop` had pinned
+that as intended behaviour since the day this node learned about objections, and across a single
+pass it is indistinguishable from correct, which is why it survived. `objection_routing=
+"by_category"` produces the two-return shape routinely and closure would produce it more, so the
+fix had to land before the arm or the arm would have been measured on top of it.
+
+The fix is a second named question rather than a flag on the first. `PipelineState.
+binding_objections` answers "what must stay OUT of the matrix" and releases only on `withdrawn`;
+`open_objections` still answers "what is still being complained about" and closes on both. The
+distinction is not pedantry: on this pipeline the fix for a column objection IS the drop, so
+`resolved` cannot also mean "put it back", while `withdrawn` -- the reviewer saying it was never a
+problem -- is the opposite claim and is the only route back for a false positive. That matters
+because `by_category` dropped `prior_claims_12m`, a legitimate strong feature, in 2 of 10 runs.
+A boolean parameter on `open_objections` was rejected: it presents two questions as one question
+with a switch, on a method with six call sites, and the names are the documentation. The blast
+radius is the invariant to check -- `binding_objections` has exactly one caller in the graph. The
+router must keep asking `open_objections`, or a resolved objection would route the run upstream
+forever and every run would end `exhausted`; so must the reviewer's own facts, or it would
+re-adjudicate what it already closed and closure would be a treadmill rather than a termination
+condition. Both are pinned by tests that passed before the fix and must keep passing after it.
+The fix is unconditional rather than a fifth ablation axis, because the un-sticky arm is a
+known-buggy pipeline and measuring it would measure nothing. It is not free: 7 of 84 committed rows
+meet the necessary condition for the old behaviour to have fired, 4 of them in the cell that would
+otherwise have been the closure control, which is why that control is re-run rather than reused.
+
+**The condition: `objection_closure`, a `Literal["off", "on"]` on the frozen `RunConfig`,
+defaulting to the byte-identical old prompt.** `on` appends one rule saying an objection about a
+column is answered when that column is absent from `final_features`. Two choices inside that are
+worth recording. It is a prompt rule and not node-side auto-resolution, because the node could
+trivially mark the objection resolved itself and that would take the reviewer out of the decision:
+the honesty metric below would be structurally zero and the arm would measure the pipeline rather
+than the agent. And it is its own axis rather than a third `reviewer_prompt` value, because the
+rules are independent -- bundling would mean closure could never be measured without `which_column`
+attached and the two effects could never be attributed separately. The criterion is mechanical
+absence rather than "the claimed score is back in a plausible band" for a reason worth more than
+simplicity: the reviewer has no plausible band, and any band we supplied would be derived from the
+fixture's known legitimate ceiling. That is the answer key, injected into the one judgement the
+whole project exists to measure. `final_features` is a field the reviewer is already shown.
+
+**The finding, which arrived before the money did.** The arm was designed against a diagnosis in
+NEXT.md and PLAN.md: the reviewer never dispositions an objection `resolved`, so `exhausted` is a
+default rather than evidence. Re-reading the control cell's own committed rows before running
+anything, that diagnosis does not hold at n=10. Eight of the ten routing rows closed at least one
+objection, including all four that ended `exhausted`; and all four of those raised a *new* objection
+on their *final* pass, which the cap routes straight to the reporter. They did not exhaust by
+refusing to close. They exhausted because the reviewer names one trap per pass and the cap cuts the
+sequence off. The original diagnosis rests on n=3 diagnostic runs that predate the routing arm.
+
+What is still unknown is whether those closures are `resolved` or `withdrawn`, because no row
+written before today splits them -- `objections_open_at_end` conflates two opposite claims about the
+reviewer, and that same gap is why the sticky-drop screen above cannot resolve its 7 at-risk rows
+past "at risk". `objections_resolved` and `objections_withdrawn` are on the results row from this
+commit for that reason, alongside `objections_falsely_resolved`: an objection marked `resolved`
+while one of its columns is still in `final_features`. That last one is the arm's falsifier and the
+reason the arm is worth running carefully rather than eagerly -- a prompt that buys termination by
+teaching the reviewer to say "fixed" is worse than no prompt, and nothing on any earlier row would
+have caught it. All three are pure derivations from state the pipeline already had; no node changed
+to produce them.
+
+So the control cell is pre-registered as a decision gate rather than as a baseline, with the
+stopping rule fixed in advance in `evals/results/LOG.md`: if the reviewer already resolves honestly
+without being told how, the arm is not run and that is the finding. Pre-registering a metric whose
+direction you cannot predict is pre-registering a coin flip, and the same applies to funding an arm
+whose premise you have not checked. `leakage_remediated` is recorded as a non-inferiority guardrail
+here and explicitly not as the endpoint, because closure ends the loop *earlier* and `claims_timing`
+plants two traps: a reviewer that resolves after the first drop never reaches the pass in which it
+would have named the second. It is allowed to fall, and that is written down before the run.
