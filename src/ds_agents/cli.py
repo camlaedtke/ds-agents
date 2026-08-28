@@ -38,6 +38,7 @@ def _fixture_state(
     reviewer_model_name: str | None = None,
     naming: Naming = "descriptive",
     reviewer_prompt: ReviewerPrompt = "base",
+    loop_cap: int = 3,
 ) -> PipelineState:
     """The starting state for one run of `fixture` under one naming condition.
 
@@ -68,6 +69,11 @@ def _fixture_state(
             # bullet in the reviewer's system prompt, so an unrecorded prompt would confound
             # every reviewer-model number written after it existed.
             reviewer_prompt=reviewer_prompt,
+            # Set at construction because `RunConfig` is frozen, and recorded for the same reason
+            # every other condition is: the cap decides how many chances feature_eng gets to act
+            # on an objection, so two rows written under different caps are not comparable and
+            # must not be averaged by anyone who has forgotten which was which.
+            loop_cap=loop_cap,
         ),
         dataset_id=fixture.dataset_id,
         # No `spec`: naming the target is intake's job, and pre-filling it here would skip the
@@ -178,6 +184,12 @@ def cmd_run(args: argparse.Namespace) -> int:
         print(f"--repeat must be at least 1, got {args.repeat}", file=sys.stderr)
         return 2
 
+    # Caught here rather than left to `RunConfig`'s `ge=0`, so a typo is the exit-code-2 pattern
+    # beside it and not a Pydantic traceback.
+    if args.loop_cap < 0:
+        print(f"--loop-cap cannot be negative, got {args.loop_cap}", file=sys.stderr)
+        return 2
+
     root = Path(args.artifacts_dir) if args.artifacts_dir else Path(tempfile.mkdtemp())
     # Materialised once per invocation, not once per repetition: every run in an arm must see the
     # same bytes, and rewriting the file ten times is ten chances for them not to.
@@ -221,7 +233,12 @@ def _run_once(
     """
     tools = _select_tools(args.tools, root, dataset_path, fixture.dataset_id)
     state = _fixture_state(
-        fixture, args.model, args.reviewer_model, args.naming, args.reviewer_prompt
+        fixture,
+        args.model,
+        args.reviewer_model,
+        args.naming,
+        args.reviewer_prompt,
+        args.loop_cap,
     )
     model = _select_model(state.config, no_live=args.no_live)
     reviewer_model = _select_reviewer_model(state.config, model, no_live=args.no_live)
@@ -360,6 +377,14 @@ def _build_parser() -> argparse.ArgumentParser:
         default=1,
         help="run the pipeline N times (default: 1). Each repetition gets its own artifacts "
         "directory. Model nondeterminism is the whole variance here -- the seed does not move.",
+    )
+    run.add_argument(
+        "--loop-cap",
+        type=int,
+        default=3,
+        help="how many completed reviewer passes a run may have (default: 3). The cap permits "
+        "N passes and N-1 returns upstream; a block at the cap becomes the `exhausted` verdict, "
+        "never a pass. This is the Phase 5 loop-cap ablation lever.",
     )
     run.add_argument(
         "--results",

@@ -627,6 +627,149 @@ class TestResultsRowBranches:
         assert row["false_alarm_standing"] == 0
 
 
+class TestWhyTheLoopDidNotConverge:
+    """The four fields that separate "the reviewer was wrong" from "the reviewer was right and
+    told a node with no lever".
+
+    The gap these close, observed live on 2026-08-28: 9 of 10 opaque Haiku runs named a planted
+    trap and 1 of 10 removed it. The committed rows could not say why, because nothing on them
+    recorded who the objection was addressed to, where the loop actually went, or whether an
+    objected column was still in the matrix at the end. Diagnostic runs found two causes -- an
+    `implausible_importance` objection routed to `modeler`, which has no column lever at all, and
+    a reviewer that never dispositions its own objection `resolved` even after the drop lands.
+    Each field below is what makes one of those visible in a results file.
+    """
+
+    def _state(
+        self,
+        objections: list[Objection],
+        *,
+        final_features: list[str] | None = None,
+        passes: list[ReviewPass] | None = None,
+    ) -> PipelineState:
+        return PipelineState(
+            dataset_id="toy",
+            task_description="x",
+            planted_leakage_columns=["leaky_col"],
+            objections=objections,
+            final_features=final_features,
+            review_passes=passes or [ReviewPass(iteration=1, claim="pass", routed_to="reporter")],
+        )
+
+    def test_target_node_counts_split_by_who_was_asked(self):
+        """The misrouting signature: two objections, one addressed to a node that can act and one
+        to a node that cannot."""
+        row = self._state(
+            [
+                leak_objection(columns=["leaky_col"]),
+                leak_objection(
+                    category="implausible_importance",
+                    subcategory="importance_dominance",
+                    target_node="modeler",
+                    columns=["leaky_col"],
+                ),
+            ]
+        ).results_row()
+        assert row["objections_by_target_node"] == {"feature_eng": 1, "modeler": 1}
+
+    def test_target_node_counts_always_have_every_key(self):
+        """Same reason `objections_by_category` does: a missing key and a zero must not be the
+        same thing to whoever averages these later."""
+        row = self._state([]).results_row()
+        assert row["objections_by_target_node"] == {"feature_eng": 0, "modeler": 0}
+
+    def test_an_objected_column_still_in_the_matrix_is_unremediated(self):
+        row = self._state(
+            [leak_objection(columns=["leaky_col"])],
+            final_features=["leaky_col", "region"],
+        ).results_row()
+        assert row["objected_columns_unremediated"] == ["leaky_col"]
+
+    def test_dropping_the_objected_column_empties_the_list(self):
+        row = self._state(
+            [leak_objection(columns=["leaky_col"])], final_features=["region"]
+        ).results_row()
+        assert row["objected_columns_unremediated"] == []
+
+    def test_unremediated_spans_every_column_scoped_category(self):
+        """`implausible_importance` is the category the live reviewer actually uses, so a field
+        that only looked at `leakage` would have reported an empty list on every run that
+        motivated it."""
+        row = self._state(
+            [
+                leak_objection(
+                    category="implausible_importance",
+                    subcategory="importance_dominance",
+                    target_node="modeler",
+                    columns=["leaky_col"],
+                )
+            ],
+            final_features=["leaky_col"],
+        ).results_row()
+        assert row["objected_columns_unremediated"] == ["leaky_col"]
+
+    def test_an_empty_matrix_is_null_not_an_empty_list(self):
+        """Matches `leakage_remediated`: a feature_eng that produced nothing has not remediated
+        anything, and scoring it as a clean list would inflate the headline rate with runs that
+        produced no model."""
+        row = self._state([leak_objection(columns=["leaky_col"])], final_features=[]).results_row()
+        assert row["objected_columns_unremediated"] is None
+        assert row["leakage_remediated"] is None
+
+    def test_a_reviewer_that_never_looked_is_null_not_an_empty_list(self):
+        """Same guard `reviewer_nominated` uses. An empty list here would say "columns were
+        objected to and all of them were dropped", which is the opposite of what the
+        reviewer-off arm did."""
+        state = PipelineState(
+            dataset_id="toy",
+            task_description="x",
+            planted_leakage_columns=["leaky_col"],
+            final_features=["leaky_col"],
+            config=RunConfig(reviewer_enabled=False),
+        )
+        row = state.results_row()
+        assert row["objected_columns_unremediated"] is None
+        assert row["reviewer_nominated"] is None
+
+    def test_a_reviewer_that_looked_and_raised_nothing_is_an_empty_list(self):
+        """The other side of the guard above: a completed pass that objected to nothing has
+        nothing unremediated, and that zero is real rather than missing."""
+        row = self._state([], final_features=["leaky_col"]).results_row()
+        assert row["objected_columns_unremediated"] == []
+
+    def test_route_sequence_and_new_objections_follow_iteration_order(self):
+        """Constructed out of order on purpose: `review_passes` is an append-reduced list and
+        nothing guarantees the order it arrives in."""
+        first = leak_objection(columns=["leaky_col"])
+        second = leak_objection(columns=["other_col"], raised_at_iteration=1)
+        row = self._state(
+            [first, second],
+            final_features=["region"],
+            passes=[
+                ReviewPass(
+                    iteration=2,
+                    claim="block",
+                    routed_to="reporter",
+                    new_objection_ids=[second.id],
+                ),
+                ReviewPass(
+                    iteration=1,
+                    claim="block",
+                    routed_to="feature_eng",
+                    new_objection_ids=[first.id],
+                ),
+            ],
+        ).results_row()
+        assert row["route_sequence"] == ["feature_eng", "reporter"]
+        assert row["new_objections_per_pass"] == [1, 1]
+
+    def test_a_run_with_no_pass_has_empty_sequences(self):
+        state = PipelineState(dataset_id="toy", task_description="x")
+        row = state.results_row()
+        assert row["route_sequence"] == []
+        assert row["new_objections_per_pass"] == []
+
+
 # --- the placeholder guard --------------------------------------------------------------------
 # Nothing structurally stopped a StubModel run from being written to a results file. These cover
 # the gate that does.

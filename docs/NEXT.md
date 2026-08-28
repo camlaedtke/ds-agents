@@ -1,83 +1,89 @@
 # Next session
 
 ## Start here
-**Phase 3's central question is answered and the answer is that the reviewer's leakage miss was a
-prompt limit, not a capability limit.** The Haiku-versus-Sonnet arm was run as a 2x2 against a
-second condition, `reviewer_prompt`, because the prompt was a confound under any model number.
-27 live rows are committed at `evals/results/2026-08-28_reviewer-ablation.jsonl` ($1.04, all from
-commit `2d5c1fc`), on `claims_timing --naming opaque` with Haiku upstream in every cell:
+**The remediation bottleneck is diagnosed and it was not the loop cap.** A pre-registered sweep at
+`loop_cap` 1/3/5, n=10 each on `claims_timing --naming opaque --reviewer-prompt which_column`, moves
+remediation 0, 1, 1 out of 10 while cost per run quadruples ($0.0141 -> $0.0553). 20 rows at
+`evals/results/2026-08-28_loop-cap-sweep.jsonl`; the cap=3 arm is the haiku/which_column cell of the
+reviewer ablation, reused rather than re-run. Record it as the Phase 5 loop-cap ablation and as a
+null result on remediation.
 
-| cell | n | named >=1 planted trap | mean `reviewer_recall` | mean $ |
-| ---- | - | ---------------------- | ---------------------- | ------ |
-| haiku / base          | 10 | 1/10 | 0.05 | 0.015 |
-| haiku / which_column  | 10 | 9/10 | 0.70 | 0.030 |
-| sonnet / base         | 4  | 0/4  | 0.00 | 0.078 |
-| sonnet / which_column | 3  | 2/3  | 0.67 | 0.093 |
+**Two causes instead, both independent of the cap**, found from three diagnostic runs ($0.10) and
+confirmed by the sweep. First, **routing**: `feature_eng` force-drops an objected column before its
+own model is consulted, but only for objections whose `target_node` is `feature_eng`. The reviewer
+under `which_column` overwhelmingly raises `implausible_importance`, which is an objection about a
+*score*, and `REVIEWER_SYSTEM` sends anything about "how the run was evaluated" to `modeler` -- a
+node with no column lever at all, since every candidate is fit on the one transform `feature_eng`
+already froze. Second, **closure**: across 3 diagnostic runs the reviewer never dispositioned an
+objection `resolved`. The clearest run dropped both traps, watched the claimed roc_auc fall
+0.986 -> 0.823, wrote that this "is consistent with removing leakage", and held the objection open
+because the columns "were never validated as non-leaking, only removed" -- an unfalsifiable
+standard. **So `exhausted` is not evidence the trap shipped.** `leakage_remediated` is the field
+that answers that and it is the one to quote.
 
-The manipulation is one appended bullet in `REVIEWER_SYSTEM` (`WHICH_COLUMN_RULE` in
-`nodes/reviewer.py`): if the claimed score is implausible, read `top_importances` from the *top* and
-name the column that explains it. It names no fixture, column or trap type. That one rule moves
-Haiku from 1/10 to 9/10; Sonnet under the base prompt is 0/4, no better than Haiku. Under `base`
-both models object about the *number* (`metric_mismatch`, `overfit`) and never name a column --
-`objections_by_category` makes this legible now. Upstream controls agree across all four cells
-(`profiler_recall` 0.17-0.25, false alarm 1.0-1.33, trap survived 25 of 27), so nothing moved above
-the reviewer and the cell differences are the reviewer's.
+**The one number that carries the session.** Across all 27 rows now carrying `route_sequence`:
+0 of the 21 runs that never routed to `feature_eng` remediated, against 3 of the 6 that did.
+Reaching `feature_eng` is necessary and not sufficient.
 
-**Four things to know before touching anything.** First, **the bottleneck moved downstream**: 8 of
-10 Haiku `which_column` runs end `exhausted`, so a 9/10 catch rate is a 1/10 remediation rate. The
-reviewer names the trap, the loop cap expires before `feature_eng` removes it. That is now the most
-actionable open problem and it is a different problem than the one this session started with.
-Second, **the Sonnet cells are underpowered on purpose** -- Sonnet cost $0.078-0.093 per run against
-a budgeted $0.035 (it blocks, so it runs three reviewer passes at ~$0.03 each) and the pre-registered
-$1.20 cap bound them to n=4 and n=3. The model main effect is reported as *unresolved*, not absent.
-Third, **one run worked end to end for the first time in the project**: sonnet/which_column row 1
-named both traps, `feature_eng` dropped them, claimed roc_auc fell to 0.761 -- below the ~0.82
-legitimate ceiling -- and the verdict was `pass`. Fourth, `results_row()` now carries
-`reviewer_nominated/caught/recall/false_alarm` over all column-scoped categories plus
-`objections_by_category`; `leakage_*` deliberately keeps its narrow two-category definition so the
-naming-ablation rows stay comparable, and a test pins the divergence.
+**The Sonnet cells were topped to n=7 each** ($0.613, `2026-08-28_reviewer-ablation.jsonl`, now 34
+rows). The prompt effect holds and strengthens -- sonnet/base is 0 of 7. The model effect separated
+from it and **is not about detection**: under `which_column` Haiku names a trap in 9 of 10 runs and
+Sonnet in 5 of 7, so Haiku detects *more*, but Sonnet remediates 3 of 7 against Haiku's 1 of 10 and
+exhausts 1 of 7 against 8 of 10 -- because Sonnet addresses its objection to `feature_eng`.
+Directional at this n; the pre-registered rule is >=5/10. n=7 rather than the pre-registered n=8
+because the sweep overran its estimate; n was cut on cost alone before any Sonnet row was read.
 
-The floor: 412 tests pass in 66.6s full, ruff clean. `uv run ds-agents run --dataset toy` is green
-live -- leak dropped, `publishable: yes`, verdict `pass`, $0.0137.
+**What shipped in code.** `results_row()` gained `objections_by_target_node`,
+`objected_columns_unremediated`, `route_sequence` and `new_objections_per_pass`, all derived from
+`objections`/`review_passes`/`final_features` -- no node, tool or `PipelineState` change. `--loop-cap`
+became a real CLI flag; it had been on the frozen `RunConfig` and on every results row since the
+first one with no way to set it.
+
+The floor: 427 tests pass in 71.5s full, ruff clean. `uv run ds-agents run --dataset toy` is green
+live -- leak dropped, verdict `pass`, `publishable: yes`. Session spend ~$1.45 against a $1.50 cap.
 
 ## First prompt
 Read CLAUDE.md, docs/PLAN.md and the "Start here" above, then continue Phase 3 in plan mode on the
-**remediation bottleneck**: the reviewer now names the planted trap in 9 of 10 opaque Haiku runs and
-the trap is removed in 1 of them, because 8 of 10 runs hit the loop cap first. Diagnose before
-building -- pull two or three `exhausted` runs' report artifacts from
-`evals/results/2026-08-28_reviewer-ablation.jsonl` and establish *why* the loop does not converge
-(is `feature_eng` ignoring a well-formed objection, re-adding the column, or never seeing it?),
-since the three candidate fixes point in different directions: raise `loop_cap`, scope an objection
-to a candidate, or add an `unactionable` disposition. A `loop_cap` sweep is the cheap first
-measurement (1/3/5 at n=10, roughly $0.30 at Haiku prices with `--reviewer-prompt which_column`) and
-it doubles as the Phase 5 loop-cap ablation. Also decide whether to spend ~$0.85 topping the Sonnet
-cells to n>=10 this session or to defer it to Phase 5.
+**routing fix**, which is the last unticked Phase 3 item. The claim to beat: 0 of 21 runs that never
+routed to `feature_eng` remediated. Make a column-scoped objection reach the node that can act on
+it, and measure it against the committed haiku/which_column cell (n=10, 1/10 remediated, 8/10
+exhausted) with everything else held identical. Design the intervention first -- the options are not
+equivalent and one of them changes what the eval measures:
+
+1. **Route by category, not by the reviewer's choice.** `implausible_importance` naming a column is
+   a `feature_eng` problem whatever the reviewer calls it, so the router (or `_forced_drops`) could
+   ignore `target_node` for column-scoped categories. Cheapest, and it takes a decision away from
+   the model under test -- which is either the right call or quiet cheating, and that argument
+   belongs in DECISIONS.md before the code.
+2. **Fix the prompt instead**, the way `which_column` fixed detection: one rule saying a column-
+   scoped objection goes to `feature_eng`. Keeps the routing decision inside the system under test
+   and is a second prompt condition, so it needs to be recorded on `RunConfig` like the first one.
+3. **Give `modeler` a real lever**, so a `modeler`-targeted objection is not a dead end. Largest
+   change and it is Phase 4/5 scope.
+
+Then, separately, the **closure** half: the reviewer needs a termination condition it can observe.
+Do not bundle the two into one arm -- each needs its own before/after against the same cell.
 
 ## Open questions
 
-- **Why does the review loop not converge once the reviewer is right?** New and the most important.
-  9/10 caught, 1/10 remediated, 8/10 `exhausted`. Unknown whether `feature_eng` mishandles the
-  objection, the modeler re-promotes a candidate carrying the column, or the cap is simply too low
-  for a two-trap fixture. Diagnose from artifacts before changing anything.
-- **Two Haiku `which_column` runs hit a recoverable router error**, "reviewer claimed block with no
-  open objection", seen in no other cell. The reviewer raised something the node then dropped
-  (likely a column-scoped objection naming a column not in `known_columns`). Worth reading the
-  reviewer's filtering loop against those two runs -- it may be silently discarding correct
-  objections in the arm that raises the most of them.
-- **Should the Sonnet cells be topped up to n>=10?** ~$0.85. Until then the model main effect is
-  unresolved, and the writeup can only say "no evidence Sonnet helps under the base prompt at n=4".
-  Never top up after inspecting a cell's outcome fields; decide the n first.
-- **A legitimate objection with no available remedy is still not distinguishable from a false
-  alarm.** Unchanged from two sessions ago, and now much more consequential: it is a candidate
-  explanation for the 8 `exhausted` runs above. Options unchanged -- scope an objection to a
-  candidate, teach the modeler to drop a candidate in response, or add an `unactionable`
-  disposition.
-- **`customer_id` as a false positive is measured and it is every run.** `profiler_false_alarm` is
-  a stable ~1.0-1.3 per run in every cell of both ablations. Options unchanged (an `acceptable_flags`
+- **Is routing by category a fix or is it cheating?** The whole point of the reviewer is that it is
+  a model under test. Deciding `target_node` on its behalf makes the pipeline work and makes one
+  fewer thing measurable, and the naming-ablation precedent says record the condition rather than
+  argue about it. Settle this in DECISIONS.md before writing the code.
+- **What can the reviewer observe that closes its own objection?** It currently demands proof of
+  legitimacy, which no node can supply. Candidates: the column is absent from `final_features`
+  (mechanical, and the reviewer already sees it); the claimed score fell to within the plausible
+  band. Both are checkable from what the prompt already contains, so this may be a prompt fix rather
+  than a schema one -- which would make it a third recorded `reviewer_prompt` value.
+- **Sonnet remediates more while detecting less.** Solid enough to plan against, not solid enough to
+  publish at n=7. Worth ~$0.65 to take both `which_column` cells to n=10 once the routing fix has
+  landed, so it measures the fixed pipeline rather than the broken one.
+- **`customer_id` as a false positive is measured and it is every run.** `profiler_false_alarm` is a
+  stable ~1.0-1.3 per run in every cell of every ablation. Options unchanged (an `acceptable_flags`
   set, count id columns as planted, or publish and explain).
 - **Should `reissued_ids` get the naming treatment?** The name effect replicated on a second,
-  structurally different trap would be a much stronger claim. ~$0.70 and 20 minutes. Deliberately
-  scoped out twice now.
+  structurally different trap would be a much stronger claim. ~$0.70 and 20 minutes. Scoped out
+  three times now.
 - **Duplicate-rows-across-split is still unbuilt**, for the same structural reason: the reviewer
   never sees the split, the profile, or a row, and `results_row()` scores leakage as a set
   comparison over columns.
@@ -90,28 +96,36 @@ cells to n>=10 this session or to defer it to Phase 5.
 
 ## Parking lot
 
-- **The prompt arm roughly doubles wall time and cost** (1.2 to 2.7 mean loops). If `which_column`
-  becomes the default prompt, every downstream cost estimate in PLAN.md is low by ~2x.
-- **The hint-injection ablation now has a drawn boundary to cross.** `WHICH_COLUMN_RULE` points only
-  at a field the reviewer already receives and names no trap type; the parked hint-injection arm is
-  the version that deliberately tells the reviewer which *categories* of failure exist. Label it as
-  such when it runs -- the distinction is written up in DECISIONS.md 2026-08-28.
-- **Cost-per-caught-leak is now computable** and would be a good headline metric: $0.015/run at
-  1/10 versus $0.030/run at 9/10 is a 4.5x improvement in dollars per catch.
+- **Two live toy runs this session behaved differently**: one passed at a single reviewer pass, the
+  other took three. The non-termination described above reaches the toy fixture too, so the toy
+  run's cost varies 2-3x between invocations. Not a break -- the gate is the verdict, and it passes.
+- **The "reviewer claimed block with no open objection" error was not chased.** It appeared twice in
+  the committed haiku/which_column cell and in none of this session's 27 new rows. `route_sequence`
+  now makes it visible as a run whose only entry is `reporter`, so it is cheaper to find next time.
+- **`objections_by_target_node` and friends cannot be back-filled** onto the 27 rows written at
+  commit `2d5c1fc`. Any table crossing that boundary has to say so.
+- **Cost-per-remediated-leak is now computable and is a better headline than cost-per-catch.**
+  haiku/which_column is $0.30 per remediated run; sonnet/which_column is $0.21. The stronger model is
+  cheaper per unit of the thing that actually matters, which is a good line for the README.
+- **The prompt arm roughly doubles wall time and cost.** If `which_column` becomes the default, every
+  downstream cost estimate in PLAN.md is low by ~2x.
+- **The hint-injection ablation has a drawn boundary to cross.** `WHICH_COLUMN_RULE` points only at a
+  field the reviewer already receives and names no trap type; the parked hint-injection arm
+  deliberately tells the reviewer which *categories* of failure exist. Label it as such when it runs.
 - **`--results` is a stopgap and should be absorbed by Phase 4's harness**, not extended. It appends
-  `results_row()` behind `publishable()` and knows nothing about subsets, baselines or datasets. It
-  now also has no commit field, so the SHA lives only in `evals/results/LOG.md` by hand.
+  `results_row()` behind `publishable()` and knows nothing about subsets, baselines or datasets, and
+  has no commit field, so the SHA lives only in `evals/results/LOG.md` by hand.
 - **`cmd_run` has no per-run `try/except`**, so an unhandled API error ends a `--repeat` cell early.
-  Already-appended rows survive, so recovery is re-invoking with `--repeat <remaining>`. Retry
-  policy belongs in Phase 4's harness, not here.
-- **The opaque arm's numbering is dense and positional (`var_01..var_NN` in column order).** It
-  leaks nothing today, but a fixture with traps in a fixed position could become a learnable cue. A
-  seeded shuffle would fix it at the cost of readability by eye.
+  Already-appended rows survive; recovery is re-invoking with `--repeat <remaining>`. Retry policy
+  belongs in Phase 4's harness.
+- **The loop-cap default `3` is written in three places** (`RunConfig`, `_fixture_state`, argparse).
+  Two tests pin the chain, but one shared constant would be better.
+- **The opaque arm's numbering is dense and positional (`var_01..var_NN` in column order).** It leaks
+  nothing today, but a fixture with traps in a fixed position could become a learnable cue.
 - **A stub named anything but `"stub"` slips past `PLACEHOLDER_MODEL_NAMES`.** Only constructible in
-  a test (the CLI never names a stub), and `test_the_reviewer_model_binds_to_the_reviewer_node_only`
-  now does exactly that on purpose.
+  a test.
 - **`materialize` does untranslated I/O** (`newline=""` on both sides) to preserve byte identity for
-  a CSV generated on another platform. No committed fixture uses CRLF; the test does.
+  a CSV generated on another platform.
 - **`_fixture_state` derives its rename map from `naming` rather than taking both**, so the opaque
   arm cannot be claimed without the rename being applied.
 - **`load_fixture` raises `SystemExit` and `cmd_run` catches it.** `materialize`'s three
@@ -123,11 +137,11 @@ cells to n>=10 this session or to defer it to Phase 5.
 - **`_toy_state` is still a wrapper** around `_fixture_state(load_fixture("toy"))`.
 - **A per-item rule on a response schema is a whole-response rule.** Still worth checking `intake`
   and `modeler`'s LLM-facing schemas.
-- **The split manifest is still embedded in snippet text**, and the 1 MiB read cap makes it urgent
-  at Phase 4 sizes. Fix is `nodes/feature_eng.py`, `nodes/modeler.py` and their tests.
+- **The split manifest is still embedded in snippet text**, and the 1 MiB read cap makes it urgent at
+  Phase 4 sizes. Fix is `nodes/feature_eng.py`, `nodes/modeler.py` and their tests.
 - **Docker is deferred, not rejected, and `SandboxPool` is the seam.**
-- **The reviewer-off arm still runs the reviewer node** as a zero-cost no-op. `results_row()` now
-  reports `None` rather than 0.0 for the `reviewer_*` fields in that arm.
+- **The reviewer-off arm still runs the reviewer node** as a zero-cost no-op. `results_row()` reports
+  `None` rather than 0.0 for the `reviewer_*` fields, and now for `objected_columns_unremediated`.
 - `permutation_importance` costs `n_source_columns x n_repeats` scoring passes per candidate.
   Restrict to the best-by-CV candidate at Phase 4 sizes.
 - `_strip_value` in `state.py` returns on the first `BaseModel` in `get_args`.

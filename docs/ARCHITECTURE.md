@@ -279,7 +279,15 @@ that looked and declined.
 Conditions: `arm`, `reviewer_enabled`, `reviewer_model`, `reviewer_sees_code`, `loop_cap`,
 `naming`, `random_seed`, straight off the frozen `RunConfig`.
 
-Loop: `review_verdict`, `review_loops`, `objections_raised`, `objections_open_at_end`.
+Loop: `review_verdict`, `review_loops`, `objections_raised`, `objections_by_category`,
+`objections_open_at_end`. Plus four fields that say why a caught leak was not fixed, added
+2026-08-28 after 9-of-10 caught turned out to be 1-of-10 remediated:
+`objections_by_target_node` (who the reviewer asked to act -- an objection addressed to `modeler`,
+which has no column lever, is a correct finding that cannot land), `objected_columns_unremediated`
+(column-scoped objected columns still in `final_features`; `None` when no pass completed or the
+matrix is empty), `route_sequence` and `new_objections_per_pass` (where the loop actually went, and
+whether each pass re-raised the same objection or found a new one). All four are derived from
+`objections`, `review_passes` and `final_features` -- no node records its own remediation.
 
 Cost and reliability: `wall_seconds` (real elapsed, not the sum of node events), `cost_usd`,
 `errored`. The harness must emit a row for every dataset even on hard failure, or the hardest

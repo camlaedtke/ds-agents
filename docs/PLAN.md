@@ -126,7 +126,30 @@ read a manifest could read the answer key.
       arm listed under Phase 5 was pulled forward, because the opaque arm is the only configuration
       that reliably puts a leaky matrix in front of the reviewer and the prompt was a confound under
       any model number. The Sonnet cells are underpowered (n=4 and n=3) -- Sonnet cost $0.078-0.093
-      per run against a budgeted $0.035 and the pre-registered $1.20 cap bound them.
+      per run against a budgeted $0.035 and the pre-registered $1.20 cap bound them. **Topped up
+      2026-08-28 to n=7 per Sonnet cell** ($0.613). The prompt effect holds (sonnet/base 0 of 7).
+      The model effect separated from it and is not about detection: under `which_column` Haiku
+      names a trap more often (9/10 vs 5/7) and Sonnet remediates more often (3/7 vs 1/10), because
+      Sonnet addresses its objection to `feature_eng` rather than `modeler`. Directional at this n.
+- [x] Diagnose the remediation bottleneck. **The loop cap was never it.** A pre-registered sweep at
+      `loop_cap` 1/3/5, n=10 each on `claims_timing --naming opaque --reviewer-prompt which_column`,
+      moves remediation 0, 1, 1 out of 10 while quadrupling cost per run --
+      `evals/results/2026-08-28_loop-cap-sweep.jsonl`, 20 new rows at $0.694, with the cap=3 arm
+      reused from the reviewer ablation. Three diagnostic runs ($0.10) named two causes instead, and
+      both are independent of the cap: the reviewer addresses `implausible_importance` to `modeler`,
+      which has no column lever, so `feature_eng` never sees the objection; and it never dispositions
+      an objection `resolved`, even in a run that dropped both traps and watched the claimed score
+      fall to the legitimate ceiling. `exhausted` therefore is not evidence the trap shipped --
+      `leakage_remediated` is. See DECISIONS.md 2026-08-28 (second entry).
+- [x] `results_row()` carries why a caught leak was not fixed: `objections_by_target_node`,
+      `objected_columns_unremediated`, `route_sequence`, `new_objections_per_pass`, all derived from
+      existing state, no node changes. `--loop-cap` became a real CLI flag at the same time -- it had
+      been on the frozen `RunConfig` and on every results row since the first one, with no way to
+      set it.
+- [ ] Fix the remediation path. Deliberately deferred so it gets a controlled before/after against
+      the sweep above. Routing is the leading candidate (`implausible_importance` naming a column is
+      a `feature_eng` problem whatever the prompt calls it); a closure condition the reviewer can
+      actually observe is a second, separate change.
 
 ## Phase 4: Eval harness (3 to 5 sessions, plan mode)
 - [ ] evals/datasets/manifest.yaml with 10 to 15 OpenML / Kaggle playground datasets and
@@ -136,10 +159,13 @@ read a manifest could read the answer key.
 - [ ] LOG.md running
 
 ## Phase 5: Ablations and writeup (3 to 4 sessions)
-- [~] reviewer on/off, Haiku/Sonnet reviewer, single agent vs team, loop cap 1/3. The Haiku/Sonnet
-      reviewer arm ran early, in Phase 3, crossed with a prompt condition -- see
-      `evals/results/2026-08-28_reviewer-ablation.jsonl`. Its Sonnet cells need topping up to n>=10
-      (~$0.85) before publication. The rest are untouched.
+- [~] reviewer on/off, Haiku/Sonnet reviewer, single agent vs team, loop cap 1/3. Two of these ran
+      early, in Phase 3. The Haiku/Sonnet reviewer arm ran crossed with a prompt condition --
+      `evals/results/2026-08-28_reviewer-ablation.jsonl`; its Sonnet cells were topped up to n=7
+      each on 2026-08-28, short of the pre-registered n=8 because the loop-cap sweep overran its
+      cost estimate, so the model main effect is better powered but still not at n=10. The loop-cap
+      ablation ran at 1/3/5 rather than 1/3 -- `evals/results/2026-08-28_loop-cap-sweep.jsonl`, a
+      null result on remediation. Reviewer on/off and single-agent-vs-team are untouched.
 - [ ] README as a short paper: thesis, setup, results tables, failure analysis, design section
       lifted from DECISIONS.md
 - [ ] resume bullet with real numbers

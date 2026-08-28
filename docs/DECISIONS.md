@@ -699,3 +699,59 @@ of the ten Haiku `which_column` runs end `exhausted`: the reviewer names the tra
 expires before `feature_eng` removes it, and a 9-of-10 catch rate becomes a 1-of-10 remediation
 rate. The reviewer half of the pipeline now works and the remediation half is the next bottleneck,
 which is a better problem than the one this session started with.
+
+## 2026-08-28 (second entry): the loop cap was never the bottleneck; an objection needs a
+route it can act through and a condition that closes it.
+
+Yesterday's session ended with 9 of 10 opaque Haiku runs naming a planted trap and 1 of 10 removing
+it, 8 of 10 ending `exhausted`, and the obvious reading that the loop cap expires before
+`feature_eng` gets there. That reading was wrong, and it was cheap to falsify: three diagnostic runs
+at $0.10 total, then a pre-registered `loop_cap` sweep at 1/3/5 which moved remediation 0, 1, 1 out
+of 10 while quadrupling cost per run. The cap is a null lever.
+
+What the diagnostic runs found instead is two independent breaks in the objection lifecycle. The
+first is **routing**. `feature_eng` force-drops an objected column before its own model is
+consulted, but only for objections whose `target_node` is `feature_eng`; `open_objections` filters
+by target. The reviewer, under `which_column`, overwhelmingly raises `implausible_importance` --
+which is an objection about a *score* -- and `REVIEWER_SYSTEM` tells it to send anything about "how
+the run was evaluated" to `modeler`. That is a correct reading of the prompt and a dead end in the
+graph: the modeler has no column lever at all, since every candidate is fit on the one transform
+`feature_eng` already froze. In the sweep's `loop_cap=5` cell, 5 of 10 runs addressed every
+objection to `modeler` and 6 of 10 never routed to `feature_eng` once. The second is **closure**.
+Across 3 diagnostic runs the reviewer never marked a single objection `resolved`. The clearest run
+dropped both traps, watched the claimed roc_auc fall from 0.986 to 0.823, wrote that the fall "is
+consistent with removing leakage", and held the objection open anyway on the grounds that the
+columns "were never validated as non-leaking, only removed" -- an unfalsifiable standard. A reviewer
+holding one can never let a run pass, which means `exhausted` stopped being evidence that the fix
+did not land. `leakage_remediated` is the field that answers that question and it is the one to
+quote; the eval was never wrong, but the sentence we wrote around it was.
+
+The fix is deliberately not in this session. Three candidates were open in NEXT.md and the
+diagnosis narrows them without choosing: routing is now the leading one and closure is a second,
+separate change, and each deserves a controlled before/after against these numbers rather than being
+bundled with them. What did land is the instrumentation that makes the next attempt measurable.
+`results_row()` gained `objections_by_target_node`, `objected_columns_unremediated`,
+`route_sequence` and `new_objections_per_pass`. All four are *derived* from `objections`,
+`review_passes` and `final_features` rather than recorded by any node, which is the same rule as
+every other outcome on that row: a node that wrote down its own remediation would be a node
+reporting its own score. No node, tool or `PipelineState` field changed. `objected_columns_
+unremediated` is `None` rather than `[]` both when no reviewer pass completed and when the matrix is
+empty, matching `reviewer_nominated` and `leakage_remediated` -- an empty list there would say
+"objected to and all of it dropped", which is the opposite of what the reviewer-off arm did.
+
+`--loop-cap` also became a CLI flag. It had existed on the frozen `RunConfig` with a default of 3
+and been reported on every results row since the first one, but there was no way to set it, so the
+condition every published row named was one no run could vary. It is validated at the CLI with the
+exit-code-2 pattern `--repeat` uses rather than left to Pydantic's `ge=0`, and `0` is deliberately
+legal: the router already special-cases it, and a cap of zero is the reviewer-off condition
+expressed as a cap.
+
+Postscript, same day, from topping the Sonnet cells to n=7. The routing diagnosis above was found on
+Haiku and it generalises, and it also explains the model arm. Across all 27 rows that carry
+`route_sequence`, 0 of the 21 runs that never routed to `feature_eng` remediated, against 3 of the 6
+that did. Sonnet under `which_column` remediates 3 of 7 where Haiku manages 1 of 10 -- and it does
+so while *detecting less* (5 of 7 name a trap against Haiku's 9 of 10). The stronger model's
+advantage here is not that it sees more; it is that it addresses what it sees to the node that can
+act on it. That is a finding about the pipeline's contract rather than about either model, and it
+raises the value of the routing fix: it is worth more than the reviewer-model upgrade that would
+otherwise be the obvious thing to buy.

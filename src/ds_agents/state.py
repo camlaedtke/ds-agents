@@ -536,6 +536,27 @@ class PipelineState(Contract):
         for objection in self.objections:
             by_category[objection.category] += 1
 
+        # Why a run that caught the trap still shipped it. `objections_by_category` says what the
+        # reviewer objected to; these four say whether anything could act on it. They are derived
+        # here rather than recorded by the nodes for the same reason every other outcome is: a node
+        # that wrote down its own remediation would be a node reporting its own score.
+        by_target_node = dict.fromkeys(get_args(RoutableNode), 0)
+        for objection in self.objections:
+            by_target_node[objection.target_node] += 1
+
+        # The caught-versus-remediated gap as a list of names. A column-scoped objection whose
+        # column is still in the matrix at the end was raised and not acted on, whatever the
+        # verdict says. `None` in two cases, and both are the same distinction the fields above
+        # draw: when feature_eng produced nothing (an empty matrix is not a clean one, matching
+        # `leakage_remediated`), and when no reviewer pass completed (the reviewer-off arm runs
+        # the node as a no-op, and an empty list there would read as "objected and remediated"
+        # rather than "never objected", which is the opposite finding).
+        unremediated: list[str] | None = None
+        if objected is not None and self.final_features:
+            unremediated = sorted(objected & set(self.final_features))
+
+        passes = sorted(self.review_passes, key=lambda rp: rp.iteration)
+
         claimed = self.chosen_model.claimed_holdout_score if self.chosen_model else None
         gap: float | None = None
         if claimed is not None and self.verified_holdout_score is not None:
@@ -599,6 +620,13 @@ class PipelineState(Contract):
             "objections_raised": len(self.objections),
             "objections_by_category": by_category,
             "objections_open_at_end": len(self.open_objections()),
+            # who the reviewer asked to fix it, whether anything was fixed, and where the loop
+            # actually went. Between them these separate "the reviewer was wrong" from "the
+            # reviewer was right and told a node that has no lever".
+            "objections_by_target_node": by_target_node,
+            "objected_columns_unremediated": unremediated,
+            "route_sequence": [rp.routed_to for rp in passes],
+            "new_objections_per_pass": [len(rp.new_objection_ids) for rp in passes],
             # cost and reliability
             "wall_seconds": self.wall_seconds,
             "cost_usd": self.total_cost_usd,

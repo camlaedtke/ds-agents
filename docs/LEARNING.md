@@ -392,3 +392,30 @@ Priority: **load-bearing** means the thesis breaks if this is wrong and you cann
   what was budgeted and the pre-registered spending cap bound the Sonnet half to n=4 and n=3, which
   is why the model main effect is reported as unresolved rather than as absent. Related:
   [[controlled-ablation]], [[evidence-surface]], [[caught-vs-remediated]].
+
+### actionable-objection — a finding nobody can act on is indistinguishable from a wrong finding
+- Priority: load-bearing
+- Came up: 2026-08-28, diagnosing why 9-of-10 caught became 1-of-10 remediated
+- Status: flagged
+- Why it matters here: the reviewer's job looks like "notice the leak", and once it started noticing
+  the leak the pipeline still shipped it in 9 runs out of 10. Three live diagnostic runs show the
+  reason is not that the reviewer was wrong and not that it ran out of turns. It is that an
+  objection has a *lifecycle* -- raised, routed, acted on, closed -- and two separate links in that
+  chain were broken, each of which is invisible in a results table that only records what was
+  raised. First, **routing**: in 2 of 3 runs the reviewer raised `implausible_importance` and
+  addressed it to `modeler`, which is a defensible reading of its own prompt (the objection is about
+  a score) and is also a node with no column lever at all -- every candidate is fit on the one
+  frozen transform `feature_eng` already produced. `feature_eng` force-drops an objected column
+  before its model is even consulted, but only for objections addressed to it, so a correct
+  objection sent one node sideways produces exactly the same table row as a hallucinated one.
+  Second, **closure**: in 3 of 3 runs the reviewer never dispositioned a single objection
+  `resolved`. The most instructive run dropped both traps, watched the claimed score fall from 0.986
+  to 0.823, wrote that the drop "is consistent with removing leakage" -- and marked the objection
+  `still_open` anyway, on the grounds that the columns "were never validated as non-leaking, only
+  removed". That is an unfalsifiable standard, and a reviewer holding one can never let a run pass,
+  so `exhausted` stops meaning "the fix did not land". The general lesson is that an adversarial
+  reviewer needs a *termination condition* as much as it needs a detection rule: something it can
+  observe that discharges its own objection. Without one, catch rate and remediation rate come apart
+  and only the flattering half is easy to measure. Related: [[caught-vs-remediated]],
+  [[adversarial-review-loop]], [[loop-cap-and-verdict-derivation]],
+  [[dispositions-as-audit-trail]], [[evidence-surface]].

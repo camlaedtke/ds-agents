@@ -21,6 +21,7 @@ from ds_agents.cli import (
     _fixture_state,
     _select_model,
     _select_reviewer_model,
+    cmd_run,
 )
 from ds_agents.fixtures import load_fixture
 from ds_agents.naming import NAMINGS, header_of, materialize
@@ -175,6 +176,36 @@ class TestTheRunParser:
     def test_an_unknown_reviewer_prompt_is_refused(self):
         with pytest.raises(SystemExit):
             self._parse(["run", "--reviewer-prompt", "helpful_hints"])
+
+    def test_the_loop_cap_defaults_to_the_config_default(self):
+        """3 in two places -- the flag and `RunConfig` -- and they must agree, or `ds-agents run`
+        and the not-yet-written harness would run the same nominal condition differently."""
+        assert self._parse(["run"]).loop_cap == RunConfig().loop_cap == 3
+
+    def test_the_loop_cap_parses(self):
+        assert self._parse(["run", "--loop-cap", "5"]).loop_cap == 5
+
+    def test_a_zero_cap_is_valid_and_not_confused_with_a_negative_one(self):
+        """`RunConfig` allows `ge=0` and the router already special-cases it -- a cap of 0 is the
+        reviewer-off condition expressed as a cap, not a typo. Only `< 0` is refused."""
+        assert self._parse(["run", "--loop-cap", "0"]).loop_cap == 0
+
+
+class TestTheLoopCapIsRecorded:
+    """Mirror of TestThePromptConditionIsRecorded. The cap decides how many chances feature_eng
+    gets to act on an objection, so a row that did not carry it would be averaged together with
+    rows run under a different cap."""
+
+    def test_fixture_state_records_the_cap(self):
+        fixture = load_fixture("claims_timing")
+        assert _fixture_state(fixture).config.loop_cap == 3
+        assert _fixture_state(fixture, loop_cap=5).config.loop_cap == 5
+
+    def test_a_negative_cap_exits_two_rather_than_raising(self):
+        """`RunConfig` would refuse this with `ge=0`, but as a Pydantic traceback. This is the
+        exit-code-2 pattern `--repeat` already uses."""
+        args = _build_parser().parse_args(["run", "--loop-cap", "-1"])
+        assert cmd_run(args) == 2
 
 
 class TestThePromptConditionIsRecorded:
