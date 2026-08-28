@@ -164,13 +164,36 @@ read a manifest could read the answer key.
       failures named the trap on the **final** pass, which the cap routes straight to the reporter
       -- so the effective number of actionable passes is `loop_cap - 1`. See DECISIONS.md
       2026-08-28 (third entry).
-- [ ] Closure: give the reviewer a termination condition it can observe. Unchanged and still the
-      next arm. Deliberately not bundled with the routing arm so each gets its own before/after
-      against the same cell.
-- [ ] Decide whether a forced drop is sticky. Found while diagnosing the routing cell: because
-      `_forced_drops` recomputes from `open_objections`, a resolved objection stops forcing its
-      drop, so a later return to `feature_eng` puts the leaked column back. Harmless across one
-      pass, reachable across two -- a shape `by_category` now produces routinely.
+- [x] Closure: give the reviewer a termination condition it can observe. **Built, pre-registered,
+      and the arm was not run -- a recorded null.** `objection_closure` is a `Literal["off","on"]`
+      on the frozen `RunConfig`, its own axis rather than a third `reviewer_prompt` value so the
+      two prompt rules stay independently attributable; `CLOSURE_RULE` points only at
+      `final_features`, a field the reviewer already sees. The control cell was pre-registered as a
+      **decision gate** rather than a baseline, because re-reading the committed rows first showed
+      the premise did not hold: 8 of 10 routing rows already closed an objection, and all 4
+      `exhausted` runs raised a NEW objection on their final pass rather than refusing to close.
+      The gate closed at exactly its line (`objections_resolved > 0` in 6/10), and two other
+      pre-registered numbers settle it -- `objections_falsely_resolved` is 0 in every row, and
+      `leakage_remediated` is 9/10 with the sole failure being the unrelated zero-objection `block`
+      bug, so there is no headroom for a prompt rule to buy.
+      `evals/results/2026-08-28_objection-closure.jsonl`, n=10, $0.2938. See DECISIONS.md
+      2026-08-28 (fourth entry).
+- [x] Decide whether a forced drop is sticky. **Decided: only `withdrawn` releases a column.**
+      `resolved` means the problem is fixed and on this pipeline the fix IS the drop, so resolution
+      must not un-fix itself; `withdrawn` is the opposite claim and is the only route back for a
+      reviewer false positive. `PipelineState.binding_objections` is a second named question
+      alongside `open_objections`, with exactly one caller in the graph -- the router and the
+      reviewer keep asking `open_objections`, or nothing terminates. Applied unconditionally, not
+      as an axis. **Unpredicted and the largest remediation effect measured so far: this alone
+      moved `leakage_remediated` 5/10 to 9/10** against the routing cell, with 6 of 6 resolving
+      runs remediating. It has no pre-registration of its own and needs its own cell before it goes
+      in a results table.
+
+Scope note: Phase 3 closes with the closure arm as a recorded null and with the reviewer's
+resolution behaviour measurable for the first time (`objections_resolved`, `objections_withdrawn`,
+`objections_falsely_resolved`). The remaining reviewer defects are both structural rather than
+prompt-shaped, and both are Phase 4/5 work: the zero-objection `block` bug, now 1-2 runs in every
+10, and late detection against the cap, which is what every remaining `exhausted` run is.
 
 ## Phase 4: Eval harness (3 to 5 sessions, plan mode)
 - [ ] evals/datasets/manifest.yaml with 10 to 15 OpenML / Kaggle playground datasets and

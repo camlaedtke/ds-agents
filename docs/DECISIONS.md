@@ -887,3 +887,16 @@ whose premise you have not checked. `leakage_remediated` is recorded as a non-in
 here and explicitly not as the endpoint, because closure ends the loop *earlier* and `claims_timing`
 plants two traps: a reviewer that resolves after the first drop never reaches the pass in which it
 would have named the second. It is allowed to fall, and that is written down before the run.
+
+**Outcome, appended after the control cell ran.** The gate closed at exactly its pre-registered line
+-- `objections_resolved > 0` in 6 of 10 -- and the arm was not run. Two numbers fixed in advance
+make that verdict stronger than the 6/10 alone: `objections_falsely_resolved` is 0 in every row, so
+the dishonest-closure failure the rule exists to risk is absent from the population it would be
+applied to; and `leakage_remediated` is 9/10, with the single non-remediating run being the
+unrelated "claimed `block` with zero objections raised" bug, so there is nothing left for a prompt
+rule to buy. The condition, the rule and the three columns stay in the tree, because a recorded null
+is worth more than an untested hunch and the columns are what made the gate decidable at all. The
+unpredicted result is that the sticky-drop fix, the bug fixed on the way to the arm, moved
+remediation 5/10 to 9/10 -- larger than the routing arm's own 1/10 to 5/10 -- with 6 of 6 resolving
+runs remediating. That has no pre-registration of its own and is written up in LOG.md as a finding
+needing its own cell, not as a headline.

@@ -446,3 +446,35 @@ Priority: **load-bearing** means the thesis breaks if this is wrong and you cann
   that "remediated" by gutting the fixture would otherwise read as a clean success. Related:
   [[actionable-objection]], [[controlled-ablation]], [[caught-vs-remediated]],
   [[measurement-independence]].
+
+### primary-endpoint-vs-guardrail — the headline metric of a project is not automatically the endpoint of an arm
+- Priority: load-bearing
+- Came up: 2026-08-28, designing the closure arm
+- Status: flagged
+- Why it matters here: `leakage_remediated` is what this project is about, so it was the natural
+  primary endpoint for the closure arm -- and it was the wrong one, for a reason you can only see by
+  thinking about the mechanism first. Closure makes a run terminate *earlier*; `claims_timing`
+  plants two traps and four of the control cell's runs needed two `feature_eng` returns, so a
+  reviewer that resolves after the first drop never reaches the pass in which it would have named
+  the second. Closure could honestly push remediation *down*, while the sticky-drop fix in the same
+  commit pushed it *up*. Pre-registering a number whose direction you cannot predict is
+  pre-registering a coin flip: whichever way it lands you will have a story, which is another way of
+  saying it tests nothing. The fix is to split the roles. The **primary endpoint** is the thing the
+  intervention is claimed to do (here: does the reviewer close anything). The **falsifier** is the
+  specific new harm the intervention risks (here: `objections_falsely_resolved` -- closing an
+  objection whose column is still in the matrix, which is what "buying termination by teaching the
+  reviewer to say fixed" would look like in a column). A **guardrail** is a metric you do not expect
+  to improve and are checking has not collapsed -- pre-registered as a non-inferiority bound
+  (">=4/10 acceptable, <=3/10 kills the arm"), never quoted as success if it happens to rise.
+  Three corollaries this session paid for. First, a **pre-registered stopping rule** is worth as
+  much as a pre-registered threshold: the control cell was written up as a decision gate ("if the
+  reviewer already resolves honestly, do not run the arm") and it closed, which saved the arm's
+  budget and turned a non-result into a recorded null instead of a quiet abandonment. Second,
+  **check the premise against data you already have before funding the arm** -- eight of ten
+  committed rows already closed an objection, which contradicted the diagnosis in NEXT.md that the
+  whole arm was designed against, and that re-read cost nothing. Third, **a metric that conflates
+  two opposite claims cannot gate anything**: `objections_open_at_end` merged `resolved` ("the fix
+  landed") with `withdrawn` ("I was wrong"), so no committed row could answer the question the gate
+  turned on, and splitting them was a prerequisite rather than a nicety. Related:
+  [[caught-vs-remediated]], [[controlled-ablation]], [[effective-target-vs-recorded-choice]],
+  [[measurement-independence]], [[dispositions-as-audit-trail]].

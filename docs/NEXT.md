@@ -1,102 +1,88 @@
 # Next session
 
 ## Start here
-**The routing half of the remediation fix landed and it worked, at exactly the pre-registered
-threshold.** `objection_routing` is a `Literal["as_addressed", "by_category"]` on the frozen
-`RunConfig`. `as_addressed` is the default and reproduces every committed row byte for byte -- the
-evidence is that all 27 pre-existing router tests pass with zero edits. Under `by_category` a
-column-scoped objection gets an *effective* target of `feature_eng` whatever the reviewer wrote.
-n=10 live at $0.272: **`leakage_remediated` 5/10 against the control cell's 1/10**, with 8/10 runs
-reaching `feature_eng`. `evals/results/2026-08-28_objection-routing.jsonl`. The house rule is
-">=5/10 is shown", so this reaches the line rather than clearing it.
+**Phase 3 is closed.** Both remaining items landed, and the headline is not the one the session set
+out to get.
 
-**The design question NEXT.md left open is settled and the answer is "record it".**
-`Objection.target_node` is never rewritten -- the reviewer's own dispatch choice stays on the record
-and `objections_by_target_node` still counts the raw field, so the reviewer's judgement remains
-measurable *in the arm that overrides it*, with `objections_rerouted` counting the disagreements.
-`test_the_raw_target_node_survives_the_reroute` fails if anyone folds the effective target into that
-counter. The condition is applied in exactly one place, `PipelineState.effective_target`, read only
-by `open_objections`; `_route_for_block` was rewritten to ask `open_objections(destination)` rather
-than compare `target_node` itself, because the router and `feature_eng` had been two independent
-answers to "who acts on this" and under the new arm they would have disagreed. See DECISIONS.md
-2026-08-28 (third entry).
+The closure arm was **built, pre-registered, and deliberately not run**. `objection_closure` is a
+`Literal["off","on"]` on the frozen `RunConfig` -- its own axis, not a third `reviewer_prompt`
+value, so the two prompt rules stay independently attributable -- and `CLOSURE_RULE` points only at
+`final_features`, a field the reviewer already sees. Before spending anything, re-reading the
+committed control rows showed **the premise the arm was designed against does not hold**: NEXT.md
+and PLAN.md both said the reviewer never dispositions an objection `resolved`, but 8 of 10 routing
+rows had already closed one, and all 4 `exhausted` runs raised a *new* objection on their *final*
+pass rather than refusing to close. That is whack-a-mole against the cap, not an unfalsifiable
+standard. So the control cell was pre-registered as a **decision gate** with a stopping rule instead
+of a baseline. The gate closed at exactly its line -- `objections_resolved > 0` in 6/10 -- and two
+other pre-registered numbers make the verdict stronger than that 6 alone: `objections_falsely_
+resolved` is **0 in every row** (the reviewer never closes dishonestly *without* being told the
+criterion), and `leakage_remediated` is **9/10**, with the only failure being the unrelated
+zero-objection `block` bug. There is no headroom for a prompt rule to buy.
+`evals/results/2026-08-28_objection-closure.jsonl`, n=10, $0.2938.
 
-**Three things that did not go to plan, all recorded rather than smoothed over.** The arm got
-*cheaper* ($0.0272/run against a predicted $0.047 and a control of $0.0299) because acting on an
-objection ends the loop instead of grinding to `exhausted` -- mean loops fell 2.7 to 2.2 and three
-runs ended `pass`, which no control run did. So the pre-registered prediction that `exhausted` would
-stay flat was wrong, in the run's favour. The arm also has a real price: **2 of 10 runs dropped
-`prior_claims_12m`, a legitimate strong feature**, because `by_category` turns a reviewer false
-positive from something inert into a really dropped column. `n_final_features` is on the results row
-for that reason and stayed 4-7, so nothing remediated by gutting the matrix.
+**The unpredicted result is the sticky-drop fix, and it is the largest remediation effect measured
+so far.** `_forced_drops` recomputed from `open_objections`, which closes on `resolved` as well as
+`withdrawn`, so a resolved objection stopped forcing its drop and the next return to `feature_eng`
+put the leaked column back. `PipelineState.binding_objections` is now a second named question --
+"what must stay out of the matrix" -- releasing only on `withdrawn`, with **exactly one caller in
+the graph**; the router and the reviewer keep asking `open_objections`, or nothing ever terminates.
+That fix alone, with the closure axis `off` and byte-identical, moved `leakage_remediated`
+**5/10 to 9/10** against the routing cell -- larger than the routing arm's own 1/10 to 5/10 -- and
+**6 of 6 runs that resolved an objection remediated**, 3 of them via the two-return shape where the
+old bug fired. It has no pre-registration of its own. That is the first item below.
 
-**Every one of the 5 non-remediating runs failed for a reason that is not routing**, which is the
-most useful output of the cell. Three named the surviving trap on the **final** reviewer pass, and a
-block at the cap becomes `exhausted` and routes to the reporter -- so **the effective number of
-actionable reviewer passes is `loop_cap - 1`, not `loop_cap`**. Two claimed `block` with zero
-objections raised (`errored: true`), the parking-lot reviewer bug, now reproduced twice more here
-and once on a live toy run.
-
-The floor: 445 tests pass (up from 427; 18 added), ruff clean.
+The floor: 473 tests pass (up from 445; 28 added), ruff clean.
 `uv run ds-agents run --dataset toy` green live -- leak dropped, verdict `pass`, `publishable: yes`.
-Session spend ~$0.42 all in.
+Session spend ~$0.32 all in, against a $0.80 cap; the gate saved the arm's $0.27.
 
 ## First prompt
-Read CLAUDE.md, docs/PLAN.md and the "Start here" above, then continue Phase 3 in plan mode on the
-**closure** half, which is the last unticked Phase 3 item and was deliberately not bundled with the
-routing arm. The reviewer needs a termination condition it can observe. The claim to beat is the
-committed `by_category` cell (n=10, 5/10 remediated, 4/10 exhausted, 3/10 pass), run with everything
-else held identical -- routing is now the default-off condition, so the closure arm must set
-`--objection-routing by_category` to build on it rather than measure against a broken pipeline.
+Read CLAUDE.md, docs/PLAN.md and the "Start here" above. Phase 3 is done; the question is whether
+to spend one more session hardening its headline before moving to Phase 4's harness.
 
-Note that routing partly relieved the closure symptom on its own, which was not predicted: three
-runs closed their own objection and ended `pass`. That changes the closure question from "the
-reviewer never resolves anything" to "the reviewer resolves only when the fix is unambiguous", which
-is a smaller and better-posed problem. Re-read the diagnosis before designing the arm.
+The case for doing it: the sticky-drop fix is currently the project's largest single remediation
+effect (5/10 -> 9/10) and it is the *only* major result with **no pre-registration of its own** --
+it was found while fixing a bug flagged in passing, and the comparison is n=10 against n=10 on one
+fixture where model nondeterminism alone can move a count by a few. Everything else in the results
+tables was pre-registered before it ran. Pre-register a confirmation cell, decide in advance what
+would falsify it, and run it (~$0.30). The mechanism to state in the pre-registration is specific
+and checkable: the effect should appear **only** in runs that resolve an objection and return to
+`feature_eng` twice, so `objections_resolved > 0` crossed with a `route_sequence` containing two
+`feature_eng` entries is the predicted carrier, and a rise concentrated anywhere else would falsify
+the mechanism even if the headline number replicated.
 
-Two candidate closure conditions, both checkable from what the reviewer's prompt already contains,
-so this is likely a third `reviewer_prompt` value rather than a schema change: the objected column
-is absent from `final_features` (mechanical, already visible to the reviewer), or the claimed score
-has fallen to within the plausible band. Decide which before writing the code, and pre-register.
+The case against: Phase 3 is closed, PLAN.md budgets 15-25 sessions total and Phase 4 is untouched.
 
-**Settle one bug first, because it is cheap and it interacts with closure**: a forced drop is not
-sticky (see the first open question below). Closure makes resolution *more* common, which makes that
-hazard *more* reachable, so fixing it after the closure arm would invalidate the arm.
+Either way, do **not** re-run the closure arm -- the gate closed on a pre-registered stopping rule
+and reopening it without new evidence is exactly what pre-registration exists to prevent.
 
 ## Open questions
 
-- **Is a forced drop sticky?** Found while diagnosing this cell and verified directly against the
-  node: `_forced_drops` recomputes from `open_objections`, so once the reviewer dispositions an
-  objection `resolved`, a *later* return to `feature_eng` for some other objection puts the leaked
-  column back in the matrix. With the objection open the snippet reads `DROP =
-  ['account_status_code', 'churned', 'customer_id']`; with it resolved, `DROP = ['churned',
-  'customer_id']`. `tests/nodes/test_feature_eng.py::test_a_resolved_objection_does_not_force_a_drop`
-  pins the current behaviour as intended, and across a single pass it is. It did not cause any
-  failure in this cell -- the three surviving-trap runs never resolved anything -- but `by_category`
-  produces the two-return shape routinely and closure will produce it more. Either a drop once
-  forced stays forced, or resolution must not be allowed to resurrect a column.
-- **The last reviewer pass is structurally unactionable.** `loop_cap` permits N passes but only N-1
-  can be acted on, because a block at the cap becomes `exhausted` and routes to the reporter. Three
-  of this cell's five failures are exactly this. It is arguably correct (the cap has to bind
-  somewhere) but it means the loop-cap sweep's null result was measured on a pipeline where *no*
-  pass was actionable, so it is worth one cheap re-check at `loop_cap=4` under `by_category` now
-  that passes actually do something. ~$0.30.
-- **Should `by_category` become the default?** It is strictly better on remediation and cheaper per
-  run, and strictly worse on legitimate features dropped. Leaving it off keeps every committed row
-  comparable; turning it on makes the pipeline the thing the README describes. Not urgent, but every
-  downstream cost estimate in PLAN.md assumes the old default.
-- **The "reviewer claimed block with no open objection" error is now reproducible.** Twice in this
-  cell (`errored: true`, `route_sequence: ["reporter"]`, nothing dropped, claimed 0.9858) and once
-  on a live toy run, where the reviewer raised `implausible_importance` naming only already-dropped
-  columns and the node correctly rejected it, leaving `claim=block` with nothing open. No longer a
-  parking-lot curiosity: it costs 2 of every 10 runs.
-- **Sonnet remediates more while detecting less.** Still n=7 and still directional. Now worth
-  re-running under `by_category`, because the Sonnet advantage was *entirely* that it addressed
-  objections to `feature_eng` -- which `by_category` hands to Haiku for free. The prediction is that
-  the model effect shrinks toward zero, and that is a much stronger finding than the original arm.
-  ~$0.65.
+- **The sticky-drop effect has no pre-registration.** See "First prompt". This is the single
+  weakest link in the results tables and it is currently the strongest number in them.
+- **The zero-objection `block` bug is now the leading cause of failure**, and it is the *only*
+  cause left in the closure control: 1 of 10 rows there, 2 of 10 in the routing cell, plus a live
+  toy reproduction. The reviewer claims `block` with nothing open, the router correctly refuses it,
+  and the run goes straight to the reporter having dropped nothing (`route_sequence: ["reporter"]`,
+  `errored: true`). It was a parking-lot curiosity three sessions ago. It is now the bottleneck.
+- **`exhausted` is now uninformative and should probably be said so in the README.** All 4
+  `exhausted` runs in the closure control **still remediated**. The verdict no longer distinguishes
+  "the fix did not land" from "the reviewer was still talking when the cap bound".
+- **Late detection against the cap is the remaining structural defect.** Every `exhausted` run
+  raises a new objection on its final pass, which routes straight to the reporter. Worth one cheap
+  re-check at `loop_cap=4` under the current code (~$0.30), now that a pass actually does something
+  and the sticky fix has landed -- the old loop-cap null was measured on a pipeline where no pass
+  was actionable.
+- **Should `by_category` become the default?** Unchanged, and now stronger: with the sticky fix it
+  is 9/10 remediated. Every downstream cost estimate in PLAN.md still assumes the old default.
+- **Does the reviewer ever use `withdrawn` unaided?** Measured for the first time this session:
+  3 of 10 runs did. That matters because `withdrawn` is now the only disposition that restores a
+  column, so it is the sole route back from a `by_category` false positive. 3/10 is enough that the
+  escape hatch is not purely theoretical and not enough to call it reliable.
+- **Sonnet under `by_category` + the sticky fix.** Unchanged and still worth ~$0.65. The prediction
+  is still that the model effect shrinks toward zero, and it is now a stronger prediction because
+  the Haiku baseline is 9/10.
 - **`customer_id` as a false positive is measured and it is every run.** Unchanged.
-- **Should `reissued_ids` get the naming treatment?** Unchanged. Scoped out four times now.
+- **Should `reissued_ids` get the naming treatment?** Unchanged. Scoped out five times now.
 - **Duplicate-rows-across-split is still unbuilt**, for the same structural reason.
 - **A refused model call loses its token accounting.** Unchanged.
 - **LangSmith is wired but never exercised.** Unverified until a key exists.
@@ -105,36 +91,38 @@ hazard *more* reachable, so fixing it after the closure arm would invalidate the
 
 ## Parking lot
 
-- **`objection_routing`, `objections_rerouted` and `n_final_features` cannot be back-filled** onto
-  any row written before this session. Any table crossing that boundary has to say so; only
-  `leakage_remediated` compares cleanly against the control cell.
-- **The cost model for this pipeline is now known to be non-monotonic.** Fixing a bug made runs
-  cheaper because they stopped exhausting. Any future cost pre-registration should predict a range,
-  not a point, and should say which direction a *successful* intervention would move it.
-- **`by_category` does not hold two prompts constant.** `feature_eng` and `modeler` both read
-  `open_objections(target)`, so the column objection leaves the modeler's prompt and enters
-  `feature_eng`'s. Deliberate and tested (`test_a_rerouted_objection_leaves_the_modeler_prompt`),
-  but it means the arm is a routing change *plus* two prompt changes and must not be described as a
-  pure edge change.
-- **`FORCING_OBJECTION_CATEGORIES` is gone**, replaced by importing `COLUMN_SCOPED_CATEGORIES`. The
-  two were byte-identical duplicates and are now load-bearing together.
-- **The loop-cap default `3` is written in three places** and `objection_routing`'s default is now
-  written in three more (`RunConfig`, `_fixture_state`, argparse). The one-shared-constant argument
-  is stronger than it was.
-- **`_fixture_state` now takes six positional args** and `_run_once` passes them positionally. One
-  transposition would silently swap two run conditions. Keyword args would fix it; the `naming`
-  derivation invariant documented at `cli.py:45-53` is the thing not to break while doing it.
+- **7 of 84 committed rows are code-boundary-crossed on the sticky-drop fix** -- they meet the
+  necessary condition for the old behaviour to have fired (a closure, plus `feature_eng` in
+  `route_sequence[1:]`). 4 are in `2026-08-28_objection-routing.jsonl`, 3 in the loop-cap sweep.
+  They cannot be decided further, because no row written before this session splits `resolved` from
+  `withdrawn`. The 20 naming-ablation rows and the 27 rows at `2d5c1fc` carry no `route_sequence`
+  and are **unscreenable, not clean**. Any table crossing that boundary has to say so.
+- **`objection_closure`, `objections_resolved`, `objections_withdrawn` and
+  `objections_falsely_resolved` cannot be back-filled** onto any row written before this session.
+- **A metric that conflates two opposite claims cannot gate anything.** `objections_open_at_end`
+  merged "the fix landed" with "I was wrong", which is why the sticky-drop screen above is stuck at
+  "at risk" and why the gate needed new columns before it could be evaluated. Worth checking whether
+  any other published column has the same defect.
+- **`CLOSURE_RULE` deliberately omits a bullet** saying `withdrawn` is the only disposition that
+  restores a column. True, but a pipeline mechanic rather than an observable field, and the rule's
+  whole claim is that it points only at fields the reviewer is shown. If a future cell shows the
+  reviewer never withdraws, adding it is the next arm and it will have evidence behind it.
+- **`test_no_appended_rule_names_a_fixture_column` is the answer-injection guard** and it iterates
+  every registered fixture, so a new fixture cannot quietly turn an existing prompt rule into a
+  cheat sheet. It did not exist for `WHICH_COLUMN_RULE` until this session.
+- **`_fixture_state` is now keyword-only** after `fixture`, which closes the transposition hazard
+  the parking lot carried for three sessions. `_toy_state` is still a wrapper around it.
+- **The loop-cap default `3` is written in three places**, and `objection_routing` and
+  `objection_closure` now have their defaults written in three each. The one-shared-constant
+  argument is stronger every session.
 - **`--results` is a stopgap and should be absorbed by Phase 4's harness**, not extended.
 - **`cmd_run` has no per-run `try/except`**, so an unhandled API error ends a `--repeat` cell early.
 - **The opaque arm's numbering is dense and positional (`var_01..var_NN`).**
 - **A stub named anything but `"stub"` slips past `PLACEHOLDER_MODEL_NAMES`.**
 - **`materialize` does untranslated I/O** to preserve byte identity across platforms.
-- **`_fixture_state` derives its rename map from `naming` rather than taking both.**
 - **`load_fixture` raises `SystemExit` and `cmd_run` catches it**; `materialize`'s three
   `ValueError` paths are tested but not caught.
 - **The trap fixtures' `mutual_info_with_target` is documentation, not a difficulty dial.**
-- **A stub-model survival test is what stands between a fixture and silent uselessness.**
-- **`_toy_state` is still a wrapper** around `_fixture_state(load_fixture("toy"))`.
 - **A per-item rule on a response schema is a whole-response rule.** Still worth checking `intake`
   and `modeler`'s LLM-facing schemas.
 - **The split manifest is still embedded in snippet text**, and the 1 MiB read cap makes it urgent

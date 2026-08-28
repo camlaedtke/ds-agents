@@ -412,3 +412,61 @@ Evaluated on the control cell (`--objection-closure off`) alone, before the arm 
 **Not comparable to any earlier file** on `objection_closure`, `objections_resolved`,
 `objections_withdrawn` or `objections_falsely_resolved`: those fields do not exist before this
 commit and cannot be back-filled. Shared fields are comparable subject to the sticky-drop boundary.
+
+### Result: the gate closed. The arm was not run.
+
+Control cell, n=10, $0.2938 ($0.0294/run, inside the pre-registered $0.024-0.034 band). All 10 runs
+completed and all 10 were accepted by `publishable()`.
+
+| | routing cell (pre-fix) | closure control (post-fix) |
+| --- | --- | --- |
+| `leakage_remediated` | 5/10 | **9/10** |
+| `objections_resolved > 0` | not measurable | **6/10** |
+| `objections_withdrawn > 0` | not measurable | 3/10 |
+| `objections_falsely_resolved` | not measurable | **0 in every row** |
+| `review_verdict` | pass 3, exhausted 4, block 3 | pass 5, exhausted 4, block 1 |
+| rows with `objected_columns_unremediated` | 4 | 3 |
+| `errored` | 4 | 2 |
+| mean loops | 2.20 | 2.40 |
+| cost/run | $0.0272 | $0.0294 |
+
+**The gate reached its line rather than clearing it: `objections_resolved > 0` in exactly 6 of 10,
+against a pre-registered ">=6 of 10 falsifies the premise, do not run the arm".** Taken alone that
+is the weakest possible version of the verdict. Two other numbers settle it, and both were fixed in
+advance as the arm's own falsifier and guardrail:
+
+- **`objections_falsely_resolved` is 0 in all 10 rows.** Without being told the criterion, the
+  reviewer never once marked an objection `resolved` while its column was still in the matrix. The
+  failure mode the closure rule exists to risk is not present in the population it would be applied
+  to, and the judgement it would teach is one the reviewer already has.
+- **There is almost no headroom left for it to buy.** `leakage_remediated` is 9/10, and **the single
+  non-remediating run is the parking-lot "reviewer claimed `block` with zero objections raised" bug**
+  (`objections_raised: 0`, `errored: true`, `route_sequence: ["reporter"]`), which closure does not
+  touch. A prompt rule cannot improve a number whose only residual failure has a different cause.
+
+The 4 remaining `exhausted` runs are the whack-a-mole shape identified before the run, not a closure
+failure -- and note that **all 4 of them still remediated**, so `exhausted` is now genuinely
+uninformative about whether the trap shipped, exactly as the earlier sessions warned.
+`CLOSURE_RULE`, the `objection_closure` axis and the three closure columns stay in the tree: the
+axis is what makes this a recorded null rather than an untested hunch, and the columns are what made
+the gate decidable at all.
+
+### The unpredicted result: the sticky-drop fix is the largest remediation effect measured so far
+
+The control cell differs from `2026-08-28_objection-routing.jsonl` in exactly one thing -- the
+unconditional sticky-drop fix -- and **`leakage_remediated` went 5/10 to 9/10**. For comparison, the
+routing arm, which was the headline of the previous session and got its own pre-registration, moved
+the same number 1/10 to 5/10.
+
+The mechanism is visible in the rows rather than inferred: **all 6 runs that resolved an objection
+remediated, 6 of 6**, and 3 of those 6 took two `feature_eng` returns -- precisely the two-return
+shape in which the old code let a resolution resurrect the dropped column. Under the old behaviour
+those runs closed their objection and then re-admitted the trap on the next pass through the node.
+
+Three honest caveats, because this was not the thing being tested. It is n=10 against n=10 on one
+fixture, and model nondeterminism alone can move a 10-run count by a few. The effect was found while
+fixing a bug flagged in passing, not by an arm designed to detect it, so it has no pre-registration
+of its own. And it is confounded with nothing else only because the closure axis was `off` and
+byte-identical -- which is the reason the control was re-run rather than reused. **It deserves its
+own pre-registered cell before it goes in a results table as a headline**, and that is the first
+item in NEXT.md rather than a claim made here.
