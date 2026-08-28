@@ -323,6 +323,11 @@ Priority: **load-bearing** means the thesis breaks if this is wrong and you cann
   the prompt could distinguish a contaminated split from a clean one. Before grading the reviewer on
   a failure, check whether the evidence for it was in the prompt at all. Related:
   [[adversarial-review-loop]], [[measurement-independence]], [[caught-vs-remediated]].
+- Sharpened 2026-08-28: the reviewer's leakage miss is **not** an instance of this. `top_importances`
+  was in the prompt all along, ranked, with the planted traps at the top of it, and one appended
+  rule asking which column explains an implausible score moved Haiku from 1 of 10 to 9 of 10. "Was
+  not shown" and "was not asked" are different diagnoses with different fixes, and this entry only
+  covers the first. Related: [[factorial-design]].
 
 ### fixture-difficulty — a benchmark whose trap gets cleaned upstream measures nothing
 - Priority: useful
@@ -359,3 +364,31 @@ Priority: **load-bearing** means the thesis breaks if this is wrong and you cann
   conditions and do not say so are worse than no rows -- they will be averaged together by someone
   who has forgotten, including by us. Related: [[semantic-vs-statistical-leakage]],
   [[fixture-difficulty]], [[measurement-independence]], [[eval-baselines]].
+
+### factorial-design — why two suspected causes get tested together, not one after the other
+- Priority: load-bearing
+- Came up: 2026-08-28, choosing how to spend the reviewer ablation budget
+- Status: flagged
+- Why it matters here: going into this session the reviewer had missed a leak in 12 of 12 runs where
+  it had one in front of it, and there were two live explanations -- Haiku is not strong enough to
+  see it, or nothing in the prompt ever asked it which column produced the score. The obvious plan
+  was to run the model arm (Haiku versus Sonnet) because `--reviewer-model` already existed. That
+  plan had a hole: whichever number it produced would have been conditional on whichever prompt
+  happened to be in `reviewer.py` that week, the prompt was not a recorded condition, and so the
+  dependency would have been invisible to anyone reading the results file six weeks later. A
+  *factorial* design crosses both conditions -- every combination of model and prompt -- instead of
+  varying one and holding the other at whatever it happened to be. It costs the same per run, and it
+  buys three answers instead of one: each main effect (does the model matter? does the prompt
+  matter?) and the interaction (does the prompt help only the stronger model?). It also gives you a
+  built-in validity check, because everything upstream of the manipulated node is identical across
+  all four cells, so `profiler_recall` and trap survival must agree cell to cell -- if they do not,
+  something other than the reviewer moved and no comparison in the table means anything. Here the
+  answer was lopsided: the prompt moved the catch rate from 1/10 to 9/10 and the model moved it
+  from 1/10 to 0/4. Had the model arm run alone under the base prompt it would have concluded
+  "Sonnet is no better at catching leakage", which is true and profoundly misleading. Two practical
+  notes. Decide the decision rule before seeing the numbers -- ours was ">=5/10 difference is shown,
+  3-4 is directional, less is not resolved at this n" -- because a rule chosen afterwards is a
+  rule chosen to fit. And cells must be equal-n by intent: ours were not, because Sonnet cost 5x
+  what was budgeted and the pre-registered spending cap bound the Sonnet half to n=4 and n=3, which
+  is why the model main effect is reported as unresolved rather than as absent. Related:
+  [[controlled-ablation]], [[evidence-surface]], [[caught-vs-remediated]].

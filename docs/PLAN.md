@@ -112,6 +112,22 @@ read a manifest could read the answer key.
       changed; the rename lives above the tools boundary and the only thing that reaches them is a
       different CSV path. See DECISIONS.md 2026-08-27.
 
+- [x] Reviewer prompt as an explicit ablation axis, and the reviewer's columns on the results row.
+      `reviewer_prompt` is a `Literal` on the frozen `RunConfig`; `which_column` appends one rule to
+      `REVIEWER_SYSTEM` asking which top-importance column explains an implausible score, and `base`
+      is byte-identical to every earlier run. `results_row()` gained
+      `reviewer_nominated/caught/recall/false_alarm` over all column-scoped categories plus
+      `objections_by_category`; `leakage_*` keeps its narrower two-category definition so the
+      committed naming-ablation rows stay comparable. See DECISIONS.md 2026-08-28.
+- [x] Reviewer 2x2 run live: `{haiku, sonnet}` x `{base, which_column}` on `claims_timing --naming
+      opaque`, 27 rows at `evals/results/2026-08-28_reviewer-ablation.jsonl`, $1.04. **The prompt is
+      the binding constraint and the model is not**: Haiku goes from 1/10 to 9/10 runs naming a
+      planted trap, while Sonnet under the base prompt is 0/4. Scope note: the Haiku-versus-Sonnet
+      arm listed under Phase 5 was pulled forward, because the opaque arm is the only configuration
+      that reliably puts a leaky matrix in front of the reviewer and the prompt was a confound under
+      any model number. The Sonnet cells are underpowered (n=4 and n=3) -- Sonnet cost $0.078-0.093
+      per run against a budgeted $0.035 and the pre-registered $1.20 cap bound them.
+
 ## Phase 4: Eval harness (3 to 5 sessions, plan mode)
 - [ ] evals/datasets/manifest.yaml with 10 to 15 OpenML / Kaggle playground datasets and
       published baselines, sources cited
@@ -120,7 +136,10 @@ read a manifest could read the answer key.
 - [ ] LOG.md running
 
 ## Phase 5: Ablations and writeup (3 to 4 sessions)
-- [ ] reviewer on/off, Haiku/Sonnet reviewer, single agent vs team, loop cap 1/3
+- [~] reviewer on/off, Haiku/Sonnet reviewer, single agent vs team, loop cap 1/3. The Haiku/Sonnet
+      reviewer arm ran early, in Phase 3, crossed with a prompt condition -- see
+      `evals/results/2026-08-28_reviewer-ablation.jsonl`. Its Sonnet cells need topping up to n>=10
+      (~$0.85) before publication. The rest are untouched.
 - [ ] README as a short paper: thesis, setup, results tables, failure analysis, design section
       lifted from DECISIONS.md
 - [ ] resume bullet with real numbers

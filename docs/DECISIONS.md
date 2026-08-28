@@ -655,3 +655,47 @@ clearly worth running -- `--reviewer-model` exists, is unexercised, and this is 
 that makes the comparison interesting. And the opaque arm is the configuration in which the
 reviewer ablation is actually measurable, because it is the only one that reliably puts a leaky
 matrix in front of the reviewer; the descriptive arm answers a question about the profiler.
+
+## 2026-08-28: the reviewer arm is a 2x2, because the prompt was a confound under any model
+number, and the prompt turns out to be the whole effect.
+
+The plan was the Haiku-versus-Sonnet reviewer arm alone. It was run as a 2x2 against a second
+condition, `reviewer_prompt`, for one reason: yesterday's finding was that the reviewer reasons
+correctly about an implausible score and then names the wrong columns, and nothing in its system
+prompt asks which column produced the score. That leaves "Haiku cannot see this" and "we never
+asked" indistinguishable, and a model arm run under one arbitrary prompt would have produced a
+number -- "Sonnet catches 4 of 10" -- silently conditional on whichever prompt happened to be in the
+file that week. The prompt was not even recorded, so the dependency would have been invisible to
+anyone reading the results file later. The alternative that looks equivalent is running the model
+arm first and the prompt arm after, and it is not: the cells cost the same either way, and only the
+factorial version can say whether a prompt fix helps the weaker model, the stronger one, or both.
+
+The answer is that the prompt is the binding constraint and the model is not. One appended rule --
+if the claimed score is implausible, read `top_importances` from the top and name the column that
+explains it -- moves Haiku from 1 of 10 to 9 of 10 runs naming a planted trap. Sonnet under the base
+prompt is 0 of 4, no better than Haiku. This reframes yesterday's entry: the miss was not a
+capability limit and not an evidence-surface gap either, since `top_importances` was already in the
+prompt with the traps at the top of it. It was an unasked question. The rule names no fixture, no
+column and no trap type and points only at a field the reviewer already receives, which is the line
+this project draws between fixing a prompt and injecting the answer; the hint-injection ablation
+still parked in NEXT.md is the version that deliberately crosses it, and should be labelled as such
+when it runs.
+
+Two implementation choices are worth recording because both were the cheap-looking option's
+opposite. `reviewer_prompt` is a `Literal` on the frozen `RunConfig` rather than an edit to
+`REVIEWER_SYSTEM`, and `base` is byte-identical to the prompt every earlier run used: an unrecorded
+prompt change would have made every prior row incomparable to every later one with nothing in either
+row to say so, which is the same failure `naming` was created to prevent. And the new
+`reviewer_nominated`/`reviewer_caught`/`reviewer_recall`/`reviewer_false_alarm` fields sit *beside*
+`leakage_flagged` rather than widening it. Widening was tempting -- `leakage_flagged` covers only
+`leakage` and `contamination`, so a reviewer naming the trap under `implausible_importance`, which
+is exactly what it does, scored as a miss -- but the committed naming-ablation rows were written
+under the narrow definition, and redefining it would have silently changed the meaning of the only
+published results file in the project. The divergence is deliberate and is pinned by a test that
+asserts both numbers in the same row.
+
+The finding underneath the finding is that naming the column is necessary and not sufficient. Eight
+of the ten Haiku `which_column` runs end `exhausted`: the reviewer names the trap, the loop cap
+expires before `feature_eng` removes it, and a 9-of-10 catch rate becomes a 1-of-10 remediation
+rate. The reviewer half of the pipeline now works and the remediation half is the next bottleneck,
+which is a better problem than the one this session started with.
