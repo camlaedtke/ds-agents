@@ -419,3 +419,30 @@ Priority: **load-bearing** means the thesis breaks if this is wrong and you cann
   and only the flattering half is easy to measure. Related: [[caught-vs-remediated]],
   [[adversarial-review-loop]], [[loop-cap-and-verdict-derivation]],
   [[dispositions-as-audit-trail]], [[evidence-surface]].
+
+### effective-target-vs-recorded-choice — overriding a model's decision without deleting the evidence that you had to
+- Priority: load-bearing
+- Came up: 2026-08-28, fixing the remediation path
+- Status: flagged
+- Why it matters here: the reviewer kept addressing column-scoped objections to `modeler`, a node
+  with no column lever, so a correct catch produced the same results row as a hallucination. The
+  fix is obvious — route those to `feature_eng` regardless — and the obvious fix is also how you
+  quietly stop measuring the thing you built the project to measure. The move that keeps both is to
+  separate the *recorded* choice from the *effective* one: `Objection.target_node` still holds
+  exactly what the reviewer said and is never rewritten, `PipelineState.effective_target` is the
+  single place the override is applied, and `objections_by_target_node` keeps counting the raw
+  field so the reviewer's dispatch judgement stays measurable *in the arm that overrides it*.
+  `objections_rerouted` beside it counts how often the graph disagreed. That is the difference
+  between a recorded condition and a thumb on the scale, and it is checkable rather than assertable:
+  `test_the_raw_target_node_survives_the_reroute` fails if anyone folds the effective target into
+  the counter. Two corollaries worth as much as the main idea. First, applying the condition in one
+  place is not tidiness — the router and `feature_eng` had been two independent answers to "who acts
+  on this", and under the new arm they would have disagreed, with the router sending a run to
+  `modeler` while `feature_eng` was the only node that could act. Second, an override is only honest
+  if you also measure what it costs: `by_category` converts a reviewer false positive from something
+  inert into a really dropped column, and it dropped `prior_claims_12m` — a legitimate strong
+  feature — in 2 of 10 runs. `n_final_features` exists on the results row for exactly that reason,
+  because `leakage_remediated` is `None` on an empty matrix but `True` on a one-column one, so a run
+  that "remediated" by gutting the fixture would otherwise read as a clean success. Related:
+  [[actionable-objection]], [[controlled-ablation]], [[caught-vs-remediated]],
+  [[measurement-independence]].

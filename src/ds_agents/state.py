@@ -124,6 +124,17 @@ ReviewVerdict = Literal["pending", "pass", "block", "exhausted"]
 ReviewerPrompt = Literal["base", "which_column"]
 REVIEWER_PROMPTS: tuple[ReviewerPrompt, ...] = ("base", "which_column")
 
+# How the graph decides WHICH NODE ACTS on an objection. Not what the reviewer said: that is
+# `Objection.target_node`, which is recorded verbatim and never rewritten. `as_addressed` obeys it
+# and is what every run committed before 2026-08-28 did. `by_category` gives any objection in
+# COLUMN_SCOPED_CATEGORIES an effective target of `feature_eng` whatever the reviewer chose,
+# because a column is the only thing feature_eng can act on and the modeler has no column lever at
+# all -- every candidate is fit on the one transform feature_eng already froze. The evidence for
+# needing the condition at all: across the 27 rows carrying `route_sequence`, 0 of the 21 runs that
+# never routed to `feature_eng` remediated, against 3 of the 6 that did.
+ObjectionRouting = Literal["as_addressed", "by_category"]
+OBJECTION_ROUTINGS: tuple[ObjectionRouting, ...] = ("as_addressed", "by_category")
+
 Disposition = Literal["still_open", "resolved", "withdrawn", "not_reviewed"]
 
 
@@ -172,6 +183,17 @@ class RunConfig(Contract):
         "run before 2026-08-28, or `which_column`, which appends one rule asking the reviewer to "
         "name the column that explains an implausible score. On the frozen config because a "
         "reviewer-model comparison that does not record the prompt is confounded by it.",
+    )
+    objection_routing: ObjectionRouting = Field(
+        default="as_addressed",
+        description="Who the graph asks to act on an objection: `as_addressed`, obeying the "
+        "reviewer's own `target_node` exactly as every run before 2026-08-28 did, or "
+        "`by_category`, which routes a column-scoped objection to `feature_eng` regardless of "
+        "what the reviewer wrote. On the frozen config for the same reason `naming` and "
+        "`reviewer_prompt` are: the two arms remediate at different rates and a row that did not "
+        "carry this would be averaged with rows from the other. Note it changes what `feature_eng` "
+        "and `modeler` are SHOWN as well as where the run goes -- both read "
+        "`open_objections(target)` -- so it is not a pure edge change.",
     )
     random_seed: int = 20260822
     dataset_hash: str | None = None
@@ -540,9 +562,18 @@ class PipelineState(Contract):
         # reviewer objected to; these four say whether anything could act on it. They are derived
         # here rather than recorded by the nodes for the same reason every other outcome is: a node
         # that wrote down its own remediation would be a node reporting its own score.
+        # `target_node` is read RAW here, deliberately, and `effective_target` is only used to
+        # count the disagreements. This is what makes `objection_routing="by_category"` a recorded
+        # condition rather than a thumb on the scale: the reviewer's own dispatch judgement stays
+        # measurable in the arm that overrides it, and `objections_rerouted` says how often the
+        # graph disagreed with it. Reading the effective target into this counter instead would
+        # delete the only evidence that the override was ever needed.
         by_target_node = dict.fromkeys(get_args(RoutableNode), 0)
+        rerouted = 0
         for objection in self.objections:
             by_target_node[objection.target_node] += 1
+            if self.effective_target(objection) != objection.target_node:
+                rerouted += 1
 
         # The caught-versus-remediated gap as a list of names. A column-scoped objection whose
         # column is still in the matrix at the end was raised and not acted on, whatever the
@@ -577,6 +608,7 @@ class PipelineState(Contract):
             "reviewer_sees_code": self.config.reviewer_sees_code,
             "naming": self.config.naming,
             "loop_cap": self.config.loop_cap,
+            "objection_routing": self.config.objection_routing,
             "random_seed": self.config.random_seed,
             # scores. `claimed` is what the agent said; `verified` is what we measured.
             "claimed_holdout_score": claimed,
@@ -596,6 +628,14 @@ class PipelineState(Contract):
             "false_alarm": len(false_positives),
             "leakage_flagged_standing": sorted(standing),
             "false_alarm_standing": len(standing - planted),
+            # How wide the matrix the run actually shipped is. `leakage_remediated` is None on an
+            # EMPTY matrix but True on a one-column one, so without this a run that remediated by
+            # force-dropping most of the fixture is indistinguishable from one that dropped only
+            # the trap. `objection_routing="by_category"` turns a reviewer false positive into a
+            # real dropped column, so this is the price tag on that arm.
+            "n_final_features": (
+                len(self.final_features) if self.final_features is not None else None
+            ),
             # the same comparison one node upstream. `None` rather than empty when the profiler
             # never ran: a node that crashed nominated nothing in a different sense than a node
             # that looked and declined, and averaging those together would be a lie.
@@ -624,6 +664,7 @@ class PipelineState(Contract):
             # actually went. Between them these separate "the reviewer was wrong" from "the
             # reviewer was right and told a node that has no lever".
             "objections_by_target_node": by_target_node,
+            "objections_rerouted": rerouted,
             "objected_columns_unremediated": unremediated,
             "route_sequence": [rp.routed_to for rp in passes],
             "new_objections_per_pass": [len(rp.new_objection_ids) for rp in passes],
@@ -633,6 +674,24 @@ class PipelineState(Contract):
             "errored": bool(self.errors),
         }
 
+    def effective_target(self, objection: Objection) -> RoutableNode:
+        """Which node this run will actually route the objection to.
+
+        The one place `config.objection_routing` is applied. `Objection.target_node` is never
+        rewritten -- the reviewer's own dispatch choice stays on the record, so
+        `objections_by_target_node` keeps measuring its judgement even in the arm that overrides
+        it. That is what makes `by_category` a recorded condition rather than a thumb on the
+        scale, and it means the raw field and this method answer different questions: callers
+        asking who ACTS come through `open_objections(target)`, which is this method's only
+        caller inside the graph. `results_row` asks it directly, once, to count the disagreements.
+        """
+        if (
+            self.config.objection_routing == "by_category"
+            and objection.category in COLUMN_SCOPED_CATEGORIES
+        ):
+            return "feature_eng"
+        return objection.target_node
+
     def open_objections(self, target_node: RoutableNode | None = None) -> list[Objection]:
         """Objections whose LAST disposition is not resolved or withdrawn.
 
@@ -640,6 +699,10 @@ class PipelineState(Contract):
         an objection resolved in pass 2 and marked `still_open` again in pass 3 is reachable; a
         union over all passes would report it closed and the run would end with
         `objections_open_at_end: 0` while the problem is still there.
+
+        `target_node` here means who ACTS, not who the reviewer addressed. Under
+        `config.objection_routing="by_category"` a column-scoped objection answers to
+        `feature_eng` whatever the reviewer wrote; see `effective_target`.
         """
         latest: dict[str, Disposition] = {}
         for review in sorted(self.review_passes, key=lambda r: r.iteration):
@@ -649,7 +712,7 @@ class PipelineState(Contract):
         }
         pending = [o for o in self.objections if o.id not in closed]
         if target_node is not None:
-            pending = [o for o in pending if o.target_node == target_node]
+            pending = [o for o in pending if self.effective_target(o) == target_node]
         return pending
 
     def placeholder_models(self) -> list[str]:

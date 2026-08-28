@@ -185,3 +185,129 @@ Reaching `feature_eng` is necessary for remediation and is not sufficient. The c
 above are almost entirely differences in how often a run gets there: sonnet/which_column 2 of 4,
 haiku/which_column at `loop_cap=5` 4 of 10, sonnet/base 0 of 3, haiku/which_column at `loop_cap=1`
 0 of 10. Sonnet's advantage is that it addresses its objection to the node that can act on it.
+
+## 2026-08-28 (fourth run of the day): objection-routing arm -- `2026-08-28_objection-routing.jsonl`
+
+**Pre-registered before the cell was run.** Everything from here to the results table below was
+written first; the commit that carries this file carries the pre-registration and the rows together.
+
+The claim under test: the binding constraint on remediation is the pipeline's contract, not the
+reviewer's competence. `objection_routing="by_category"` gives a column-scoped objection an
+effective target of `feature_eng` whatever the reviewer addressed it to, without rewriting what the
+reviewer said. See DECISIONS.md 2026-08-28 (third entry).
+
+```
+uv run ds-agents run --dataset claims_timing --naming opaque --reviewer-prompt which_column \
+  --loop-cap 3 --objection-routing by_category --repeat 10 --tools mcp \
+  --results evals/results/2026-08-28_objection-routing.jsonl
+```
+
+**Control, not re-run:** the haiku/`which_column` cell of `2026-08-28_reviewer-ablation.jsonl`
+(n=10, commit `2d5c1fc`), which is `--objection-routing as_addressed` in all but name -- that arm
+is the default and is byte-identical to it, and the 445-test suite passes with zero edits to the
+router's own tests, which is the evidence for that claim. Those rows predate `route_sequence`,
+`objections_rerouted`, `objection_routing` and `n_final_features`, so **only `leakage_remediated`
+crosses the boundary cleanly**; the mechanism and harm columns below read as blanks on the control,
+not as zeroes.
+
+Endpoints, fixed in advance:
+
+- **Primary: `leakage_remediated`.** House rule, unchanged since the 2x2: **>=5/10 is shown, 3-4/10
+  is directional, below that is not resolved at this n.** Control is 1/10. The mechanical ceiling is
+  about 8/10 -- of the 9 control runs that caught a trap, 5 named both planted columns, and 3 of the
+  4 that named only `var_07` had `var_08` already dropped upstream.
+- **Mechanism: `route_sequence` contains `feature_eng`** (control: 0 of 10 haiku rows ever did) and
+  **`objections_rerouted` > 0**. Without these a remediation number is a coincidence, not a result.
+- **Harm: `n_final_features`, mean `claimed_holdout_score` against the ~0.82 legitimate ceiling,
+  `reviewer_false_alarm`.** This arm converts a reviewer false positive into a really dropped
+  feature -- under `as_addressed` a wrong objection sent to `modeler` was harmless. The one cap=5
+  run that remediated also objected to `var_04`, which is `prior_claims_12m` and a legitimate strong
+  feature. A remediation number quoted without a matrix width beside it is not honest.
+- **Descriptive, explicitly NOT an endpoint: `review_verdict`.** **`exhausted` is expected to stay
+  high in both arms**, because the closure half of the diagnosis is deliberately unfixed: the
+  reviewer never dispositions an objection `resolved`. A flat verdict column is the predicted
+  result here and must not be read as the routing fix failing. It is also the cleanest evidence that
+  the two causes are independent -- routing should move `leakage_remediated` and leave
+  `review_verdict` alone, and closure should do the opposite.
+- **Budget: $0.65 cap, $0.47 expected** (~$0.047/run: one pass plus two `feature_eng` returns,
+  decomposed from the committed sweep rows, against $0.030/run for the control). If the cell exceeds
+  the cap it stops where it stops and n is reported as what actually ran.
+
+### Results -- 10 rows, $0.272, well inside the $0.65 cap
+
+Ran at the working tree of the commit carrying this file. The `objection_routing`,
+`objections_rerouted` and `n_final_features` fields do not exist before it.
+
+| | control `as_addressed` (n=10, `2d5c1fc`) | **`by_category` (n=10)** |
+| - | - | - |
+| **`leakage_remediated`** | **1/10** | **5/10** |
+| `reviewer_caught` | 9/10 | 8/10 |
+| mean `reviewer_recall` | 0.70 | 0.65 |
+| route reached `feature_eng` | *(field absent)* | **8/10** |
+| `objections_rerouted` > 0 | *(field absent)* | 7/10 |
+| verdict pass / exhausted / block | 0 / 8 / 2 | 3 / 4 / 3 |
+| mean loops | 2.7 | 2.2 |
+| mean `claimed_holdout_score` | 0.9228 | 0.8812 |
+| mean `reviewer_false_alarm` | 0.0 | 0.4 |
+| `n_final_features` | *(field absent)* | 4-7 (median 5) |
+| mean $/run, wall | 0.0299, 40.6s | 0.0272, 34.5s |
+
+**Primary endpoint met at the pre-registered threshold: 5/10 against 1/10, which is exactly the
+">=5/10 is shown" line.** Not above it. Read it as the threshold being reached, not cleared.
+
+**The mechanism fired.** 8 of 10 runs routed to `feature_eng`; 7 of 10 contained at least one
+objection the graph re-addressed. The control rows cannot be compared directly on this because they
+predate the field; the standing cross-cell figure is that 0 of the 21 runs that never routed to
+`feature_eng` remediated, against 3 of 6 that did.
+
+**It got cheaper, not dearer, and this contradicts the pre-registration.** $0.0272/run against a
+predicted $0.047 and a control of $0.0299. The estimate assumed `by_category` would spend the whole
+cap; instead it *shortens* runs -- the objection gets acted on, so the loop terminates rather than
+grinding to `exhausted`. Mean loops fell 2.7 to 2.2 and three runs ended `pass`, which no control
+run did. The prediction that `exhausted` would stay flat was wrong in the run's favour and should be
+recorded as a wrong prediction, not quietly dropped: fixing routing turns out to partly relieve the
+closure symptom, because a reviewer whose objection is actually satisfied sometimes does close it.
+
+**Every one of the 5 non-remediating runs failed for a reason that is not routing.**
+
+- **3 runs (`new_objections_per_pass == [1,1,1]`, all `exhausted`) named the surviving trap on the
+  *final* reviewer pass.** A block at the cap becomes `exhausted` and routes to the reporter, so
+  `feature_eng` never runs again and the drop cannot land. `feature_eng` had re-run after passes 1
+  and 2 in each of these, and forced drops cover every open column-scoped objection, so a trap named
+  earlier would have gone -- which is what dates the naming to the last pass. **The effective number
+  of actionable reviewer passes is `loop_cap - 1`, not `loop_cap`.** That is a new finding and it is
+  not what the loop-cap sweep measured, because under `as_addressed` no pass was actionable at all.
+- **2 runs claimed `block` with zero objections raised** (`errored: true`, `route_sequence:
+  ["reporter"]`, nothing dropped, claimed 0.9858). This is the parking-lot error from the reviewer
+  ablation, which had appeared twice there and in none of the 27 rows after it. It is now reproduced
+  twice more and is a reviewer-side fault, independent of this arm.
+
+So of the 8 runs where the reviewer raised anything at all, 5 remediated; of the runs that named a
+trap before the final pass, effectively all did.
+
+**Harm: real, and it is the price named in the pre-registration.** 2 of 10 runs dropped `var_04` =
+`prior_claims_12m`, which the fixture lists as a legitimate strong feature. Under `as_addressed`
+that same false objection was inert because it went to a node with no lever; under `by_category` it
+costs a real column. `n_final_features` stayed 4-7, so no run remediated by gutting the matrix, and
+mean `claimed_holdout_score` fell 0.9228 -> 0.8812 toward the ~0.82 legitimate ceiling, which is the
+direction that indicates leakage leaving rather than damage. The honest summary is that the arm
+buys 4 extra remediated runs and spends 2 legitimate features doing it.
+
+**Language rule, per DECISIONS.md:** this 5/10 is *reviewer detection plus scripted dispatch*. It is
+not "the agent team remediated 5 of 10". The claim it supports is that the pipeline's contract, not
+the reviewer's competence, was the binding constraint.
+
+### A latent bug found while diagnosing this cell: a forced drop is not sticky
+
+Not the cause of anything above -- the three surviving-trap runs never resolved an objection, so it
+could not have fired -- but it is reachable and it was found by chasing them, so it is recorded here
+rather than lost. `_forced_drops` recomputes from `open_objections` on every invocation, so once the
+reviewer dispositions its objection `resolved`, a *later* return to `feature_eng` for some other
+objection silently puts the leaked column back in the matrix. Verified directly against the node:
+with the objection open the snippet reads `DROP = ['account_status_code', 'churned',
+'customer_id']`; with the same objection resolved it reads `DROP = ['churned', 'customer_id']`.
+`tests/nodes/test_feature_eng.py::test_a_resolved_objection_does_not_force_a_drop` pins this as
+intended behaviour, and for a single pass it is -- the hazard only appears across two returns, which
+is a shape `as_addressed` almost never produced and `by_category` now produces routinely. It needs a
+decision next session: either a drop, once forced, stays forced, or resolution has to be prevented
+from resurrecting a column.

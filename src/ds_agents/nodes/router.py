@@ -55,13 +55,21 @@ def _route_for_block(state: PipelineState, dispositions: dict[str, Disposition])
     """Where a 'block' claim sends the run, against the objections still open once THIS pass's
     dispositions are applied -- not the objections open going in. Upstream first: re-fitting on a
     matrix that still holds an objected column, then dropping it, invalidates the fit that was
-    just made."""
+    just made.
+
+    Asks `open_objections(destination)` rather than comparing `Objection.target_node` here, so
+    this function and `feature_eng._forced_drops` inherit the `objection_routing` condition from
+    the one place that applies it (`PipelineState.effective_target`). A `target_node ==` check in
+    this file would be a second, independently maintained answer to "who acts on this" -- the same
+    dual-authority split that invariant 3 above exists to close -- and under `by_category` the two
+    answers would disagree: the router would send the run to `modeler` while `feature_eng` was the
+    only node able to act.
+    """
     closing_now = {oid for oid, d in dispositions.items() if d in {"resolved", "withdrawn"}}
-    projected_open = [o for o in state.open_objections() if o.id not in closing_now]
-    if any(o.target_node == "feature_eng" for o in projected_open):
-        return "feature_eng"
-    if any(o.target_node == "modeler" for o in projected_open):
-        return "modeler"
+    upstream_first: tuple[RoutedTo, ...] = ("feature_eng", "modeler")
+    for destination in upstream_first:
+        if any(o.id not in closing_now for o in state.open_objections(destination)):
+            return destination
     return "reporter"
 
 

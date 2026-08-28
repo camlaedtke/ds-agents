@@ -12,7 +12,7 @@ import pytest
 from conftest import FakeTools, ScriptedModel
 
 from ds_agents.nodes.modeler import ModelChoice, modeler
-from ds_agents.state import PipelineState, TaskSpec
+from ds_agents.state import Objection, PipelineState, RunConfig, TaskSpec
 from ds_agents.tools.protocol import ArtifactMeta, ArtifactPayload, RunResult, ToolError
 
 pytestmark = pytest.mark.fast
@@ -276,6 +276,40 @@ def test_the_candidate_scores_reach_the_prompt():
     assert by_name["hist_gbdt"]["cv_mean"] == 0.8718
     assert by_name["hist_gbdt"]["holdout_score"] == 0.95
     assert "greater_is_better" in facts
+
+
+def test_a_rerouted_objection_leaves_the_modeler_prompt():
+    """`objection_routing="by_category"` does not only move an edge -- this node reads
+    `open_objections("modeler")`, so a column-scoped objection disappears from its prompt.
+
+    That is deliberate and it is the point. The modeler's only lever is which candidate to
+    promote: every candidate is fit on the one transform `feature_eng` already froze. A column
+    complaint it cannot act on can only produce a spurious response -- promoting a different
+    candidate -- which would read like remediation in a trace and be nothing of the kind. The
+    confound is real and belongs on the record: the arm does not hold this prompt constant.
+    """
+    objection = Objection(
+        category="implausible_importance",
+        subcategory="importance_dominance",
+        target_node="modeler",
+        columns=["account_status_code"],
+        evidence="permutation importance 0.367",
+        severity="high",
+        raised_at_iteration=0,
+    )
+
+    def facts_for(**config_kwargs) -> dict:
+        model = ScriptedModel({ModelChoice: choice()})
+        modeler(
+            state(objections=[objection], config=RunConfig(**config_kwargs)),
+            tools=tools_for(),
+            model=model,
+        )
+        (_system, user, _schema) = model.calls[0]
+        return json.loads(user)
+
+    assert len(facts_for()["open_objections"]) == 1
+    assert facts_for(objection_routing="by_category")["open_objections"] == []
 
 
 def test_choosing_a_candidate_that_does_not_exist_falls_back_to_best_by_cv():

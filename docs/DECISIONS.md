@@ -755,3 +755,55 @@ advantage here is not that it sees more; it is that it addresses what it sees to
 act on it. That is a finding about the pipeline's contract rather than about either model, and it
 raises the value of the routing fix: it is worth more than the reviewer-model upgrade that would
 otherwise be the obvious thing to buy.
+
+## 2026-08-28 (third entry): who acts on an objection becomes a recorded condition, and the
+## reviewer's own choice stays on the record.
+
+NEXT.md left the routing fix as an open question rather than a task, and the question was whether
+it is a fix at all: `implausible_importance` naming a column is a `feature_eng` problem whatever
+the reviewer calls it, so the graph could ignore `target_node` for column-scoped categories -- but
+the reviewer is a model under test, and deciding its dispatch on its behalf makes the pipeline work
+by making one fewer thing measurable. That is the same shape of question `naming` and
+`reviewer_prompt` raised, and it gets the same answer: record the condition rather than argue about
+it. `objection_routing` is a `Literal["as_addressed", "by_category"]` on the frozen `RunConfig`,
+defaulting to `as_addressed`, which is byte-identical to every run committed before today. Under
+`by_category` an objection whose category is in `COLUMN_SCOPED_CATEGORIES` has an *effective* target
+of `feature_eng` regardless of what the reviewer wrote.
+
+The load-bearing detail is what does *not* change. `Objection.target_node` is never rewritten. The
+reviewer's dispatch judgement stays on the record and `objections_by_target_node` keeps counting the
+raw field, so the thing the override is accused of hiding is still measured in the arm that
+overrides it -- and `objections_rerouted` beside it says how often the graph disagreed. Applying the
+condition in one place is what makes that guarantee checkable: `PipelineState.effective_target` is
+the only reader of `config.objection_routing`, `open_objections(target)` is its only caller, and
+`_route_for_block` was rewritten to ask `open_objections(destination)` rather than comparing
+`target_node` itself. The router had been a second, independent answer to "who acts on this", which
+is the dual-authority split `routed_to` was introduced to close; it is now one answer. For the same
+reason `FORCING_OBJECTION_CATEGORIES` in `feature_eng.py` was deleted in favour of importing
+`COLUMN_SCOPED_CATEGORIES`. The two frozensets were byte-identical, and had they ever diverged the
+router would have sent an objection to `feature_eng` that `_forced_drops` then skipped -- the same
+dead end reintroduced one layer down.
+
+Three things about this arm are not flattering and belong here rather than in a footnote. First, it
+is not a pure edge change. `feature_eng` and `modeler` both read `open_objections(target)`, so
+`by_category` also changes what those two nodes are *shown*: the column objection leaves the
+modeler's prompt and enters `feature_eng`'s. That is the right call -- the modeler's only lever is
+which candidate to promote, so a column complaint in its prompt can only produce a spurious response
+that looks like remediation in a trace and is nothing of the kind -- but the arm does not hold two
+prompts constant and must not be described as if it did. Second, `objections_by_target_node` demotes
+from an outcome to an annotation. In the `as_addressed` arm it predicts the run's fate (0 of 21 runs
+that never routed to `feature_eng` remediated); in `by_category` it predicts nothing, and two rows
+carrying the same value now mean different things depending on another column. `objection_routing`
+on every row is what keeps that legible. Third, the arm converts reviewer false positives into real
+dropped features. Under `as_addressed` a wrong objection addressed to `modeler` was harmless because
+nothing could act on it; the one run in the cap=5 cell that remediated also objected to `var_04`,
+which is `prior_claims_12m` and which the `claims_timing` manifest lists as a legitimate strong
+feature. `n_final_features` was added to `results_row()` for this: `leakage_remediated` is `None` on
+an empty matrix but `True` on a one-column one, so without a width beside it a run that "remediated"
+by force-dropping most of the fixture reads identically to one that dropped the trap.
+
+Hence a rule about language, which is the part most likely to be lost. The `by_category` remediation
+number is *reviewer detection plus scripted dispatch*. It is never "the agent team remediated N of
+10". The claim the arm can support is that the pipeline's contract, not the reviewer's competence,
+was the binding constraint on remediation -- which is a finding about our design and is worth having
+precisely because it is not a finding about the model.

@@ -1,7 +1,11 @@
 """modeler: fit the declared candidate models on the pinned split and let a model pick one.
 
 Reads `spec`, `feature_code_artifact`, `split_artifact`, `config.random_seed`, `config.run_id`,
-`open_objections("modeler")`, `final_features`. Writes `candidates`, `chosen_model`,
+`open_objections("modeler")`, `final_features`. Note that under
+`config.objection_routing="by_category"` that call excludes column-scoped objections even when the
+reviewer addressed them here, deliberately: this node's only lever is which candidate to promote,
+so a column complaint in its prompt can only produce a spurious response that reads like
+remediation in a trace and is nothing of the kind. Writes `candidates`, `chosen_model`,
 `importance_artifact`, `top_importances`. Tools: `read_artifact`, `run_python`, `log_metric`.
 
 Every candidate is fit and scored entirely by code -- cross-validated on the pinned folds, then

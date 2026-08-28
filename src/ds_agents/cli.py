@@ -22,7 +22,14 @@ from ds_agents.fixtures import Fixture, available, load_fixture
 from ds_agents.graph import run_pipeline
 from ds_agents.naming import NAMINGS, Naming, materialize, rename_map
 from ds_agents.naming import apply as apply_rename
-from ds_agents.state import REVIEWER_PROMPTS, PipelineState, ReviewerPrompt, RunConfig
+from ds_agents.state import (
+    OBJECTION_ROUTINGS,
+    REVIEWER_PROMPTS,
+    ObjectionRouting,
+    PipelineState,
+    ReviewerPrompt,
+    RunConfig,
+)
 from ds_agents.tools.llm import AnthropicModel, StubModel, api_key_present
 from ds_agents.tools.local import LocalTools
 from ds_agents.tools.mcp_client import MCPTools, stdio_params
@@ -39,6 +46,7 @@ def _fixture_state(
     naming: Naming = "descriptive",
     reviewer_prompt: ReviewerPrompt = "base",
     loop_cap: int = 3,
+    objection_routing: ObjectionRouting = "as_addressed",
 ) -> PipelineState:
     """The starting state for one run of `fixture` under one naming condition.
 
@@ -74,6 +82,11 @@ def _fixture_state(
             # on an objection, so two rows written under different caps are not comparable and
             # must not be averaged by anyone who has forgotten which was which.
             loop_cap=loop_cap,
+            # Recorded for the same reason as everything above it, and with a sharper edge: the
+            # two arms differ in whether a column-scoped objection can be acted on at all, so
+            # their remediation rates are not comparable and averaging them would report a
+            # capability the `as_addressed` arm does not have.
+            objection_routing=objection_routing,
         ),
         dataset_id=fixture.dataset_id,
         # No `spec`: naming the target is intake's job, and pre-filling it here would skip the
@@ -239,6 +252,7 @@ def _run_once(
         args.naming,
         args.reviewer_prompt,
         args.loop_cap,
+        args.objection_routing,
     )
     model = _select_model(state.config, no_live=args.no_live)
     reviewer_model = _select_reviewer_model(state.config, model, no_live=args.no_live)
@@ -385,6 +399,14 @@ def _build_parser() -> argparse.ArgumentParser:
         help="how many completed reviewer passes a run may have (default: 3). The cap permits "
         "N passes and N-1 returns upstream; a block at the cap becomes the `exhausted` verdict, "
         "never a pass. This is the Phase 5 loop-cap ablation lever.",
+    )
+    run.add_argument(
+        "--objection-routing",
+        default="as_addressed",
+        choices=OBJECTION_ROUTINGS,
+        help="who acts on an objection: as the reviewer addressed it (default, and what every run "
+        "before 2026-08-28 did), or by_category, which sends a column-scoped objection to "
+        "feature_eng whatever the reviewer chose. This is the objection-routing ablation.",
     )
     run.add_argument(
         "--results",

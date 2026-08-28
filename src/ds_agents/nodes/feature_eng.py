@@ -4,16 +4,17 @@ Reads `spec`, `profile`, `split_artifact`. Writes `feature_code_artifact`, `feat
 `final_features`, `dropped_features`. Tools: `read_artifact` (the split manifest), `run_python`.
 
 Like the profiler, this is split in two. The node computes a FORCED drop set -- the target, any
-column that is really just a row id, and any column under an open leakage-shaped reviewer
-objection -- before the model is ever called, and the model's own proposed drops can only add to
-that set, never remove from it. The model also gets to say which profiler-flagged columns it is
-keeping and why. Everything downstream of the drop decision -- which columns are numeric vs
-one-hot, what the medians and one-hot levels are, whether the resulting matrix has any NaN -- is
-computed by a fixed snippet through `run_python`, fitted on the pinned TRAIN rows of
-`split_artifact` only. Fitting on the whole frame would move the agents' own holdout rows into the
-training statistic, which is precisely the `contamination` category the reviewer exists to catch;
-refusing to run without a split manifest follows the profiler's precedent of refusing rather than
-mislabelling.
+column that is really just a row id, and any column under an open leakage-shaped reviewer objection
+that this node is the one to act on (`config.objection_routing` decides that, via
+`open_objections`, not this file) -- before the model is ever called, and the model's own proposed
+drops can only add to that set, never remove from it. The model also gets to say which
+profiler-flagged columns it is keeping and why. Everything downstream of the drop decision -- which
+columns are numeric vs one-hot, what the medians and one-hot levels are, whether the resulting
+matrix has any NaN -- is computed by a fixed snippet through `run_python`, fitted on the pinned
+TRAIN rows of `split_artifact` only. Fitting on the whole frame would move the agents' own holdout
+rows into the training statistic, which is precisely the `contamination` category the reviewer
+exists to catch; refusing to run without a split manifest follows the profiler's precedent of
+refusing rather than mislabelling.
 
 `final_features`, `dropped_features`, and `FeatureDrop.column` all hold SOURCE column names, never
 one-hot expansions like `region=north`. `results_row()` intersects `final_features` with
@@ -27,7 +28,12 @@ from typing import Any, Literal
 from pydantic import Field
 
 from ds_agents.nodes._run import NodeRun
-from ds_agents.state import Contract, PipelineError, PipelineState
+from ds_agents.state import (
+    COLUMN_SCOPED_CATEGORIES,
+    Contract,
+    PipelineError,
+    PipelineState,
+)
 from ds_agents.tools.llm import StructuredModel
 from ds_agents.tools.protocol import ToolError, Tools
 
@@ -38,11 +44,15 @@ MAX_ONE_HOT_LEVELS = 20
 # through as a feature just because it wasn't quite perfectly unique.
 ID_DISTINCTNESS_THRESHOLD = 0.98
 
-# Objection categories whose whole point is "this column is the problem". All three are folded
-# into a forced FeatureDrop with reason="leakage" -- the schema has no separate bucket for
-# contamination or implausible-importance, and none of the alternatives ("constant",
-# "high_missing", "redundant", "other") describe why a reviewer objection forces a drop.
-FORCING_OBJECTION_CATEGORIES = frozenset({"leakage", "contamination", "implausible_importance"})
+# The categories whose whole point is "this column is the problem" are `COLUMN_SCOPED_CATEGORIES`,
+# imported rather than restated. This file used to keep its own byte-identical copy; the two are now
+# load-bearing together, because `objection_routing="by_category"` routes on the state.py set while
+# the forced drop below gates on this one. Had they ever diverged, the router would have sent a run
+# to feature_eng for an objection `_forced_drops` then skipped -- the same dead end this session
+# removed, reintroduced one layer down. All three are folded into a forced FeatureDrop with
+# reason="leakage": the schema has no separate bucket for contamination or implausible-importance,
+# and none of the alternatives ("constant", "high_missing", "redundant", "other") describe why a
+# reviewer objection forces a drop.
 
 FEATURE_SNIPPET = '''
 import json, os
@@ -210,7 +220,10 @@ def _forced_drops(state: PipelineState) -> list[FeatureDrop]:
     2. The id-column class: >=98% distinct AND not a float dtype. Purely statistical -- a column
        named `id` that is a real feature (or a float column with high cardinality, like a price)
        must survive. This is what catches `customer_id` on the toy fixture without name heuristics.
-    3. Columns named by an open objection targeting feature_eng in a leakage-shaped category.
+    3. Columns named by an open objection in a leakage-shaped category that ACTS on feature_eng.
+       Under `objection_routing="by_category"` that includes objections the reviewer addressed to
+       `modeler`; `open_objections` resolves who acts and this node does not, so there is exactly
+       one answer to that question in the codebase.
     """
     assert state.spec is not None and state.profile is not None
     target = state.spec.target
@@ -234,7 +247,7 @@ def _forced_drops(state: PipelineState) -> list[FeatureDrop]:
 
     seen = {d.column for d in drops}
     for objection in state.open_objections("feature_eng"):
-        if objection.category not in FORCING_OBJECTION_CATEGORIES:
+        if objection.category not in COLUMN_SCOPED_CATEGORIES:
             continue
         for column in objection.columns:
             if column in seen:

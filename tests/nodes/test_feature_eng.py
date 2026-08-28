@@ -25,6 +25,7 @@ from ds_agents.state import (
     PipelineState,
     ProfileReport,
     ReviewPass,
+    RunConfig,
     TaskSpec,
 )
 from ds_agents.tools.protocol import ArtifactMeta, ArtifactPayload, RunResult, ToolError
@@ -237,6 +238,55 @@ def test_a_resolved_objection_does_not_force_a_drop():
     )
 
     assert "DROP = ['churned', 'customer_id']" in tools.code_run[0]
+
+
+def _misaddressed_importance_objection() -> Objection:
+    """The shape the reviewer actually produced live on 2026-08-28: the right column, in a
+    column-scoped category, addressed to a node with no column lever."""
+    return Objection(
+        category="implausible_importance",
+        subcategory="importance_dominance",
+        target_node="modeler",
+        columns=["account_status_code"],
+        evidence="permutation importance 0.367, an order of magnitude above any other column",
+        severity="high",
+        raised_at_iteration=0,
+    )
+
+
+def test_a_modeler_addressed_importance_objection_is_ignored_under_the_default_routing():
+    """The bug, as a test. `_forced_drops` reads `open_objections("feature_eng")`, so an objection
+    naming the right column but addressed to `modeler` reaches nothing that can act on it -- and
+    the modeler cannot either, because every candidate is fit on the transform this node froze."""
+    tools = tools_for()
+
+    feature_eng(
+        state(objections=[_misaddressed_importance_objection()]),
+        tools=tools,
+        model=empty_plan_model(),
+    )
+
+    assert "DROP = ['churned', 'customer_id']" in tools.code_run[0]
+
+
+def test_a_modeler_addressed_importance_objection_forces_the_drop_under_by_category():
+    """The fix. Same objection, same node, same model: only `config.objection_routing` differs.
+
+    This node did not change to make it happen -- `open_objections` resolves who acts, so there is
+    exactly one place the condition is applied and this file inherits it.
+    """
+    tools = tools_for()
+
+    feature_eng(
+        state(
+            config=RunConfig(objection_routing="by_category"),
+            objections=[_misaddressed_importance_objection()],
+        ),
+        tools=tools,
+        model=empty_plan_model(),
+    )
+
+    assert "account_status_code" in tools.code_run[0]
 
 
 def test_the_model_can_add_a_drop_but_never_remove_a_forced_one():

@@ -20,6 +20,8 @@ from ds_agents.nodes.router import route_target, router
 from ds_agents.state import (
     Disposition,
     Objection,
+    ObjectionCategory,
+    ObjectionRouting,
     PipelineState,
     ReviewPass,
     ReviewVerdict,
@@ -40,11 +42,16 @@ def state(
     review_passes: list[ReviewPass] | None = None,
     review_verdict: ReviewVerdict = "pending",
     reviewer_dispositions: dict[str, Disposition] | None = None,
+    objection_routing: ObjectionRouting = "as_addressed",
 ) -> PipelineState:
     return PipelineState(
         dataset_id="toy",
         task_description="Predict churned, report roc_auc.",
-        config=RunConfig(loop_cap=loop_cap, reviewer_enabled=reviewer_enabled),
+        config=RunConfig(
+            loop_cap=loop_cap,
+            reviewer_enabled=reviewer_enabled,
+            objection_routing=objection_routing,
+        ),
         reviewer_claim=reviewer_claim,
         review_iterations=review_iterations,
         objections=objections or [],
@@ -58,9 +65,10 @@ def objection(
     target_node: RoutableNode = "feature_eng",
     column: str = "account_status_code",
     raised_at_iteration: int = 0,
+    category: ObjectionCategory = "leakage",
 ) -> Objection:
     return Objection(
-        category="leakage",
+        category=category,
         subcategory="planted status code",
         target_node=target_node,
         columns=[column],
@@ -315,6 +323,28 @@ def test_the_trace_event_is_written_on_every_branch(kwargs):
 # --- the dual-authority guard: routed_to == where route_target actually sends the run ------------
 
 
+def test_a_rerouted_objection_resolved_this_pass_still_routes_to_the_reporter():
+    """`_route_for_block` now asks `open_objections(destination)`, which applies the routing
+    condition. This pins that the rewrite kept the disposition projection AHEAD of the reroute:
+    an objection the reviewer closed in this very pass must not drag the run upstream just
+    because `by_category` would have sent it there had it still been open."""
+    ob = objection(target_node="modeler", category="implausible_importance")
+    update = router(
+        state(
+            reviewer_claim="block",
+            objections=[ob],
+            reviewer_dispositions={ob.id: "resolved"},
+            objection_routing="by_category",
+        ),
+        tools=tools(),
+        model=model(),
+    )
+
+    (pass_,) = update["review_passes"]
+    assert pass_.routed_to == "reporter"
+    assert any("no open objection" in e.message for e in update["errors"])
+
+
 @pytest.mark.parametrize(
     "kwargs, expected",
     [
@@ -332,8 +362,33 @@ def test_the_trace_event_is_written_on_every_branch(kwargs):
         ({"reviewer_claim": "block", "objections": [objection(target_node="modeler")]}, "modeler"),
         ({"reviewer_claim": "block", "review_iterations": 2, "loop_cap": 3}, "reporter"),
         ({"reviewer_claim": "block", "objections": []}, "reporter"),
+        # The live misrouting, both ways round. Same objection, same reviewer; the condition is
+        # the only thing that differs, and it is what decides whether any node can act.
+        (
+            {
+                "reviewer_claim": "block",
+                "objections": [objection(target_node="modeler", category="implausible_importance")],
+            },
+            "modeler",
+        ),
+        (
+            {
+                "reviewer_claim": "block",
+                "objections": [objection(target_node="modeler", category="implausible_importance")],
+                "objection_routing": "by_category",
+            },
+            "feature_eng",
+        ),
     ],
-    ids=["pass", "feature_eng_first", "modeler_only", "exhausted", "block_no_objection"],
+    ids=[
+        "pass",
+        "feature_eng_first",
+        "modeler_only",
+        "exhausted",
+        "block_no_objection",
+        "misaddressed_as_addressed",
+        "misaddressed_by_category",
+    ],
 )
 def test_routed_to_matches_where_route_target_actually_sends_the_run(kwargs, expected):
     """Applies the router's own update to the state that produced it, then calls the edge function

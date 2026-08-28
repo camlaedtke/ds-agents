@@ -265,6 +265,104 @@ class TestOpenObjectionsOrdering:
         assert state.open_objections() == [objection]
 
 
+class TestObjectionRouting:
+    """`config.objection_routing` decides WHO ACTS on an objection, and only that.
+
+    The bug being fixed, live on 2026-08-28: the reviewer raises `implausible_importance` -- a
+    column-scoped category -- and addresses it to `modeler`, which is a defensible reading of its
+    own prompt and a node with no column lever at all. `feature_eng` force-drops objected columns
+    but only sees `open_objections("feature_eng")`, so a correct objection sent one node sideways
+    produced exactly the same results row as a hallucinated one. 0 of 21 runs that never routed to
+    `feature_eng` remediated, against 3 of 6 that did.
+    """
+
+    def _state(self, objections: list[Objection], routing: str = "as_addressed") -> PipelineState:
+        return PipelineState(
+            config=RunConfig(objection_routing=routing),
+            dataset_id="toy",
+            task_description="x",
+            planted_leakage_columns=["leaky_col"],
+            objections=objections,
+        )
+
+    def _misaddressed(self) -> Objection:
+        """The exact shape the reviewer produced live: right column, wrong node."""
+        return leak_objection(
+            category="implausible_importance",
+            subcategory="importance_dominance",
+            target_node="modeler",
+            columns=["leaky_col"],
+        )
+
+    def test_the_default_routing_obeys_the_reviewers_choice(self):
+        """The BEFORE picture as a unit test: feature_eng cannot see it, so nothing can act."""
+        objection = self._misaddressed()
+        state = self._state([objection])
+        assert state.open_objections("modeler") == [objection]
+        assert state.open_objections("feature_eng") == []
+
+    def test_by_category_gives_a_column_scoped_objection_to_feature_eng(self):
+        """The AFTER picture. Same objection, same reviewer, opposite answer to who acts."""
+        objection = self._misaddressed()
+        state = self._state([objection], routing="by_category")
+        assert state.open_objections("feature_eng") == [objection]
+        assert state.open_objections("modeler") == []
+
+    def test_a_non_column_scoped_objection_is_never_rerouted(self):
+        """Pins the rule to COLUMN_SCOPED_CATEGORIES rather than "everything addressed to the
+        modeler". An `overfit` complaint really is the modeler's, and rerouting it would send the
+        run upstream to a node with nothing to drop."""
+        objection = leak_objection(
+            category="overfit",
+            subcategory="cv_holdout_gap",
+            target_node="modeler",
+            columns=[],
+        )
+        state = self._state([objection], routing="by_category")
+        assert state.open_objections("modeler") == [objection]
+        assert state.open_objections("feature_eng") == []
+
+    def test_the_raw_target_node_survives_the_reroute(self):
+        """This is the "recorded condition, not a thumb on the scale" argument, as an assertion.
+
+        `by_category` overrides where the run goes. It must NOT overwrite what the reviewer said,
+        because `objections_by_target_node` is the only evidence that the reviewer's dispatch
+        judgement was the problem -- and folding the effective target into that counter would
+        delete the finding in exactly the arm that exists to demonstrate it.
+        """
+        state = self._state([self._misaddressed()], routing="by_category")
+        assert state.objections[0].target_node == "modeler"
+        row = state.results_row()
+        assert row["objections_by_target_node"] == {"feature_eng": 0, "modeler": 1}
+        assert row["objection_routing"] == "by_category"
+
+    def test_objections_rerouted_counts_only_the_overridden_ones(self):
+        """Three objections, one of which the graph disagrees with the reviewer about."""
+        objections = [
+            self._misaddressed(),
+            leak_objection(columns=["leaky_col"]),
+            leak_objection(
+                category="overfit", subcategory="cv_gap", target_node="modeler", columns=[]
+            ),
+        ]
+        assert self._state(objections, "by_category").results_row()["objections_rerouted"] == 1
+        assert self._state(objections).results_row()["objections_rerouted"] == 0
+
+    def test_n_final_features_is_the_price_tag_on_the_reroute(self):
+        """`leakage_remediated` is None on an EMPTY matrix but True on a one-column one, and
+        `by_category` turns a reviewer false positive into a really dropped feature. Without a
+        width beside it, a run that "remediated" by force-dropping most of the fixture reads
+        identically to one that dropped only the trap."""
+        state = self._state([], routing="by_category")
+        state.final_features = ["one_survivor"]
+        row = state.results_row()
+        assert row["n_final_features"] == 1
+        assert row["leakage_remediated"] is True
+
+    def test_n_final_features_is_null_when_feature_eng_never_ran(self):
+        assert self._state([]).results_row()["n_final_features"] is None
+
+
 class TestDerivedNumbers:
     def test_score_ratio_is_direction_aware(self):
         higher = PipelineState(

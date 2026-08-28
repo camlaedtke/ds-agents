@@ -146,10 +146,31 @@ read a manifest could read the answer key.
       existing state, no node changes. `--loop-cap` became a real CLI flag at the same time -- it had
       been on the frozen `RunConfig` and on every results row since the first one, with no way to
       set it.
-- [ ] Fix the remediation path. Deliberately deferred so it gets a controlled before/after against
-      the sweep above. Routing is the leading candidate (`implausible_importance` naming a column is
-      a `feature_eng` problem whatever the prompt calls it); a closure condition the reviewer can
-      actually observe is a second, separate change.
+- [~] Fix the remediation path. **Routing half done; closure half still open.** `objection_routing`
+      is a `Literal["as_addressed", "by_category"]` on the frozen `RunConfig`, defaulting to the
+      arm that reproduces every committed row byte for byte. Under `by_category` a column-scoped
+      objection has an *effective* target of `feature_eng` whatever the reviewer wrote, applied in
+      one place (`PipelineState.effective_target`, read only by `open_objections`), so the router
+      and `feature_eng` stopped being two independent answers to "who acts on this".
+      `Objection.target_node` is never rewritten, so `objections_by_target_node` still measures the
+      reviewer's dispatch judgement in the arm that overrides it -- which is what makes this a
+      recorded condition rather than a thumb on the scale. n=10 live at $0.272:
+      **`leakage_remediated` 5/10 against the control cell's 1/10**, exactly the pre-registered
+      ">=5/10 is shown" threshold, with 8/10 runs reaching `feature_eng`.
+      `evals/results/2026-08-28_objection-routing.jsonl`. Two costs recorded rather than buried:
+      2 of 10 runs dropped `prior_claims_12m`, a legitimate strong feature, because `by_category`
+      turns a reviewer false positive into a real drop (hence `n_final_features` on the row); and
+      the arm got *cheaper*, not dearer, which contradicted the pre-registration. Three residual
+      failures named the trap on the **final** pass, which the cap routes straight to the reporter
+      -- so the effective number of actionable passes is `loop_cap - 1`. See DECISIONS.md
+      2026-08-28 (third entry).
+- [ ] Closure: give the reviewer a termination condition it can observe. Unchanged and still the
+      next arm. Deliberately not bundled with the routing arm so each gets its own before/after
+      against the same cell.
+- [ ] Decide whether a forced drop is sticky. Found while diagnosing the routing cell: because
+      `_forced_drops` recomputes from `open_objections`, a resolved objection stops forcing its
+      drop, so a later return to `feature_eng` puts the leaked column back. Harmless across one
+      pass, reachable across two -- a shape `by_category` now produces routinely.
 
 ## Phase 4: Eval harness (3 to 5 sessions, plan mode)
 - [ ] evals/datasets/manifest.yaml with 10 to 15 OpenML / Kaggle playground datasets and

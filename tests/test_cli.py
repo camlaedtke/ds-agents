@@ -219,6 +219,31 @@ class TestThePromptConditionIsRecorded:
         assert state.config.reviewer_prompt == "which_column"
 
 
+class TestTheRoutingConditionIsRecorded:
+    """Mirror of TestThePromptConditionIsRecorded, and the one with the sharpest edge: the two
+    arms differ in whether a column-scoped objection can be acted on at all, so their remediation
+    rates are not comparable and a row that did not carry the condition would be averaged with
+    rows that had a capability it did not."""
+
+    def test_the_default_is_the_old_behaviour(self):
+        """Every row committed before 2026-08-28 ran under this, so the default has to be the
+        arm that reproduces them byte for byte."""
+        args = _build_parser().parse_args(["run"])
+        assert args.objection_routing == "as_addressed"
+        assert _fixture_state(load_fixture("claims_timing")).config.objection_routing == (
+            "as_addressed"
+        )
+
+    def test_fixture_state_records_the_variant(self):
+        state = _fixture_state(load_fixture("claims_timing"), objection_routing="by_category")
+        assert state.config.objection_routing == "by_category"
+        assert state.results_row()["objection_routing"] == "by_category"
+
+    def test_an_unknown_routing_is_refused_by_the_parser(self):
+        with pytest.raises(SystemExit):
+            _build_parser().parse_args(["run", "--objection-routing", "by_vibes"])
+
+
 class TestTheReviewerClient:
     """`_select_reviewer_model`, untested until the session that spends money on it.
 

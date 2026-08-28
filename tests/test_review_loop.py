@@ -60,9 +60,37 @@ def _pass_and_resolve(payload: dict) -> ReviewFinding:
     )
 
 
+def _block_via_modeler(payload: dict) -> ReviewFinding:
+    """The live failure shape: the right column, in a column-scoped category, addressed to a node
+    with no column lever. `implausible_importance` is an objection about a *score*, and
+    REVIEWER_SYSTEM sends anything about how the run was evaluated to `modeler` -- a correct
+    reading of the prompt and a dead end in the graph."""
+    return ReviewFinding(
+        claim="block",
+        objections=[
+            ProposedObjection(
+                category="implausible_importance",
+                subcategory="importance_dominance",
+                target_node="modeler",
+                columns=["account_status_code"],
+                evidence="account_status_code dominates the importance ranking",
+                severity="high",
+            )
+        ],
+        dispositions=[],
+        summary="the score is not credible and account_status_code is why",
+    )
+
+
 def _with_loop_cap(state: PipelineState, loop_cap: int) -> PipelineState:
     return state.model_copy(
         update={"config": state.config.model_copy(update={"loop_cap": loop_cap})}
+    )
+
+
+def _with_routing(state: PipelineState, objection_routing: str) -> PipelineState:
+    return state.model_copy(
+        update={"config": state.config.model_copy(update={"objection_routing": objection_routing})}
     )
 
 
@@ -98,6 +126,47 @@ def test_always_block_ends_exhausted_at_the_cap(tmp_path):
 
     assert state.review_verdict == "exhausted"
     assert state.review_iterations == 2
+
+
+def test_a_modeler_addressed_column_objection_dead_ends_under_the_default_routing(tmp_path):
+    """The bug, end to end. The reviewer names the planted column correctly and the pipeline ships
+    it anyway, because the only node that could drop it is never asked and never re-runs.
+
+    This is what 0-of-21 looked like in the committed rows: `reviewer_caught` true,
+    `leakage_remediated` false, and a `route_sequence` that never mentions `feature_eng`.
+    """
+    tools = LocalTools(tmp_path / "loop-dead-end", dataset_path=TOY, dataset_id="toy")
+    model = QueuedModel(ReviewFinding, [_block_via_modeler, _pass_and_resolve])
+
+    state = run_pipeline(_toy_state(), tools=tools, model=model)
+
+    passes = sorted(state.review_passes, key=lambda rp: rp.iteration)
+    assert [rp.routed_to for rp in passes] == ["modeler", "reporter"]
+    assert [e.node for e in state.node_trace].count("feature_eng") == 1
+    assert "account_status_code" in (state.final_features or [])
+
+
+def test_a_modeler_addressed_column_objection_reaches_feature_eng_under_by_category(tmp_path):
+    """The fix, end to end. Byte-identical reviewer output and one changed condition.
+
+    The objection's own `target_node` is still `modeler` on the record -- the graph overrode where
+    the run goes, not what the reviewer said -- which is what keeps `objections_by_target_node`
+    meaningful in this arm and makes `objections_rerouted` the count of the disagreement.
+    """
+    tools = LocalTools(tmp_path / "loop-rerouted", dataset_path=TOY, dataset_id="toy")
+    model = QueuedModel(ReviewFinding, [_block_via_modeler, _pass_and_resolve])
+
+    state = run_pipeline(_with_routing(_toy_state(), "by_category"), tools=tools, model=model)
+
+    passes = sorted(state.review_passes, key=lambda rp: rp.iteration)
+    assert [rp.routed_to for rp in passes] == ["feature_eng", "reporter"]
+    assert [e.node for e in state.node_trace].count("feature_eng") == 2
+    assert "account_status_code" not in (state.final_features or [])
+
+    assert state.objections[0].target_node == "modeler"
+    row = state.results_row()
+    assert row["objections_by_target_node"] == {"feature_eng": 0, "modeler": 1}
+    assert row["objections_rerouted"] == 1
 
 
 def test_the_stub_reviewer_leaves_the_run_clean(tmp_path):
