@@ -107,6 +107,28 @@ def test_the_stub_is_recorded_as_the_model(toy_run):
     assert state.publishable()[0] is False
 
 
+def test_the_reviewer_model_binds_to_the_reviewer_node_only(tmp_path: Path):
+    """The whole Haiku-vs-Sonnet reviewer arm is one line of graph.py binding `reviewer_model` to
+    the reviewer node. Nothing asserted it before the session that spent money on it: if the
+    binding were wrong, a "Sonnet reviewer" run would silently be Sonnet everywhere and the
+    ablation would measure the whole pipeline."""
+    tools = LocalTools(tmp_path, dataset_path=TOY, dataset_id="toy")
+    try:
+        state = run_pipeline(
+            _toy_state(),
+            tools=tools,
+            model=StubModel(name="stub-base"),
+            reviewer_model=StubModel(name="stub-reviewer"),
+        )
+    finally:
+        tools.close()
+
+    by_node = {event.node: event.model for event in state.node_trace if event.model is not None}
+    assert by_node["reviewer"] == "stub-reviewer"
+    others = {node: model for node, model in by_node.items() if node != "reviewer"}
+    assert others and all(model == "stub-base" for model in others.values())
+
+
 def test_final_features_are_source_names_not_one_hot_expansions(toy_run):
     """`results_row()` intersects `final_features` with `planted_leakage_columns`, which hold
     source names. A dummy name here empties that intersection and scores every run as remediated

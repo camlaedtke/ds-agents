@@ -74,6 +74,29 @@ nothing routes back to you empty-handed, so only block when there is something l
 feature_eng or modeler to act on.
 - You are not the modeler or feature_eng. State the problem; do not propose the fix."""
 
+# Appended to REVIEWER_SYSTEM under `reviewer_prompt="which_column"`, never substituted for it.
+# The observed failure this targets, live on 2026-08-27: at a claimed roc_auc of 0.9886 the
+# reviewer raised `implausible_importance` naming the two NOISE columns, whose importance was near
+# zero, while the planted traps sat at the top of the same ranking. It had the number that says
+# the score is too good and searched the wrong end of the list. This asks the question nothing in
+# the base prompt asks. It names no fixture, no column and no trap type -- a hint about WHERE the
+# answer is would make the ablation arm measure the hint.
+WHICH_COLUMN_RULE = """
+- If the claimed holdout score is higher than the task plausibly supports, do not stop at saying \
+the number is not credible. Say which column produced it: read `top_importances` from the top and \
+name the highest-importance column or columns the score depends on, in a `leakage`, \
+`contamination` or `implausible_importance` objection. A column with near-zero importance did not \
+cause a high score, so it is not an answer to this question."""
+
+
+def _system_prompt(state: PipelineState) -> str:
+    """`base` must stay byte-identical to what every earlier run used, or rows written under
+    different sessions stop being comparable. One prompt with one optional rule appended, never a
+    second code path."""
+    if state.config.reviewer_prompt == "which_column":
+        return REVIEWER_SYSTEM + WHICH_COLUMN_RULE
+    return REVIEWER_SYSTEM
+
 
 class ProposedObjection(Contract):
     """What the model proposes raising. `Objection` minus `id` and `raised_at_iteration` -- the
@@ -216,7 +239,7 @@ def reviewer(state: PipelineState, *, tools: Tools, model: StructuredModel) -> d
     try:
         finding = run.record(
             model.generate(
-                system=REVIEWER_SYSTEM,
+                system=_system_prompt(state),
                 user=_user_message(
                     state, feature_code=feature_code, feature_code_note=feature_code_note
                 ),

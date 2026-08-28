@@ -11,7 +11,14 @@ REJECTED, not downgraded to `other`.
 import pytest
 from conftest import FakeTools, ScriptedModel
 
-from ds_agents.nodes.reviewer import DispositionUpdate, ProposedObjection, ReviewFinding, reviewer
+from ds_agents.nodes.reviewer import (
+    REVIEWER_SYSTEM,
+    WHICH_COLUMN_RULE,
+    DispositionUpdate,
+    ProposedObjection,
+    ReviewFinding,
+    reviewer,
+)
 from ds_agents.state import (
     Objection,
     PipelineState,
@@ -403,3 +410,45 @@ def test_disabled_reviewer_is_a_zero_cost_no_op():
     assert event.cost_usd == 0.0
     assert event.model is None
     assert model.calls == []
+
+
+# --- the prompt condition ---------------------------------------------------------------------
+
+
+def test_the_base_prompt_is_the_unmodified_system_prompt():
+    """`base` must stay byte-identical to what every earlier run used, or rows written across
+    sessions stop being comparable."""
+    model = ScriptedModel({ReviewFinding: finding()})
+
+    reviewer(state(), tools=FakeTools(), model=model)
+
+    (system, _user, _schema) = model.calls[0]
+    assert system == REVIEWER_SYSTEM
+
+
+def test_which_column_appends_exactly_one_rule():
+    model = ScriptedModel({ReviewFinding: finding()})
+
+    reviewer(
+        state(config=RunConfig(reviewer_enabled=True, reviewer_prompt="which_column")),
+        tools=FakeTools(),
+        model=model,
+    )
+
+    (system, _user, _schema) = model.calls[0]
+    assert system.startswith(REVIEWER_SYSTEM)
+    assert system.removeprefix(REVIEWER_SYSTEM) == WHICH_COLUMN_RULE
+    assert "top_importances" in system
+
+
+def test_the_prompt_variant_is_a_config_change_not_a_second_code_path():
+    """/add-node's rule for ablations, asserted: still one node, one model call."""
+    model = ScriptedModel({ReviewFinding: finding()})
+
+    reviewer(
+        state(config=RunConfig(reviewer_enabled=True, reviewer_prompt="which_column")),
+        tools=FakeTools(),
+        model=model,
+    )
+
+    assert len(model.calls) == 1

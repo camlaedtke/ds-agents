@@ -22,7 +22,7 @@ from ds_agents.fixtures import Fixture, available, load_fixture
 from ds_agents.graph import run_pipeline
 from ds_agents.naming import NAMINGS, Naming, materialize, rename_map
 from ds_agents.naming import apply as apply_rename
-from ds_agents.state import PipelineState, RunConfig
+from ds_agents.state import REVIEWER_PROMPTS, PipelineState, ReviewerPrompt, RunConfig
 from ds_agents.tools.llm import AnthropicModel, StubModel, api_key_present
 from ds_agents.tools.local import LocalTools
 from ds_agents.tools.mcp_client import MCPTools, stdio_params
@@ -37,6 +37,7 @@ def _fixture_state(
     model_name: str = "haiku",
     reviewer_model_name: str | None = None,
     naming: Naming = "descriptive",
+    reviewer_prompt: ReviewerPrompt = "base",
 ) -> PipelineState:
     """The starting state for one run of `fixture` under one naming condition.
 
@@ -63,6 +64,10 @@ def _fixture_state(
             # ARCHITECTURE.md's rule is that a row is self-describing from the state alone.
             default_model=model_name,
             reviewer_model=reviewer_model_name or model_name,
+            # Same rule again: the two prompt arms are byte-identical except for one appended
+            # bullet in the reviewer's system prompt, so an unrecorded prompt would confound
+            # every reviewer-model number written after it existed.
+            reviewer_prompt=reviewer_prompt,
         ),
         dataset_id=fixture.dataset_id,
         # No `spec`: naming the target is intake's job, and pre-filling it here would skip the
@@ -215,7 +220,9 @@ def _run_once(
     entirely above the tools boundary, which is why no node, tool or MCP change was needed for it.
     """
     tools = _select_tools(args.tools, root, dataset_path, fixture.dataset_id)
-    state = _fixture_state(fixture, args.model, args.reviewer_model, args.naming)
+    state = _fixture_state(
+        fixture, args.model, args.reviewer_model, args.naming, args.reviewer_prompt
+    )
     model = _select_model(state.config, no_live=args.no_live)
     reviewer_model = _select_reviewer_model(state.config, model, no_live=args.no_live)
     if isinstance(model, StubModel):
@@ -326,6 +333,13 @@ def _build_parser() -> argparse.ArgumentParser:
         default=None,
         help="model for the reviewer node only (default: --model). Set this and --model "
         "differently to run the Haiku/Sonnet reviewer ablation.",
+    )
+    run.add_argument(
+        "--reviewer-prompt",
+        default="base",
+        choices=REVIEWER_PROMPTS,
+        help="reviewer system prompt variant: the base prompt (default) or one appended rule "
+        "asking which column explains an implausible score. This is the reviewer-prompt ablation.",
     )
     run.add_argument(
         "--tools",

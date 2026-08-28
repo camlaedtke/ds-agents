@@ -20,6 +20,7 @@ from ds_agents.cli import (
     _build_parser,
     _fixture_state,
     _select_model,
+    _select_reviewer_model,
 )
 from ds_agents.fixtures import load_fixture
 from ds_agents.naming import NAMINGS, header_of, materialize
@@ -163,6 +164,73 @@ class TestTheRunParser:
     def test_an_unknown_naming_is_refused(self):
         with pytest.raises(SystemExit):
             self._parse(["run", "--naming", "scrambled"])
+
+    def test_the_reviewer_prompt_defaults_to_base(self):
+        assert self._parse(["run"]).reviewer_prompt == "base"
+
+    def test_the_reviewer_prompt_variant_parses(self):
+        args = self._parse(["run", "--reviewer-prompt", "which_column"])
+        assert args.reviewer_prompt == "which_column"
+
+    def test_an_unknown_reviewer_prompt_is_refused(self):
+        with pytest.raises(SystemExit):
+            self._parse(["run", "--reviewer-prompt", "helpful_hints"])
+
+
+class TestThePromptConditionIsRecorded:
+    """Mirror of TestGroundTruthFollowsTheRename: the condition must land on the frozen config,
+    or the arms are indistinguishable in the results file."""
+
+    def test_fixture_state_records_the_variant(self):
+        fixture = load_fixture("claims_timing")
+        assert _fixture_state(fixture).config.reviewer_prompt == "base"
+        state = _fixture_state(fixture, reviewer_prompt="which_column")
+        assert state.config.reviewer_prompt == "which_column"
+
+
+class TestTheReviewerClient:
+    """`_select_reviewer_model`, untested until the session that spends money on it.
+
+    Same no-network property as `_select_model`'s tests above: `AnthropicModel.__post_init__`
+    only constructs an SDK client.
+    """
+
+    def test_no_live_returns_the_base_unchanged(self, monkeypatch):
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test-key")
+        base = StubModel()
+        config = RunConfig(default_model="haiku", reviewer_model="sonnet")
+        assert _select_reviewer_model(config, base, no_live=True) is base
+
+    def test_a_stub_base_returns_itself_even_with_a_key(self, monkeypatch):
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test-key")
+        base = StubModel()
+        config = RunConfig(default_model="haiku", reviewer_model="sonnet")
+        assert _select_reviewer_model(config, base) is base
+
+    def test_the_same_model_id_reuses_the_base_client(self, monkeypatch):
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test-key")
+        base = AnthropicModel(model="haiku")
+        config = RunConfig(default_model="haiku", reviewer_model="haiku")
+        assert _select_reviewer_model(config, base) is base
+
+    def test_a_differing_reviewer_model_builds_a_second_client(self, monkeypatch):
+        """The Haiku/Sonnet ablation arm. The reviewer's client must be a different object with
+        the Sonnet id while the base keeps Haiku."""
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test-key")
+        base = AnthropicModel(model="haiku")
+        config = RunConfig(default_model="haiku", reviewer_model="sonnet")
+        reviewer = _select_reviewer_model(config, base)
+        assert reviewer is not base
+        assert isinstance(reviewer, AnthropicModel)
+        assert reviewer.name == "claude-sonnet-5"
+        assert base.name == "claude-haiku-4-5"
+
+    def test_an_unpriced_reviewer_model_is_fatal_not_free(self, monkeypatch):
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test-key")
+        base = AnthropicModel(model="haiku")
+        config = RunConfig(default_model="haiku", reviewer_model="not-a-real-model")
+        with pytest.raises(SystemExit):
+            _select_reviewer_model(config, base)
 
 
 class TestTheResultsWriter:

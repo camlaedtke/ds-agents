@@ -374,6 +374,14 @@ class TestResultsRow:
         state.config = RunConfig(naming="opaque")
         assert state.results_row()["naming"] == "opaque"
 
+    def test_the_reviewer_prompt_condition_is_on_the_row_and_defaults_to_base(self):
+        """Same rule as `naming`: a reviewer number that does not say which prompt produced it is
+        confounded by the prompt, and the arms are otherwise byte-identical."""
+        assert populated_state().results_row()["reviewer_prompt"] == "base"
+        state = populated_state()
+        state.config = RunConfig(reviewer_prompt="which_column")
+        assert state.results_row()["reviewer_prompt"] == "which_column"
+
 
 class TestProfilerColumnsOnTheRow:
     """The profiler's nominations, scored separately from the reviewer's objections.
@@ -444,6 +452,100 @@ class TestProfilerColumnsOnTheRow:
         row = self._state(["a"], []).results_row()
         assert row["profiler_recall"] is None
         assert row["profiler_false_alarm"] == 1
+
+
+class TestReviewerColumnsOnTheRow:
+    """The reviewer's columns, over every column-scoped category.
+
+    The gap this closes, observed live on 2026-08-27: the reviewer named columns under
+    `implausible_importance`, and `leakage_flagged` counts only leakage and contamination, so a
+    reviewer that names the trap in that category scored as a miss. `leakage_*` keeps its
+    two-category definition -- the committed naming-ablation rows were written under it -- and
+    these fields carry the wider question: did the reviewer name the trap column at all.
+    """
+
+    def _state(self, objections: list[Objection], planted: list[str]) -> PipelineState:
+        return PipelineState(
+            dataset_id="toy",
+            task_description="x",
+            planted_leakage_columns=planted,
+            objections=objections,
+            review_passes=[ReviewPass(iteration=1, claim="pass", routed_to="reporter")],
+        )
+
+    def test_naming_the_trap_under_leakage_scores_as_a_catch(self):
+        row = self._state([leak_objection(columns=["leaky_col"])], ["leaky_col"]).results_row()
+        assert row["reviewer_caught"] is True
+        assert row["reviewer_recall"] == 1.0
+        assert row["reviewer_false_alarm"] == 0
+        assert row["reviewer_nominated"] == ["leaky_col"]
+
+    def test_naming_the_trap_under_implausible_importance_also_counts(self):
+        """The divergence is deliberate: the same row scores `leakage_caught` False, because that
+        field keeps the two-category definition the naming-ablation rows were written under."""
+        objection = leak_objection(
+            category="implausible_importance",
+            subcategory="importance_dominance",
+            columns=["leaky_col"],
+        )
+        row = self._state([objection], ["leaky_col"]).results_row()
+        assert row["reviewer_caught"] is True
+        assert row["reviewer_nominated"] == ["leaky_col"]
+        assert row["leakage_caught"] is False
+        assert row["leakage_flagged"] == []
+
+    def test_one_of_two_traps_is_half_recall(self):
+        row = self._state([leak_objection(columns=["trap_a"])], ["trap_a", "trap_b"]).results_row()
+        assert row["reviewer_recall"] == 0.5
+        assert row["reviewer_caught"] is True
+
+    def test_a_non_column_objection_counts_in_categories_but_nominates_nothing(self):
+        objection = leak_objection(category="metric_mismatch", subcategory="cv_gap", columns=[])
+        row = self._state([objection], ["leaky_col"]).results_row()
+        assert row["reviewer_nominated"] == []
+        assert row["objections_by_category"]["metric_mismatch"] == 1
+
+    def test_naming_a_clean_column_is_a_reviewer_false_alarm(self):
+        row = self._state([leak_objection(columns=["region"])], ["leaky_col"]).results_row()
+        assert row["reviewer_caught"] is False
+        assert row["reviewer_false_alarm"] == 1
+        assert row["reviewer_recall"] == 0.0
+
+    def test_looking_and_raising_nothing_is_zero_not_null(self):
+        row = self._state([], ["leaky_col"]).results_row()
+        assert row["reviewer_caught"] is False
+        assert row["reviewer_recall"] == 0.0
+        assert row["reviewer_nominated"] == []
+
+    def test_a_reviewer_that_never_completed_a_pass_is_null_not_zero(self):
+        state = PipelineState(
+            dataset_id="toy", task_description="x", planted_leakage_columns=["leaky_col"]
+        )
+        row = state.results_row()
+        assert row["reviewer_nominated"] is None
+        assert row["reviewer_caught"] is None
+        assert row["reviewer_recall"] is None
+        assert row["reviewer_false_alarm"] is None
+
+    def test_a_disabled_reviewer_is_null_even_with_a_pass_recorded(self):
+        state = self._state([], ["leaky_col"])
+        state.config = RunConfig(reviewer_enabled=False)
+        row = state.results_row()
+        assert row["reviewer_caught"] is None
+        assert row["reviewer_nominated"] is None
+
+    def test_objections_by_category_always_has_every_key(self):
+        row = self._state([], []).results_row()
+        assert set(row["objections_by_category"]) == {
+            "leakage",
+            "contamination",
+            "overfit",
+            "metric_mismatch",
+            "implausible_importance",
+            "spec_violation",
+            "other",
+        }
+        assert all(count == 0 for count in row["objections_by_category"].values())
 
 
 class TestResultsRowBranches:

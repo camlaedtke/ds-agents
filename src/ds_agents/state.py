@@ -117,6 +117,13 @@ PLACEHOLDER_MODEL_NAMES = frozenset({"stub"})
 
 ReviewVerdict = Literal["pending", "pass", "block", "exhausted"]
 
+# Which reviewer system prompt the run used. A run condition for the same reason `naming` is:
+# the reviewer's live miss is a confound between "cannot see the leak" and "was never asked which
+# column produced the score", and a reviewer number that does not say which prompt produced it
+# cannot separate them. `base` is the prompt every run before 2026-08-28 used, byte-identical.
+ReviewerPrompt = Literal["base", "which_column"]
+REVIEWER_PROMPTS: tuple[ReviewerPrompt, ...] = ("base", "which_column")
+
 Disposition = Literal["still_open", "resolved", "withdrawn", "not_reviewed"]
 
 
@@ -158,6 +165,13 @@ class RunConfig(Contract):
         "than any statistical property of the data does. It lives here, on the frozen config, "
         "because a leakage number without it is not interpretable and the two arms are otherwise "
         "byte-identical -- see `ds_agents.naming`.",
+    )
+    reviewer_prompt: ReviewerPrompt = Field(
+        default="base",
+        description="Which system prompt the reviewer ran under: `base`, byte-identical to every "
+        "run before 2026-08-28, or `which_column`, which appends one rule asking the reviewer to "
+        "name the column that explains an implausible score. On the frozen config because a "
+        "reviewer-model comparison that does not record the prompt is confounded by it.",
     )
     random_seed: int = 20260822
     dataset_hash: str | None = None
@@ -509,6 +523,19 @@ class PipelineState(Contract):
         if self.profile is not None:
             nominated = {c.column for c in self.profile.leakage_candidates}
 
+        # The reviewer's columns over ALL column-scoped categories, `implausible_importance`
+        # included. `flagged` above stays a two-category number on purpose: the committed
+        # naming-ablation rows were written under that definition, and widening it would silently
+        # redefine the only published results file. `None` when no pass completed: the
+        # reviewer-off arm still runs the node as a no-op, and a 0.0 recall from a reviewer that
+        # never looked would average in with one that looked and declined.
+        objected: set[str] | None = None
+        if self.config.reviewer_enabled and self.review_passes:
+            objected = self.objected_columns()
+        by_category = dict.fromkeys(get_args(ObjectionCategory), 0)
+        for objection in self.objections:
+            by_category[objection.category] += 1
+
         claimed = self.chosen_model.claimed_holdout_score if self.chosen_model else None
         gap: float | None = None
         if claimed is not None and self.verified_holdout_score is not None:
@@ -525,6 +552,7 @@ class PipelineState(Contract):
             "arm": self.config.arm,
             "reviewer_enabled": self.config.reviewer_enabled,
             "reviewer_model": self.config.reviewer_model,
+            "reviewer_prompt": self.config.reviewer_prompt,
             "reviewer_sees_code": self.config.reviewer_sees_code,
             "naming": self.config.naming,
             "loop_cap": self.config.loop_cap,
@@ -558,10 +586,18 @@ class PipelineState(Contract):
                 else None
             ),
             "profiler_false_alarm": len(nominated - planted) if nominated is not None else None,
+            # the same comparison at the reviewer, all column-scoped categories
+            "reviewer_nominated": sorted(objected) if objected is not None else None,
+            "reviewer_caught": bool(objected & planted) if objected is not None else None,
+            "reviewer_recall": (
+                len(objected & planted) / len(planted) if objected is not None and planted else None
+            ),
+            "reviewer_false_alarm": len(objected - planted) if objected is not None else None,
             # the loop
             "review_verdict": self.review_verdict,
             "review_loops": self.review_iterations,
             "objections_raised": len(self.objections),
+            "objections_by_category": by_category,
             "objections_open_at_end": len(self.open_objections()),
             # cost and reliability
             "wall_seconds": self.wall_seconds,
