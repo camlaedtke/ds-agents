@@ -23,9 +23,11 @@ from ds_agents.graph import run_pipeline
 from ds_agents.naming import NAMINGS, Naming, materialize, rename_map
 from ds_agents.naming import apply as apply_rename
 from ds_agents.state import (
+    FORCED_DROP_RELEASES,
     OBJECTION_CLOSURES,
     OBJECTION_ROUTINGS,
     REVIEWER_PROMPTS,
+    ForcedDropRelease,
     ObjectionClosure,
     ObjectionRouting,
     PipelineState,
@@ -51,6 +53,7 @@ def _fixture_state(
     loop_cap: int = 3,
     objection_routing: ObjectionRouting = "as_addressed",
     objection_closure: ObjectionClosure = "off",
+    forced_drop_release: ForcedDropRelease = "withdrawn_only",
 ) -> PipelineState:
     """The starting state for one run of `fixture` under one naming condition.
 
@@ -101,6 +104,12 @@ def _fixture_state(
             # row that did not carry it would average a reviewer that was told what done
             # looks like with one that was not.
             objection_closure=objection_closure,
+            # Recorded, and the one condition here whose default is NOT the pre-2026-08-28
+            # behaviour: `resolved_or_withdrawn` reproduces a defect rather than offering a second
+            # defensible design. The two arms differ in whether a resolved objection's column can
+            # come back into the matrix, so their remediation rates are not comparable and
+            # averaging them would report a capability the control arm does not have.
+            forced_drop_release=forced_drop_release,
         ),
         dataset_id=fixture.dataset_id,
         # No `spec`: naming the target is intake's job, and pre-filling it here would skip the
@@ -270,7 +279,20 @@ def _run_once(
         loop_cap=args.loop_cap,
         objection_routing=args.objection_routing,
         objection_closure=args.objection_closure,
+        forced_drop_release=args.forced_drop_release,
     )
+    # Said out loud for the same reason the StubModel warning is: this arm reproduces a known
+    # defect, and a run that produced numbers under it without anyone noticing would be worse than
+    # no run. A stderr line reads nothing any node reads, so the condition still has exactly one
+    # application site -- the release set in `PipelineState.binding_objections`.
+    if state.config.forced_drop_release != "withdrawn_only":
+        print(
+            f"WARNING: --forced-drop-release {state.config.forced_drop_release} reproduces a known "
+            f"defect: a resolved objection stops forcing its drop, so a leaked column can come "
+            f"back on the next return to feature_eng. This arm exists only as the control of the "
+            f"sticky-drop cell. Do not use it as a baseline for anything else.",
+            file=sys.stderr,
+        )
     model = _select_model(state.config, no_live=args.no_live)
     reviewer_model = _select_reviewer_model(state.config, model, no_live=args.no_live)
     if isinstance(model, StubModel):
@@ -433,6 +455,16 @@ def _build_parser() -> argparse.ArgumentParser:
         "run before 2026-08-28 did), or on, which appends one rule saying an objection about a "
         "column is answered when that column is absent from final_features. This is the "
         "objection-closure ablation.",
+    )
+    run.add_argument(
+        "--forced-drop-release",
+        default="withdrawn_only",
+        choices=FORCED_DROP_RELEASES,
+        help="which disposition releases a column an objection forced out of the matrix: "
+        "withdrawn_only (default, and correct), or resolved_or_withdrawn, which reproduces the "
+        "pre-2026-08-28 defect where a resolved objection stopped forcing its drop. The second "
+        "value is a known bug, not a design alternative: it exists only as the control arm of the "
+        "sticky-drop cell and must not be the baseline of anything else.",
     )
     run.add_argument(
         "--results",

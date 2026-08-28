@@ -275,6 +275,49 @@ class TestTheClosureConditionIsRecorded:
             _build_parser().parse_args(["run", "--objection-closure", "sometimes"])
 
 
+class TestTheForcedDropReleaseConditionIsRecorded:
+    """`forced_drop_release` is the control arm for the sticky-drop fix, and the ONE condition on
+    this config whose default is not the pre-existing behaviour.
+
+    Every other axis defaults to the arm that reproduces committed rows byte for byte, because each
+    is a real design fork. This one reproduces a defect, so the default is the FIXED rule and the
+    inversion is pinned here as well as in test_state.py -- at the CLI layer too, because that is
+    where a future session would most plausibly "restore consistency" by pattern-matching the
+    surrounding flags.
+    """
+
+    def test_the_default_is_the_fixed_behaviour_and_not_the_old_one(self):
+        args = _build_parser().parse_args(["run"])
+        assert args.forced_drop_release == "withdrawn_only"
+        assert (
+            _fixture_state(load_fixture("claims_timing")).config.forced_drop_release
+            == "withdrawn_only"
+        )
+
+    def test_fixture_state_records_the_variant(self):
+        state = _fixture_state(
+            load_fixture("claims_timing"), forced_drop_release="resolved_or_withdrawn"
+        )
+        assert state.config.forced_drop_release == "resolved_or_withdrawn"
+        assert state.results_row()["forced_drop_release"] == "resolved_or_withdrawn"
+
+    def test_it_is_orthogonal_to_the_routing_and_closure_conditions(self):
+        """The cell crosses this with `by_category`, so a coupling here would confound it."""
+        state = _fixture_state(
+            load_fixture("claims_timing"),
+            objection_routing="by_category",
+            objection_closure="off",
+            forced_drop_release="resolved_or_withdrawn",
+        )
+        assert state.config.objection_routing == "by_category"
+        assert state.config.objection_closure == "off"
+        assert state.config.forced_drop_release == "resolved_or_withdrawn"
+
+    def test_an_unknown_release_rule_is_refused_by_the_parser(self):
+        with pytest.raises(SystemExit):
+            _build_parser().parse_args(["run", "--forced-drop-release", "eventually"])
+
+
 class TestTheReviewerClient:
     """`_select_reviewer_model`, untested until the session that spends money on it.
 

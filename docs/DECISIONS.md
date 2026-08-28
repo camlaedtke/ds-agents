@@ -900,3 +900,73 @@ unpredicted result is that the sticky-drop fix, the bug fixed on the way to the 
 remediation 5/10 to 9/10 -- larger than the routing arm's own 1/10 to 5/10 -- with 6 of 6 resolving
 runs remediating. That has no pre-registration of its own and is written up in LOG.md as a finding
 needing its own cell, not as a headline.
+
+## 2026-08-28 (fifth entry): the release rule becomes a recorded condition, and the fourth entry
+## of the same day is overturned.
+
+The fourth entry decided the sticky-drop fix would be unconditional: "The fix is unconditional
+rather than a fifth ablation axis, because the un-sticky arm is a known-buggy pipeline and measuring
+it would measure nothing." That is two claims, and only one of them survives.
+
+**The first claim is still true and this change does not contest it.** The un-sticky rule is a bug,
+not a design alternative. That is exactly why `forced_drop_release` is the first condition on
+`RunConfig` whose **default is not the pre-existing behaviour**. `naming`, `reviewer_prompt`,
+`objection_routing` and `objection_closure` all default to the arm that reproduces every committed
+row byte for byte, because each of those is a real fork with two defensible answers. This one
+defaults to the *fixed* rule, `withdrawn_only`, and its off value is documented in the field
+description as a defect reproduction. The inversion is the entire content of the change, and it is
+pinned by `test_the_default_release_rule_is_the_fixed_behaviour_and_deliberately_not_the_old_one`
+with the reasoning in the docstring -- because it reads as an inconsistency, and a future session
+tidying it toward the surrounding pattern would silently make the buggy pipeline the shipped one.
+
+**The second claim was right about a hypothetical arm and wrong about the one that now exists.**
+When it was written the un-sticky pipeline was something nobody would ship and nobody had a claim
+about. Since the closure cell ran it is the **denominator of the project's largest published
+number**. "The sticky rule moved `leakage_remediated` 5/10 -> 9/10" is a causal claim about the
+un-sticky pipeline, and you cannot make that claim while refusing to measure the thing it is about.
+Refusing does not avoid measuring a buggy pipeline; it means the buggy pipeline gets measured once,
+badly -- across a code boundary, by a cell run for another purpose, in a file that lacks
+`objections_resolved`, `objections_withdrawn` and `objections_falsely_resolved`, which are the
+columns the mechanism check needs. The choice was never "measure the bug or don't". It was "measure
+it deliberately for $0.30, or keep quoting a number derived from having measured it accidentally".
+What changed between the two entries is evidence, not taste: the effect turned out to be +4/10,
+larger than the routing arm's own pre-registered effect, and the closure columns that make the
+mechanism decidable did not exist when the decision was taken.
+
+The condition is applied in exactly one place, the release set in `PipelineState.binding_objections`,
+and under `resolved_or_withdrawn` that method is provably identical to `open_objections` -- the
+pre-fix predicate itself rather than a reimplementation of it, pinned by
+`test_the_unsticky_arm_is_exactly_open_objections_again`. That matters more than it looks: a control
+arm that approximated the bug slightly differently would produce a difference nobody could attribute.
+The same commit finally enforces the single-caller invariant that two docstrings have asserted since
+the fix landed. `test_binding_objections_has_exactly_one_caller_in_the_graph` walks the package's
+AST and fails if anything but `feature_eng._forced_drops` calls it. This is a new kind of test for
+this repo -- nothing here read its own source before -- and it is the cheapest thing in the session:
+the router and the reviewer must keep asking `open_objections` or a resolved objection routes the run
+upstream forever and every run ends `exhausted`, and neither failure would break any existing test.
+Both are silently-wrong-number failures, which is the class this project exists to catch.
+
+**The finding that came out of reading the fix's own diff, and that would have confounded the arm.**
+`d5a9a28` changed two things in `feature_eng`, not one: the predicate, and the justification string
+attached to each forced drop, which reaches the feature_eng model's prompt through `already_dropped`
+and `dropped_features` on the results row (`"open reviewer objection X: ..."` became `"reviewer
+objection X, not withdrawn: ..."`). So "make the control arm byte-identical to the pre-fix tree" is
+not achievable through one application site. Reverting the wording under the control arm would give
+the condition a second site; leaving it arm-dependent would mean the arms differ in prompt text as
+well as in the release rule. The new wording is kept in **both** arms, which is true in both -- under
+`resolved_or_withdrawn` a forced drop still comes only from an objection that is neither resolved nor
+withdrawn -- and pinned by `test_the_drop_justification_is_identical_under_both_release_rules`. The
+consequence has to be stated wherever the cell is quoted: the control arm reproduces the pre-fix
+**release rule**, not the pre-fix **tree**, so comparisons to `2026-08-28_objection-routing.jsonl`
+remain cross-commit and remain secondary. A one-line prompt change riding along with a predicate
+change is exactly the kind of thing that turns a clean arm into an uninterpretable one, and it was
+visible only by reading the diff rather than the code.
+
+**What it costs, unhedged.** A permanent public axis whose off value is a known defect, so a reader
+of `RunConfig` now sees five recorded conditions of which only four are design questions. Permanent
+schema: every results row from here on carries `forced_drop_release`, forever, for one cell. A
+misuse risk, that someone crosses it with another axis and publishes a 2x2 with a bug in one cell.
+And a session, with Phase 4 untouched. The mitigations are the inverted default, the test pinning it,
+the field description, a stderr warning on every run of the off arm, and this entry -- which closes
+the axis: **`forced_drop_release` has exactly one legitimate use, it is the cell pre-registered in
+`evals/results/LOG.md` for 2026-08-28, and no other arm may use it as a baseline.**

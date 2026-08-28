@@ -473,6 +473,186 @@ class TestABindingObjectionOutlivesItsResolution:
         assert state.binding_objections() == []
 
 
+class TestTheForcedDropReleaseRuleIsARecordedCondition:
+    """`config.forced_drop_release` is the control arm for the sticky-drop fix above.
+
+    The fix moved `leakage_remediated` 5/10 -> 9/10, the largest single effect in this project, and
+    its only evidence was two cells run at different commits. `resolved_or_withdrawn` reproduces the
+    pre-2026-08-28 release rule ON THIS COMMIT, so the claim "the release rule caused the effect"
+    has a counterfactual instead of a code-boundary footnote.
+
+    It is a defect reproduction, not a design fork, which is why the default is inverted relative to
+    every other condition on `RunConfig` and why that inversion is pinned by a test rather than left
+    to a comment. See DECISIONS.md 2026-08-28 (fifth entry).
+    """
+
+    def _state(
+        self,
+        objection: Objection,
+        disposition: str | None,
+        *,
+        release: str = "withdrawn_only",
+        routing: str = "as_addressed",
+    ) -> PipelineState:
+        passes = []
+        if disposition is not None:
+            passes = [
+                ReviewPass(
+                    iteration=0,
+                    claim="pass",
+                    routed_to="reporter",
+                    dispositions={objection.id: disposition},
+                )
+            ]
+        return PipelineState(
+            config=RunConfig(objection_routing=routing, forced_drop_release=release),
+            dataset_id="toy",
+            task_description="x",
+            planted_leakage_columns=["leaky_col"],
+            objections=[objection],
+            review_passes=passes,
+        )
+
+    def test_the_default_release_rule_is_the_fixed_behaviour_and_deliberately_not_the_old_one(self):
+        """The inversion, pinned, because it looks like an inconsistency and is not.
+
+        `naming`, `reviewer_prompt`, `objection_routing` and `objection_closure` all default to the
+        arm that reproduces every committed row byte for byte, because each is a real design
+        question with two defensible answers. This one is not: `resolved_or_withdrawn` is a bug. A
+        future session that "restores consistency" by flipping this default would silently make the
+        buggy pipeline the shipped one.
+        """
+        assert RunConfig().forced_drop_release == "withdrawn_only"
+
+    def test_the_unsticky_arm_is_exactly_open_objections_again(self):
+        """The control arm's fidelity guarantee. It is not an approximation of the pre-fix
+        predicate; it IS that predicate, so a difference between the arms cannot be an artefact of
+        having reimplemented the bug slightly differently."""
+        objections = [
+            leak_objection(columns=["a"], target_node="feature_eng"),
+            leak_objection(columns=["b"], target_node="feature_eng"),
+            leak_objection(columns=["c"], target_node="modeler"),
+            leak_objection(columns=["d"], target_node="modeler"),
+        ]
+        dispositions = dict(
+            zip(
+                [o.id for o in objections],
+                ["still_open", "resolved", "withdrawn", "not_reviewed"],
+                strict=True,
+            )
+        )
+        state = PipelineState(
+            config=RunConfig(forced_drop_release="resolved_or_withdrawn"),
+            dataset_id="toy",
+            task_description="x",
+            planted_leakage_columns=["leaky_col"],
+            objections=objections,
+            review_passes=[
+                ReviewPass(
+                    iteration=0, claim="pass", routed_to="reporter", dispositions=dispositions
+                )
+            ],
+        )
+        for target in (None, "feature_eng", "modeler"):
+            assert state.binding_objections(target) == state.open_objections(target), target
+
+    def test_a_resolved_objection_stops_binding_only_under_the_unsticky_arm(self):
+        """The pair for `test_a_resolved_objection_is_still_binding`. This single difference is the
+        whole of what the cell measures."""
+        objection = leak_objection(columns=["leaky_col"])
+        assert self._state(objection, "resolved").binding_objections() == [objection]
+        assert (
+            self._state(objection, "resolved", release="resolved_or_withdrawn").binding_objections()
+            == []
+        )
+
+    def test_a_not_reviewed_objection_binds_under_both_release_rules(self):
+        """Silence is never release, in either arm. `not_reviewed` is a label the model is not
+        allowed to produce, so the rule against silence-as-approval must not become arm-dependent --
+        otherwise the two arms would differ in more than the release rule."""
+        objection = leak_objection(columns=["leaky_col"])
+        for release in ("withdrawn_only", "resolved_or_withdrawn"):
+            assert self._state(objection, "not_reviewed", release=release).binding_objections() == [
+                objection
+            ], release
+
+    def test_the_release_rule_never_changes_open_objections(self):
+        """Blast radius. The router and the reviewer both read `open_objections`, and a condition
+        that leaked into it would route a resolved objection upstream forever in one arm, making
+        `exhausted` structurally guaranteed there and confounding the cell with a loop-length
+        difference."""
+        objection = leak_objection(columns=["leaky_col"])
+        for disposition in ("still_open", "resolved", "withdrawn", "not_reviewed"):
+            withdrawn_only = self._state(objection, disposition).open_objections()
+            unsticky = self._state(
+                objection, disposition, release="resolved_or_withdrawn"
+            ).open_objections()
+            assert withdrawn_only == unsticky, disposition
+
+    def test_the_release_rule_and_the_routing_condition_stay_orthogonal(self):
+        """The two conditions answer different questions -- who acts, and what releases -- and the
+        cell crosses `by_category` with both release rules, so a coupling between them would make
+        every number in it uninterpretable."""
+        objection = leak_objection(
+            category="implausible_importance",
+            subcategory="importance_dominance",
+            target_node="modeler",
+            columns=["leaky_col"],
+        )
+        sticky = self._state(objection, "resolved", routing="by_category")
+        assert sticky.binding_objections("feature_eng") == [objection]
+
+        unsticky = self._state(
+            objection, "resolved", release="resolved_or_withdrawn", routing="by_category"
+        )
+        assert unsticky.binding_objections("feature_eng") == []
+        # Still routed by category in both arms: the release rule decides WHETHER it binds, never
+        # WHO it binds on.
+        assert unsticky.binding_objections("modeler") == []
+
+
+class TestTheSingleCallerInvariant:
+    """`binding_objections` is documented in two places as having exactly one caller in the graph,
+    and until now nothing enforced it.
+
+    The router's `_route_for_block` and the reviewer's `_user_message` must keep asking
+    `open_objections`. A resolved objection that still routed the run upstream would loop to the cap
+    on every run; one still shown to the reviewer would be re-adjudicated forever. Either would
+    destroy the signal the closure and sticky-drop cells exist to measure, and neither would fail a
+    test -- both are silently-wrong-number failures, which is the class this repo cares most about.
+    """
+
+    def test_binding_objections_has_exactly_one_caller_in_the_graph(self):
+        import ast
+        from pathlib import Path
+
+        import ds_agents
+
+        package_root = Path(ds_agents.__file__).parent
+        callers: set[tuple[str, str]] = set()
+        for path in sorted(package_root.rglob("*.py")):
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+            for node in ast.walk(tree):
+                if not isinstance(node, ast.FunctionDef):
+                    continue
+                for inner in ast.walk(node):
+                    if (
+                        isinstance(inner, ast.Call)
+                        and isinstance(inner.func, ast.Attribute)
+                        and inner.func.attr == "binding_objections"
+                    ):
+                        callers.add((str(path.relative_to(package_root)), node.name))
+
+        assert callers == {("nodes/feature_eng.py", "_forced_drops")}, (
+            f"`binding_objections` must have exactly one caller in the graph and now has "
+            f"{sorted(callers)}. It answers 'what must stay OUT of the matrix' and releases only "
+            f"on `withdrawn`. Anything deciding where to ROUTE a run, or what to SHOW the "
+            f"reviewer, must ask `open_objections` instead: a resolved objection that still routed "
+            f"upstream would loop to the cap on every run and make `exhausted` structurally "
+            f"guaranteed, and one still shown to the reviewer would be re-adjudicated forever."
+        )
+
+
 class TestObjectionRouting:
     """`config.objection_routing` decides WHO ACTS on an objection, and only that.
 

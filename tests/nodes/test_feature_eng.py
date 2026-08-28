@@ -322,6 +322,100 @@ def test_a_resolved_objection_stays_dropped_across_a_second_return():
     assert "account_status_code" in tools.code_run[0]
 
 
+def test_a_resolved_objection_comes_back_under_the_unsticky_arm():
+    """The control arm reproduces the defect it claims to reproduce, asserted against the real
+    snippet rather than against the state method.
+
+    Without this the sticky-drop cell's control is an assumption: `forced_drop_release` could be
+    recorded on every row and change nothing that reaches the sandbox, and the arm would read as a
+    null result for the wrong reason. The exact strings are the ones from the live diagnosis on
+    2026-08-28 -- with the objection binding the snippet reads `DROP = ['account_status_code',
+    'churned', 'customer_id']`, and with it released, `DROP = ['churned', 'customer_id']`.
+    """
+    objection = _planted_column_objection()
+    tools = tools_for()
+
+    feature_eng(
+        state(
+            config=RunConfig(forced_drop_release="resolved_or_withdrawn"),
+            objections=[objection],
+            review_passes=[_pass_disposing(objection, "resolved")],
+        ),
+        tools=tools,
+        model=empty_plan_model(),
+    )
+
+    assert "DROP = ['churned', 'customer_id']" in tools.code_run[0]
+    assert "account_status_code" not in tools.code_run[0]
+
+
+def test_the_second_return_is_where_the_two_arms_diverge():
+    """The mechanism the cell is pre-registered to detect, in one test.
+
+    A single pass cannot show the defect -- `_forced_drops` recomputes on entry, so resolution and
+    resurrection have to be separated by a return to this node. That is why the pre-registration
+    predicts the effect is confined to runs whose `route_sequence` contains two `feature_eng`
+    entries, and why a rise concentrated anywhere else would falsify the mechanism even if the
+    headline number replicated.
+    """
+    objection = _planted_column_objection()
+    passes = [
+        _pass_disposing(objection, "still_open", iteration=0),
+        _pass_disposing(objection, "resolved", iteration=1),
+    ]
+
+    sticky = tools_for()
+    feature_eng(
+        state(objections=[objection], review_passes=passes),
+        tools=sticky,
+        model=empty_plan_model(),
+    )
+    assert "account_status_code" in sticky.code_run[0]
+
+    unsticky = tools_for()
+    feature_eng(
+        state(
+            config=RunConfig(forced_drop_release="resolved_or_withdrawn"),
+            objections=[objection],
+            review_passes=passes,
+        ),
+        tools=unsticky,
+        model=empty_plan_model(),
+    )
+    assert "account_status_code" not in unsticky.code_run[0]
+
+
+def test_the_drop_justification_is_identical_under_both_release_rules():
+    """The confound guard. The 2026-08-28 fix changed TWO things: the predicate, and the
+    justification string that goes into this node's `already_dropped` facts -- so it reaches the
+    MODEL'S PROMPT, and `dropped_features` on the results row. Reverting the wording under the
+    control arm would give the condition a second application site; leaving it arm-dependent would
+    mean the two arms differ in prompt text as well as in the release rule, and the cell could not
+    attribute its effect to either.
+
+    So the current wording stays in both arms. It is still true in both: under
+    `resolved_or_withdrawn` a forced drop can only come from an objection that is neither resolved
+    nor withdrawn, so "not withdrawn" is correct there, merely weaker than the truth.
+    """
+    objection = _planted_column_objection()
+    prompts = []
+    for release in ("withdrawn_only", "resolved_or_withdrawn"):
+        model = empty_plan_model()
+        feature_eng(
+            state(
+                config=RunConfig(forced_drop_release=release),
+                objections=[objection],
+                review_passes=[_pass_disposing(objection, "still_open")],
+            ),
+            tools=tools_for(),
+            model=model,
+        )
+        prompts.append(model.calls[0][1])
+
+    assert ", not withdrawn: " in prompts[0]
+    assert prompts[0] == prompts[1]
+
+
 def _misaddressed_importance_objection() -> Objection:
     """The shape the reviewer actually produced live on 2026-08-28: the right column, in a
     column-scoped category, addressed to a node with no column lever."""

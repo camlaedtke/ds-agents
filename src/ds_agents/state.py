@@ -150,6 +150,22 @@ OBJECTION_ROUTINGS: tuple[ObjectionRouting, ...] = ("as_addressed", "by_category
 ObjectionClosure = Literal["off", "on"]
 OBJECTION_CLOSURES: tuple[ObjectionClosure, ...] = ("off", "on")
 
+# Which disposition RELEASES a column that an objection forced out of the matrix. Under
+# `resolved_or_withdrawn`, `binding_objections` collapses into `open_objections` exactly -- which is
+# what `feature_eng._forced_drops` read before 2026-08-28: a `resolved` objection stopped forcing
+# its drop, and the next return to that node, for any unrelated reason, put the leaked column back.
+#
+# THE DEFAULT IS DELIBERATELY NOT THE OLD BEHAVIOUR, and this is the only axis on RunConfig of which
+# that is true. `naming`, `reviewer_prompt`, `objection_routing` and `objection_closure` all default
+# to the arm that reproduces every committed row byte for byte, because each of those is a real
+# design question with two defensible answers. This one is not: `resolved_or_withdrawn` is a defect,
+# and it is here only because the fix for it is the largest single effect measured in this project
+# (`leakage_remediated` 5/10 -> 9/10 across the code boundary at d5a9a28) and a same-commit control
+# is the only way to confirm that. It is a defect-reproduction switch for one pre-registered cell
+# and must never be the baseline of another arm. See DECISIONS.md 2026-08-28 (fifth entry).
+ForcedDropRelease = Literal["withdrawn_only", "resolved_or_withdrawn"]
+FORCED_DROP_RELEASES: tuple[ForcedDropRelease, ...] = ("withdrawn_only", "resolved_or_withdrawn")
+
 Disposition = Literal["still_open", "resolved", "withdrawn", "not_reviewed"]
 
 
@@ -219,6 +235,17 @@ class RunConfig(Contract):
         "with a specific hazard of its own: a prompt that buys termination by teaching the "
         "reviewer to say 'fixed' is worse than no prompt, so `objections_falsely_resolved` is on "
         "the results row beside it.",
+    )
+    forced_drop_release: ForcedDropRelease = Field(
+        default="withdrawn_only",
+        description="Which disposition releases a column that an objection forced out of the "
+        "matrix: `withdrawn_only`, the correct rule and the default, or `resolved_or_withdrawn`, "
+        "which reproduces the pre-2026-08-28 defect where a `resolved` objection stopped forcing "
+        "its drop and the next return to feature_eng put the leaked column back. THE ONLY "
+        "condition here whose default is not the old behaviour, because the old behaviour is a bug "
+        "and not a design alternative. Defect reproduction only: it exists so the largest effect "
+        "in the project has a same-commit control, it is not a general ablation lever, and no "
+        "other arm may use it.",
     )
     random_seed: int = 20260822
     dataset_hash: str | None = None
@@ -677,6 +704,7 @@ class PipelineState(Contract):
             "loop_cap": self.config.loop_cap,
             "objection_routing": self.config.objection_routing,
             "objection_closure": self.config.objection_closure,
+            "forced_drop_release": self.config.forced_drop_release,
             "random_seed": self.config.random_seed,
             # scores. `claimed` is what the agent said; `verified` is what we measured.
             "claimed_holdout_score": claimed,
@@ -825,11 +853,25 @@ class PipelineState(Contract):
 
         `target_node` means who ACTS, resolved through `effective_target`, so this inherits
         `config.objection_routing` rather than becoming a second answer to that question.
+
+        `config.forced_drop_release` is read HERE AND NOWHERE ELSE. It is not a design fork: the
+        default `withdrawn_only` is the rule described above, and `resolved_or_withdrawn` makes this
+        method exactly `open_objections` again -- the pre-2026-08-28 predicate, reproduced so the
+        effect of fixing it has a same-commit control. That equality is pinned by
+        `test_the_unsticky_arm_is_exactly_open_objections_again` rather than asserted here, and the
+        single-caller invariant above is enforced by
+        `test_binding_objections_has_exactly_one_caller_in_the_graph` rather than left to this
+        docstring. See DECISIONS.md 2026-08-28 (fifth entry).
         """
+        releasing: set[Disposition] = (
+            {"withdrawn"}
+            if self.config.forced_drop_release == "withdrawn_only"
+            else {"resolved", "withdrawn"}
+        )
         released = {
             oid
             for oid, disposition in self.latest_dispositions().items()
-            if disposition == "withdrawn"
+            if disposition in releasing
         }
         binding = [o for o in self.objections if o.id not in released]
         if target_node is not None:

@@ -37,10 +37,13 @@ Invariants worth stating explicitly:
 
 - `RunConfig` is frozen. It carries `run_id`, `arm`, `reviewer_enabled`, `reviewer_model`,
   `default_model`, `loop_cap`, `reviewer_sees_code`, `naming`, `reviewer_prompt`,
-  `objection_routing`, `objection_closure`, `random_seed` and `dataset_hash`.
-  Every results row is self-describing from the state object alone — without it, "reviewer
-  disabled" and "reviewer crashed" are the same row, and a descriptive run and an opaque one over
-  byte-identical rows are the same row too.
+  `objection_routing`, `objection_closure`, `forced_drop_release`, `random_seed` and
+  `dataset_hash`. Every results row is self-describing from the state object alone — without it,
+  "reviewer disabled" and "reviewer crashed" are the same row, and a descriptive run and an opaque
+  one over byte-identical rows are the same row too. `forced_drop_release` is the one condition
+  here whose default is NOT the pre-existing behaviour: its off value reproduces a defect rather
+  than offering a second defensible design, and it exists only so the sticky-drop fix has a
+  same-commit control. See DECISIONS.md 2026-08-28 (fifth entry).
 - `split_artifact` is pinned by the profiler before `feature_eng` runs and never rewritten. Without
   a pinned split the `contamination` category is unfalsifiable and no run is reproducible. It
   partitions the rows the AGENTS were given, and is *not* the independent holdout behind
@@ -65,7 +68,7 @@ forced to mislabel it.
 |---|---|---|---|---|
 | intake | dataset_id, task_description | spec | read_artifact | profiler |
 | profiler | spec, dataset_id, config.random_seed | profile, split_artifact | run_python | feature_eng |
-| feature_eng | spec, profile, split_artifact, task_description, open objections | feature_code_artifact, feature_summary, final_features, dropped_features | read_artifact, run_python | modeler |
+| feature_eng | spec, profile, split_artifact, task_description, binding objections (`config.forced_drop_release`) for the forced drops, open objections for what the model is shown | feature_code_artifact, feature_summary, final_features, dropped_features | read_artifact, run_python | modeler |
 | modeler | spec, feature_code_artifact, split_artifact, final_features, task_description, config.random_seed, config.run_id, open objections | candidates, chosen_model, importance_artifact, top_importances | read_artifact, run_python, log_metric | reviewer |
 | reviewer | everything above; feature code only if `config.reviewer_sees_code` | objections, reviewer_claim, reviewer_dispositions | read_artifact | router decides |
 | router | reviewer_claim, reviewer_dispositions, review_iterations, config.loop_cap, config.reviewer_enabled, open objections | review_iterations, review_verdict, review_passes | none | feature_eng / modeler / reporter |
@@ -278,8 +281,8 @@ zero when `profile` is None: a profiler that crashed nominated nothing in a diff
 that looked and declined.
 
 Conditions: `arm`, `reviewer_enabled`, `reviewer_model`, `reviewer_sees_code`, `loop_cap`,
-`naming`, `reviewer_prompt`, `objection_routing`, `objection_closure`, `random_seed`, straight off
-the frozen `RunConfig`.
+`naming`, `reviewer_prompt`, `objection_routing`, `objection_closure`, `forced_drop_release`,
+`random_seed`, straight off the frozen `RunConfig`.
 
 Loop: `review_verdict`, `review_loops`, `objections_raised`, `objections_by_category`,
 `objections_open_at_end`, and -- added 2026-08-28 with the closure axis, because

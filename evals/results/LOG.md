@@ -470,3 +470,177 @@ of its own. And it is confounded with nothing else only because the closure axis
 byte-identical -- which is the reason the control was re-run rather than reused. **It deserves its
 own pre-registered cell before it goes in a results table as a headline**, and that is the first
 item in NEXT.md rather than a claim made here.
+
+---
+
+## 2026-08-28 (sixth run of the day): the sticky-drop confirmation cell -- `2026-08-28_forced-drop-release.jsonl`
+
+**Pre-registered before either arm was run.** Everything from here to the results table below was
+written first; the commit that carries this file carries the code and the pre-registration, and the
+rows land in a second commit.
+
+The claim under test: **the release rule is what moved `leakage_remediated` from 5/10 to 9/10.**
+`PipelineState.binding_objections` releases a forced drop only on `withdrawn`, where
+`feature_eng._forced_drops` previously read `open_objections`, which closes on `resolved` as well.
+See DECISIONS.md 2026-08-28 (fourth entry) for the fix and the fifth for why it becomes a recorded
+condition after having been decided as an unconditional one.
+
+This is the only major result in the project with no pre-registration of its own. It was found
+while fixing a bug flagged in passing, and its evidence is n=10 against n=10 **across a code
+boundary**: the two cells ran at different commits, and the pre-fix cell carries none of the columns
+the mechanism check needs. `forced_drop_release` on the frozen `RunConfig` makes a same-commit
+control possible for the first time.
+
+### The premise, checked against already-committed rows before anything was spent
+
+The mechanism predicts the effect is confined to runs that return to `feature_eng` **twice** -- a
+single entry to the node cannot show a recomputation hazard, because resolution and resurrection
+have to be separated by a return. Splitting both committed cells on
+`route_sequence.count("feature_eng")`:
+
+| | pre-fix, `objection-routing.jsonl` | post-fix, `objection-closure.jsonl` |
+| --- | --- | --- |
+| two `feature_eng` entries | **1/4 remediated** | **5/5 remediated** |
+| one `feature_eng` entry | 4/4 | 4/4 |
+| never reached `feature_eng` | 0/2 (both the zero-objection `block` bug) | 0/1 (the same bug) |
+| **all rows** | **5/10** | **9/10** |
+
+**The entire 5/10 -> 9/10 difference sits in the two-return rows, and the mechanism says that is
+exactly where it must sit.** Single-return runs are 4/4 in both cells; runs that never reach the
+node are 0 in both. That is the strongest evidence available before spending, and it is a screen and
+not a control: those four pre-fix rows are the ones the parking lot lists as code-boundary-crossed,
+they predate `objections_resolved` and `objections_withdrawn`, so "two returns" is a proxy for the
+carrier and nothing in the file says whether a closure was `resolved` (the carrier) or `withdrawn`
+(which releases a column in both arms).
+
+Two further facts from the same read, both used as endpoints below. In the post-fix cell **exactly 3
+rows meet the full carrier condition** (`objections_resolved > 0` and two `feature_eng` entries) and
+all 3 remediated. And there is a score fingerprint: the three non-remediating pre-fix two-return
+rows claimed **0.9772, 0.9373 and 0.9345** against `claims_timing`'s ~0.82 legitimate ceiling, while
+**no post-fix row that reached `feature_eng` claimed above 0.8234**. A run that walks through
+`feature_eng` and still claims >0.90 is a run shipping a leak.
+
+### Commands
+
+```
+uv run ds-agents run --dataset claims_timing --naming opaque --reviewer-prompt which_column \
+  --loop-cap 3 --objection-routing by_category --objection-closure off \
+  --forced-drop-release resolved_or_withdrawn --repeat 10 --tools mcp \
+  --results evals/results/2026-08-28_forced-drop-release.jsonl
+# decision gate evaluated here; then, only if the gate opens, the same with
+# --forced-drop-release withdrawn_only
+```
+
+One file, both arms, because `forced_drop_release` is on every row: this is the first cell in the
+project whose comparison is *within* a file and needs no cross-file caveat. **The control arm runs
+first**, for two reasons -- it is the arm with no prior data, so if the budget cap binds the cell
+keeps the informative half, and the gate below is evaluated on it.
+
+**Control declaration.** The two arms are the same commit, the same materialised CSV bytes, the same
+prompts, the same tools, run back to back in one session. **`forced_drop_release` is the only field
+that crosses the boundary between them**, applied in exactly one place -- the release set in
+`PipelineState.binding_objections` -- and under `resolved_or_withdrawn` that method is provably
+identical to `open_objections` (`test_the_unsticky_arm_is_exactly_open_objections_again`), which is
+what `_forced_drops` read before 2026-08-28. One deliberate difference from the pre-fix *tree*, which
+is not a difference between these two arms: the fix also reworded the drop justification that
+reaches the feature_eng model's prompt (`"open reviewer objection X: ..."` -> `"reviewer objection X,
+not withdrawn: ..."`), and the new wording is kept in **both** arms rather than reverted in one, so
+that the arms differ in the release rule alone. Pinned by
+`test_the_drop_justification_is_identical_under_both_release_rules`. The consequence is that the
+control arm reproduces the pre-fix **release rule**, not the pre-fix **tree**; comparisons to
+`2026-08-28_objection-routing.jsonl` stay cross-commit and stay secondary. The two arms are not
+interleaved -- arm 1 runs to completion before arm 2 -- so API-side drift within the session is
+confounded with arm; judged small over ~40 minutes and recorded here rather than fixed, because
+interleaving would need a CLI change not worth making for one cell.
+
+### The decision gate, fixed in advance
+
+Evaluated on the control arm alone, before the second arm is funded. Its comparator is the committed
+post-fix cell's 9/10, which is this commit's default behaviour under a byte-identical config.
+
+- **Control `leakage_remediated` <= 7/10 -> run the sticky arm.** The gap against 9/10 is at least 2
+  and the paired same-commit number is what the session exists to produce.
+- **Control >= 8/10 and `objections_falsely_resolved` is 0 in every row -> do not run the sticky
+  arm.** The mechanism never fired: no resolution was followed by another entry to `feature_eng`, so
+  the cell had nothing to detect. That is the finding, it costs ~$0.32 instead of ~$0.65, and the
+  honest write-up is **"not confirmed, mechanism absent"** -- the headline gets demoted in the
+  results tables, not defended.
+- **Control >= 8/10 and `objections_falsely_resolved` > 0 in >= 2 rows -> do not run the sticky
+  arm.** The resurrection happened and remediation survived it anyway, because the reviewer caught
+  the re-admitted column on a later pass. That is a real result and it is *against* the fix's
+  importance: the fix prevents an event the pipeline already recovers from. Report it as such.
+
+### Endpoints
+
+- **Primary: `leakage_remediated`, sticky minus control, n=10 each. A difference of >=4/10 is shown;
+  2-3/10 is directional; 0-1/10 is not resolved at this n.** Stated as a difference and not as the
+  usual absolute, because the house rule (">=5/10 is shown, 3-4/10 is directional, below that is not
+  resolved at this n") was written for arms against a near-floor control and both arms here sit
+  high. The +4 line is the size of the observed cross-boundary gap and of the routing arm's own
+  accepted effect (1/10 -> 5/10). Fixed in advance so the reading cannot be tuned afterwards:
+  **9 vs 5 is Fisher one-sided p=0.070, 9 vs 6 is p=0.152, 10 vs 5 is p=0.016.** "Shown" here means
+  "meets the house line at n=10", **not** "significant". This primary is underpowered and that is
+  recorded here, before the run, rather than as a caveat after a favourable result.
+- **Primary replication floor: the sticky arm must itself be >= 8/10.** If the shipped default does
+  not reproduce its own 9/10, the difference is uninterpretable however it lands, and the finding is
+  that the headline does not replicate.
+- **Primary, pre-specified secondary population: the same difference over rows with
+  `objections_raised > 0`.** Pre-specified, not a rescue: the zero-objection `block` bug fires in 1-2
+  of every 10 runs, never reaches `feature_eng`, and can carry no effect in either arm, so it dilutes
+  the primary symmetrically. Committed base rates: 2/10 pre-fix, 1/10 post-fix. Deliberately **not
+  fixed before this cell** -- fixing it first would change behaviour on those runs and add a second
+  difference to every cross-cell comparison this entry makes.
+- **Mechanism (a), the resurrection fingerprint: `objections_falsely_resolved` > 0 in >=2 of 10
+  control rows, and 0 of 10 sticky rows.** The sharpest number in the design and it needs no new
+  column. An objection marked `resolved` whose own column is back in `final_features` is by
+  definition what that counter counts -- the metric was built to catch a *dishonest reviewer*, and
+  under the control arm it fires on an honest reviewer with a pipeline that un-fixes itself. It is
+  **0 in all 10 committed post-fix rows**, so a non-zero control arm is a clean separation.
+  Sufficient but not necessary: if the reviewer re-objects and the column is dropped again, the run
+  resurrects and still scores 0, so 1/10 reads as weak-but-present and **0/10 falsifies the
+  mechanism outright** -- if remediation falls with no resurrection fingerprint anywhere, whatever
+  moved the number is not the release rule.
+- **Mechanism (b), concentration: at least 3 of the primary difference must come from rows with two
+  or more `feature_eng` entries**, and **single-return rows must differ by <=1 run between arms.**
+  Committed split: two-return 1/4 vs 5/5, single-return 4/4 vs 4/4.
+- **Mechanism (c), the score fingerprint: >=2 control rows claim `claimed_holdout_score` > 0.90
+  while having routed through `feature_eng`, and 0 sticky rows do.** Committed: three such pre-fix
+  rows (0.9772, 0.9373, 0.9345) and none post-fix (max 0.8234 among rows that reached the node).
+- **Falsifier.** The headline replicates -- the primary difference reaches +4 -- but mechanism (b)
+  fails, i.e. the rise is *not* concentrated in two-return rows, or mechanism (a) is 0/10 in the
+  control arm. Then the release rule is not the cause and the LOG says the effect is real and
+  misattributed. Written down here so that a replicated headline is not, by itself, allowed to count
+  as a confirmed mechanism.
+- **Guardrail, non-inferiority, explicitly NOT a success metric: `n_final_features`.** The sticky
+  rule can only *add* permanent drops, so its cost is a legitimate feature dropped for the rest of a
+  run. **Sticky mean must be >= control mean - 1.5, and no more than 2 of 10 sticky rows may have
+  `n_final_features` <= 3.** Calibrated on the committed cells: means 5.40 pre-fix and 4.60
+  post-fix, a gap of 0.8, with exactly one post-fix row at 2. A narrower matrix is expected and is
+  the price; a collapsing one is a different failure and would mean remediation is being bought by
+  gutting the fixture.
+- **Harm: mean `claimed_holdout_score` against the ~0.82 legitimate ceiling, `false_alarm_standing`,
+  and `objections_withdrawn` > 0 in at least 1 of 10 sticky rows.** `withdrawn` is the only route
+  back from a `by_category` false positive under the sticky rule, so a sticky arm that never
+  withdraws makes every reviewer mistake permanent. Committed: 3/10 post-fix. **Threshold: >=1/10;
+  0/10 is a recorded harm, not a failed arm.**
+- **Descriptive, explicitly NOT endpoints: `review_verdict`, mean loops, `objections_resolved`,
+  `objections_raised`.** Prediction stated so it can be wrong on the record: the control arm should
+  run *longer and dearer*, because a re-admitted column is a column the reviewer can object to
+  again. That is the opposite of the routing arm's surprise and it is not a success criterion either
+  way. One toy run on each arm before this cell is consistent with it -- `pass` at $0.0137 on the
+  default arm against `exhausted` at $0.0334 on the control -- and that is an anecdote, not data.
+- **Budget.** Sticky arm $0.024-0.034/run against a measured $0.0294; control arm $0.026-0.045/run,
+  **direction up**, for the reason above. **Expected $0.60-0.72 for both arms, $0.32-0.45 if the gate
+  closes. Hard cap $0.85.** If the cap binds mid-arm the cell stops where it stops and n is reported
+  as what actually ran. `cmd_run` still has no per-run `try/except`, so an unhandled API error ends a
+  `--repeat` cell early; the recovery is a second invocation with `--repeat <remaining>` into the
+  same file, recorded here as a split, exactly as the Sonnet top-up was.
+
+**Comparability.** The two arms in this file are comparable on every field. **Not comparable to any
+file written before this commit** on `forced_drop_release`, which does not exist before it and
+cannot be back-filled -- the pre-fix rows are `resolved_or_withdrawn` in behaviour with the field
+absent, and the post-fix rows are `withdrawn_only` in behaviour with the field absent. Not
+comparable to `2026-08-28_objection-routing.jsonl` on `objections_resolved`,
+`objections_withdrawn`, `objections_falsely_resolved` or `objection_closure`, which that file
+predates. The 20 naming-ablation rows and the 27 rows at `2d5c1fc` carry no `route_sequence` and
+stay unscreenable, not clean.
