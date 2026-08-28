@@ -478,3 +478,40 @@ Priority: **load-bearing** means the thesis breaks if this is wrong and you cann
   turned on, and splitting them was a prerequisite rather than a nicety. Related:
   [[caught-vs-remediated]], [[controlled-ablation]], [[effective-target-vs-recorded-choice]],
   [[measurement-independence]], [[dispositions-as-audit-trail]].
+
+### replication-before-attribution — a 10-run count is not an effect until something has been run twice
+- Priority: load-bearing
+- Came up: 2026-08-28, confirming the sticky-drop headline
+- Status: flagged
+- Why it matters here: the project's largest number -- `leakage_remediated` 5/10 -> 9/10, attributed
+  to the sticky-drop fix -- did not survive a same-commit control. The paired cell came back at 7/10
+  against 6/10, a difference of -1. The reason is not subtle and it is the thing worth keeping: two
+  cells running **identical behaviour under an identical config** returned 9/10 and 6/10. Model
+  nondeterminism alone moves a 10-run count on `claims_timing` by about 3, which is most of the
+  effect the original comparison reported. Nothing about that was visible from either cell alone,
+  and it was not discoverable by thinking harder about the design -- only by running the same thing
+  twice. It also applies backwards: the routing arm's pre-registered 1/10 -> 5/10 is the same size
+  of difference and now carries the same error bars.
+  Three things follow that generalise past this repo. **A control arm's job is to be the
+  counterfactual for a claim, not a design you would ship.** "The fix moved remediation 5/10 -> 9/10"
+  is a claim *about the buggy pipeline*, which makes the buggy pipeline the denominator; the instinct
+  that measuring a known bug "would measure nothing" is right about design and wrong about evidence,
+  and it is what DECISIONS.md 2026-08-28 (fourth entry) got wrong and the fifth overturned.
+  **A mechanism prediction is what separates a replicated number from a confirmed cause** -- and here
+  it separated an *unreplicated* number from a *real* mechanism, which is the more instructive
+  split. The fingerprint fired exactly as predicted (`objections_falsely_resolved` 3/10 in the buggy
+  arm, 0/10 in the fixed one): the resurrection is real and the fix does prevent it. What failed was
+  the link from the event to the outcome, because the pipeline recovers on its own -- the reviewer
+  re-objects to the re-admitted column on a later pass, so resurrection costs a loop, not a result.
+  Without the mechanism endpoints the cell would have read as "the fix does nothing", which is
+  false. **And a metric built for one purpose is often the sharpest instrument for another**:
+  `objections_falsely_resolved` was built to catch a *dishonest reviewer* under the closure arm, and
+  it turned out to be the cleanest available detector of an *honest* reviewer whose pipeline
+  un-fixed itself.
+  The bookkeeping half matters as much: the condition had to go on the frozen `RunConfig` and into
+  `results_row()`, and its default is the one in this repo that is deliberately NOT the old
+  behaviour, because the old behaviour is a defect rather than a design fork -- pinned by a test with
+  the reasoning in its docstring, since it reads as an inconsistency and tidying it would silently
+  ship the bug. Related: [[controlled-ablation]], [[primary-endpoint-vs-guardrail]],
+  [[caught-vs-remediated]], [[effective-target-vs-recorded-choice]], [[measurement-independence]],
+  [[eval-baselines]].

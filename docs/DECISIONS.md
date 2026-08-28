@@ -970,3 +970,34 @@ And a session, with Phase 4 untouched. The mitigations are the inverted default,
 the field description, a stderr warning on every run of the off arm, and this entry -- which closes
 the axis: **`forced_drop_release` has exactly one legitimate use, it is the cell pre-registered in
 `evals/results/LOG.md` for 2026-08-28, and no other arm may use it as a baseline.**
+
+**Outcome, appended after both arms ran.** The axis paid for itself immediately and not in the
+direction it was built to confirm. **The 5/10 -> 9/10 headline did not replicate: with a same-commit
+control the effect is -1/10** (control 7/10, sticky 6/10), and the sticky arm did not reproduce its
+own 9/10 either, coming in at 6/10. The pre-registered primary and its replication floor both fail,
+and the line is retired from the results tables rather than defended. What replaced it is worth more
+than it was: four cells now exist at the same nominal configuration, and **two running identical
+behaviour returned 9/10 and 6/10**, so model nondeterminism alone moves a 10-run count on
+`claims_timing` by about 3 -- most of the original effect. That is a fact about this benchmark's
+resolution, it was invisible until something was run twice, and it puts error bars on every other
+10-run comparison in the project including the routing arm's own 1/10 -> 5/10.
+
+The mechanism, separately, is confirmed. `objections_falsely_resolved` is non-zero in 3 of 10
+control rows and 0 of 10 sticky rows, matching 0/10 in the committed post-fix cell: resurrection
+really happens under the old rule and the sticky rule really eliminates it. What is falsified is the
+link from that event to the outcome -- the difference is not concentrated in the two-return rows
+where resurrection must occur, and the reading that fits every number is that the pipeline recovers
+on its own, the reviewer re-objecting to the re-admitted column on a later pass. Resurrection costs
+a loop, not an outcome, which is why the control arm ran longer and dearer exactly as predicted and
+still reached 7/10.
+
+The fix stays in, on evidence that is not the primary: it removes a real defect, the guardrail shows
+the sticky arm's matrix is *wider* rather than narrower (5.30 against 4.90), and `false_alarm_
+standing` is lower. A pipeline that un-fixes itself is wrong whether or not the wrongness shows up
+in a 10-run count -- the same argument this file already made for refusing a mislabelled split
+manifest. What changed is the claim attached to the code, not the code.
+
+So the reversal recorded above was correct on its own terms and for a reason better than the one
+given: the axis was justified as the way to confirm a headline, and its actual value was to
+**refute** one. Had it not been built, the project would have carried a causal claim into Phase 5
+that a single replicate dissolves.

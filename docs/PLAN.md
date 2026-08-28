@@ -188,6 +188,30 @@ read a manifest could read the answer key.
       moved `leakage_remediated` 5/10 to 9/10** against the routing cell, with 6 of 6 resolving
       runs remediating. It has no pre-registration of its own and needs its own cell before it goes
       in a results table.
+- [x] Confirm the sticky-drop effect against a same-commit control. **Run, and it refuted the
+      headline rather than confirming it.** `forced_drop_release` is a `Literal["withdrawn_only",
+      "resolved_or_withdrawn"]` on the frozen `RunConfig` -- the one condition here whose default is
+      NOT the old behaviour, because the off value reproduces a defect rather than offering a second
+      design. Applied in one place, and under the off value `binding_objections` is provably
+      `open_objections` again. Both arms n=10 at one commit in one file,
+      `evals/results/2026-08-28_forced-drop-release.jsonl`, $0.5420 against a $0.85 cap.
+      **The primary failed with the wrong sign: control 7/10, sticky 6/10, a difference of -1/10
+      against a pre-registered +4/10, and the sticky arm did not reproduce its own 9/10.** The
+      5/10 -> 9/10 line is retired. The finding that replaced it is bigger: four cells now exist at
+      the same nominal config and **two running identical behaviour returned 9/10 and 6/10**, so
+      nondeterminism alone moves a 10-run count on `claims_timing` by about 3 -- which is most of
+      the original effect, and puts error bars on every 10-run comparison in this project including
+      the routing arm's 1/10 -> 5/10. The mechanism is separately confirmed and the fix stays in:
+      `objections_falsely_resolved` is 3/10 in the control and 0/10 in the sticky arm, so
+      resurrection is real and the rule prevents it -- it just costs a loop rather than an outcome,
+      because the reviewer re-objects to the re-admitted column on a later pass. See DECISIONS.md
+      2026-08-28 (fifth entry).
+
+Scope note: Phase 3 reopened for one session to pay the pre-registration debt on its own headline,
+and the debt turned out to be larger than recorded -- the headline was wrong. That is the phase
+working as intended rather than a setback, but it means the Phase 5 writeup inherits one fewer
+result and one more caveat, and that **no 10-run count from this project should be quoted as an
+effect without a replicate**.
 
 Scope note: Phase 3 closes with the closure arm as a recorded null and with the reviewer's
 resolution behaviour measurable for the first time (`objections_resolved`, `objections_withdrawn`,

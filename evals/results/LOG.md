@@ -644,3 +644,104 @@ comparable to `2026-08-28_objection-routing.jsonl` on `objections_resolved`,
 `objections_withdrawn`, `objections_falsely_resolved` or `objection_closure`, which that file
 predates. The 20 naming-ablation rows and the 27 rows at `2d5c1fc` carry no `route_sequence` and
 stay unscreenable, not clean.
+
+### The gate, evaluated on the control arm before the second arm was funded
+
+**Branch taken: control `leakage_remediated` = 7/10, which is `<= 7/10`, so the sticky arm was
+run.** Recorded here before anything else was read or spent, per the rule above. Control arm cost
+$0.2916 at $0.0292/run, inside the pre-registered $0.026-0.045 band.
+
+Two things are already visible and both were pre-registered, so they are reported here rather than
+discovered later. **Mechanism (a) fires in the control arm: `objections_falsely_resolved` is
+non-zero in 3 of 10 rows** (values 1, 1, 1), against a pre-registered threshold of >=2 and against
+**0 in all 10 committed post-fix rows**. That is the resurrection fingerprint -- an objection the
+reviewer marked `resolved` whose own column is back in `final_features` -- and it is the metric
+built to catch a dishonest reviewer firing instead on an honest reviewer whose pipeline un-fixed
+itself. And **the control arm is at 7/10, not the 5/10 the pre-fix cell recorded**, so the gap
+against the committed 9/10 is 2 rather than 4 before the sticky arm has run. The pre-registered
+primary line is a >=4/10 difference for "shown", and on this evidence that line is unlikely to be
+met. It stays as written.
+
+### Results -- 20 rows, $0.5420 total ($0.0292/run control, $0.0250/run sticky), against a $0.85 cap. All 20 publishable.
+
+**The headline did not replicate, and the mechanism it was attributed to is real. Both halves of
+that sentence are load-bearing.**
+
+| endpoint | pre-registered line | control (`resolved_or_withdrawn`) | sticky (`withdrawn_only`) | verdict |
+| --- | --- | --- | --- | --- |
+| **Primary** `leakage_remediated` | sticky - control >= +4/10 | 7/10 | 6/10 | **-1/10. NOT MET, and the sign is wrong.** |
+| **Replication floor** | sticky >= 8/10 | -- | 6/10 | **NOT MET** |
+| **Secondary population** (`objections_raised > 0`) | same difference | 7/10 | 6/7 | 70% vs 86%, opposite sign to the primary, n unequal |
+| **Mechanism (a)** `objections_falsely_resolved > 0` | >=2/10 control, 0/10 sticky | **3/10** | **0/10** | **BOTH MET** |
+| **Mechanism (b)** concentration in >=2-return rows | >=3 of the difference; single-return delta <=1 | 1/4 two-return, 6/6 single | 2/3 two-return, 4/4 single | **NOT MET** (+1 and -2) |
+| **Mechanism (c)** reached `feature_eng`, claimed >0.90 | >=2 control, 0 sticky | 3 | 1 | control met, sticky **not** met |
+| **Guardrail** `n_final_features` | sticky mean >= control - 1.5; <=2 rows at <=3 | mean 4.90 | mean 5.30, 0 rows <=3 | **MET** (sticky is wider, not narrower) |
+| **Harm** `objections_withdrawn > 0` | >=1/10 sticky | 1.0 mean resolved | 2/10 | MET. `false_alarm_standing` 0.10 control vs 0.00 sticky |
+| **Descriptive** cost and loops | control predicted dearer | $0.0292/run, 2.4 loops | $0.0250/run, 2.0 loops | **prediction held** |
+
+**The primary failed and the 5/10 -> 9/10 line is retired.** With a same-commit control the effect
+is **-1/10**, not +4/10, and the sticky arm did not reproduce its own 9/10 -- it came in at 6/10.
+Under the pre-registered reading that is "not resolved at this n" in the wrong direction, and the
+honest consequence is that **`leakage_remediated` 5/10 -> 9/10 must not appear in a results table or
+the Phase 5 writeup as an effect of the release rule.**
+
+**Why, and it is the most useful thing this cell produced: n=10 on this fixture cannot resolve a
+4/10 difference.** Four cells now exist at the same nominal configuration, differing only in the
+release rule and in commit:
+
+| cell | behaviour | `leakage_remediated` | reachable (`objections_raised > 0`) | zero-objection `block` bug |
+| --- | --- | --- | --- | --- |
+| `objection-routing` (pre-fix commit) | unsticky | 5/10 | 5/8 | 2/10 |
+| `objection-closure` control (post-fix commit) | sticky | 9/10 | 9/9 | 1/10 |
+| this cell, control arm | unsticky | 7/10 | 7/10 | 0/10 |
+| this cell, sticky arm | sticky | 6/10 | 6/7 | 3/10 |
+
+**Two cells running the same behaviour under the same config returned 9/10 and 6/10.** Two more
+returned 5/10 and 7/10. Model nondeterminism alone moves a 10-run count on `claims_timing` by about
+3, which is most of the effect the original comparison reported. That is not a criticism of the
+earlier cell; it is what the earlier cell could not know without a replicate, and it is the reason
+this one was run. It also puts error bars on every other 10-run count in this project, **including
+the routing arm's own pre-registered 1/10 -> 5/10**, which is the same size of difference.
+
+**The bug is real, the fix prevents it, and preventing it does not move remediation.** Mechanism (a)
+is the cleanest number in the cell and it hit both of its pre-registered thresholds:
+`objections_falsely_resolved` -- an objection the reviewer marked `resolved` whose own column is
+back in `final_features` -- is non-zero in **3 of 10 control rows and 0 of 10 sticky rows**, matching
+0/10 in the committed post-fix cell. So resurrection genuinely happens under the old rule, at about
+the rate predicted, and the sticky rule genuinely eliminates it. What is falsified is the *link from
+that event to the outcome*: mechanism (b) fails, the difference is not concentrated in the
+two-return rows where resurrection has to occur, and the run-level remediation rate does not follow.
+
+The reading that fits every number is the one written into the third branch of this cell's own gate,
+which was drafted for a case the gate did not take: **the pipeline recovers from resurrection on its
+own.** The reviewer sees the re-admitted column on a later pass and objects again. Resurrection
+costs a loop, not an outcome -- consistent with the control arm running longer (2.4 loops vs 2.0)
+and dearer ($0.0292 vs $0.0250) exactly as predicted, and with the control arm *still* reaching
+7/10.
+
+**One asymmetry that is not the fix's doing and must be stated: the zero-objection `block` bug fired
+3 times in the sticky arm and 0 times in the control arm.** Its pre-registered base rate was 1-2 in
+10, so 3-and-0 is a bad draw rather than an arm effect -- nothing in the release rule can reach a run
+that raises no objection and never enters `feature_eng`. This is exactly the dilution the secondary
+population was pre-specified to absorb, and in that population the sign flips: sticky 6/7 (86%)
+against control 7/10 (70%). Pooling all four cells by behaviour gives sticky 15/16 reachable (94%)
+against unsticky 12/18 (67%). Both are directionally *for* the fix and neither is quotable: the
+denominators are unequal, the pooling crosses a code boundary in two of the four cells, and this
+paragraph is a post-hoc pooling that was not pre-registered in this form. It is recorded because
+suppressing it would be as dishonest as leading with it.
+
+**The fix stays in, on evidence that is not the primary.** It eliminates a real defect (3/10 -> 0/10
+on the fingerprint), it costs nothing on the guardrail -- the sticky arm's matrix is *wider*, mean
+5.30 against 4.90, so remediation is not being bought by dropping legitimate features -- and
+`false_alarm_standing` is lower (0.00 vs 0.10). It is kept because a pipeline that un-fixes itself
+is wrong regardless of whether the wrongness shows up in a 10-run count, which is the same argument
+the repo made for refusing a mislabelled split manifest. What changes is the claim attached to it,
+not the code.
+
+**Wrong predictions, recorded as wrong.** The primary direction was wrong. Mechanism (b) was
+predicted to carry the effect and did not. Mechanism (c)'s sticky half was predicted to be 0 and was
+1. The cost and loop predictions were right, and they were the only descriptive ones.
+
+**Comparability.** The 20 rows here are comparable to each other on every field. The four-cell table
+above crosses a code boundary in its first row and a schema boundary in its first two, and the
+`objections_falsely_resolved` column does not exist before the closure cell.
