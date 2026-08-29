@@ -399,10 +399,54 @@ def _print_summary(state: PipelineState, root: Path) -> None:
 
 
 def cmd_eval(args: argparse.Namespace) -> int:
-    print(
-        f"eval harness lands in Phase 4; subset {args.subset!r} not runnable yet", file=sys.stderr
-    )
-    return 2
+    """The benchmark harness. Imports are deferred to the call for a real reason: `harness` imports
+    `_run_once` and `_append_results_row` from this module, so a top-level import here would be a
+    cycle. The clean fix is a `runner.py` holding the pieces both need; it is logged in DECISIONS
+    as the refactor to take when it earns its keep, rather than churning three test modules today.
+    """
+    from ds_agents.harness import RESULTS_DIR, run_eval
+
+    # Caught here beside `cmd_run`'s `--repeat` and `--loop-cap` checks, and for the same reason: a
+    # zero here produces an empty plan and a bare "0 rows written", which reads like the harness
+    # failed rather than like the flag was wrong.
+    for flag, value in (("--replicates", args.replicates), ("--n", args.n)):
+        if value < 1:
+            print(f"{flag} must be at least 1, got {value}", file=sys.stderr)
+            return 2
+
+    try:
+        report = run_eval(
+            subset=args.subset,
+            name=args.name,
+            replicates=args.replicates,
+            n=args.n,
+            max_cost_usd=args.max_cost_usd,
+            artifacts_dir=Path(args.artifacts_dir) if args.artifacts_dir else None,
+            out_dir=Path(args.out_dir) if args.out_dir else RESULTS_DIR,
+            transport=args.tools,
+            no_live=args.no_live,
+            dry_run=args.dry_run,
+        )
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+    # A cell that wrote nothing is not a cell. Exit non-zero so a scripted or CI invocation cannot
+    # pass on an invocation that spent money and published no row.
+    if not args.dry_run and report.rows_written == 0:
+        return 1
+    return 0
+
+
+def cmd_eval_diff(args: argparse.Namespace) -> int:
+    from ds_agents.evaldiff import compare, load_rows, render
+
+    before, after = Path(args.before), Path(args.after)
+    for path in (before, after):
+        if not path.exists():
+            print(f"no such results file: {path}", file=sys.stderr)
+            return 2
+    print(render(compare(load_rows(before), load_rows(after))))
+    return 0
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -498,7 +542,9 @@ def _build_parser() -> argparse.ArgumentParser:
         "--results",
         default=None,
         help="append one results_row() JSONL line per run to this path. Rows that fail "
-        "publishable() are refused, not written.",
+        "publishable() are refused, not written. For one-off cells and debugging: these rows carry "
+        "no cell or replicate annotation, so they cannot enter a powered comparison. The harness "
+        "is `ds-agents eval`.",
     )
     run.add_argument(
         "--no-live",
@@ -508,8 +554,46 @@ def _build_parser() -> argparse.ArgumentParser:
     run.set_defaults(func=cmd_run)
 
     ev = sub.add_parser("eval", help="run the benchmark harness")
-    ev.add_argument("--subset", default="ci")
+    ev.add_argument("--subset", default="ci", help="toy, ci, or full (full is not implemented yet)")
+    ev.add_argument(
+        "--name",
+        required=True,
+        help="what is different about this run, in a filename: `reviewer-haiku`, not `test3`. "
+        "Lowercase letters, digits and hyphens.",
+    )
+    ev.add_argument(
+        "--replicates",
+        type=int,
+        default=1,
+        help="how many times to repeat the whole subset (default: 1). A comparison needs at least "
+        "2 per arm -- eval-diff refuses to call a single-replicate difference an effect.",
+    )
+    ev.add_argument("--n", type=int, default=1, help="runs per cell per replicate (default: 1)")
+    ev.add_argument(
+        "--max-cost-usd",
+        type=float,
+        default=0.50,
+        help="stop cleanly before the run that would exceed this (default: 0.50)",
+    )
+    ev.add_argument("--artifacts-dir", default=None, help="where run artifacts land")
+    ev.add_argument("--out-dir", default=None, help="where the results file lands")
+    ev.add_argument("--tools", default="mcp", choices=("mcp", "local"))
+    ev.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="print the plan and the cost estimate, spend nothing, write nothing",
+    )
+    ev.add_argument(
+        "--no-live",
+        action="store_true",
+        help="force the placeholder model; every row will be refused by publishable()",
+    )
     ev.set_defaults(func=cmd_eval)
+
+    diff = sub.add_parser("eval-diff", help="compare two results files")
+    diff.add_argument("before", help="the earlier results JSONL")
+    diff.add_argument("after", help="the later results JSONL")
+    diff.set_defaults(func=cmd_eval_diff)
     return parser
 
 

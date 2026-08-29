@@ -515,3 +515,45 @@ Priority: **load-bearing** means the thesis breaks if this is wrong and you cann
   ship the bug. Related: [[controlled-ablation]], [[primary-endpoint-vs-guardrail]],
   [[caught-vs-remediated]], [[effective-target-vs-recorded-choice]], [[measurement-independence]],
   [[eval-baselines]].
+
+### binomial-variance-and-wilson-intervals — how wide the error bars on "9 out of 10" actually are
+- Priority: load-bearing
+- Came up: 2026-08-29, building `evaldiff.py`
+- Status: flagged
+- Why it matters here: every headline this project has produced is a count out of 10, and a count
+  out of 10 is a *proportion estimate* with an interval about half the scale wide. A Wilson interval
+  is the standard way to put bounds on one: 9/10 is [0.596, 0.982] and 5/10 is [0.237, 0.763]. Those
+  overlap, which means **the pooled interval alone would already have refused the retired sticky-drop
+  headline** -- the tool that costs nothing would have caught what $0.54 of live runs caught, before
+  the runs. That is the practical payoff and it is why `eval-diff` prints intervals rather than
+  deltas. The subtler half is why replicates are still required on top of the interval. A Wilson
+  interval assumes the 10 runs are independent Bernoulli draws with one fixed success probability.
+  That assumption is exactly what a repeat of the same cell tests, and it is not obviously true here:
+  a model whose behaviour drifts, a fixture whose difficulty depends on one split, or a bug that
+  fires in bursts would all break it, and a broken assumption makes the interval a lie rather than
+  merely wide. So the replicate requirement is not about shrinking the interval -- it is about
+  earning the right to compute one. That is why `Count` carries `per_replicate` beside the pooled
+  number: if between-replicate spread ever exceeds what binomial noise allows, the pooled interval
+  has to be thrown out rather than narrowed. Related: [[replication-before-attribution]],
+  [[controlled-ablation]], [[primary-endpoint-vs-guardrail]], [[eval-baselines]].
+
+### structured-output-repair — asking the model again, with the reasons its last answer failed
+- Priority: useful
+- Came up: 2026-08-29, fixing the zero-objection `block` bug
+- Status: flagged
+- Why it matters here: constrained decoding guarantees the *shape* of a response, never its
+  *usefulness*. The reviewer returned well-formed `ReviewFinding`s that were nonetheless dead ends:
+  `claim: "block"` with every objection filtered away, so nothing could be routed anywhere. There
+  are only three things you can do about that -- repair it in code (the node overrules the model,
+  and the failure disappears from the metric that was supposed to measure it), change the prompt
+  (which breaks byte-identity with every row already published, and here would only restate a rule
+  the model already had), or hand the model its own rejection reasons and ask once more. The third
+  is the only one that neither hides the failure nor invalidates the archive, and it pairs with the
+  2026-08-27 lesson that a per-item rule on a response schema is really a whole-response rule: the
+  filter that rejects one bad objection is also what leaves the claim stranded, so the repair has to
+  happen after filtering, not in the schema. Two details are load-bearing in the implementation. The
+  correction travels *inside* the JSON facts block, because `_payload` finds the block with
+  `find("{")`/`rfind("}")` and anything after it reaches nobody. And the retry is capped at one:
+  a model that answers empty twice has told you something, and the second empty answer is allowed
+  through to the router as the block the model actually claimed. Related: [[structured-output]],
+  [[constrained-decoding]], [[actionable-objection]], [[measurement-independence]].

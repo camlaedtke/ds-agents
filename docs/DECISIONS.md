@@ -1041,3 +1041,91 @@ applied unconditionally rather than behind a `RunConfig` axis, unlike `forced_dr
 published claim rests on the buggy behaviour, nobody will want to measure "the retry moved
 remediation by X", and the general instrument for a boundary like this is the `commit` field added
 in the same session, not a condition per bug fix.
+
+## 2026-08-29 (second entry): the row says what went wrong and which tree produced it, and the two
+## new labels sit on opposite sides of the state boundary.
+Three columns were added to `results_row()`. `errors` carries every `PipelineError` as node, message
+and `recoverable`, because `errored` is a single bit covering every way a run can fail: a filtered
+column name and a dead sandbox are the same value, which is why the zero-objection `block` bug had
+to be counted by hand off `route_sequence == ["reporter"]` and why the only two logs that could have
+explained it were never kept. It is always a list -- zero errors is a real 0, the same argument
+`objections_resolved` makes, and `None` would be indistinguishable from a row written before the
+column existed. The message is truncated at 500 characters on the row and left whole on the state:
+the row is a line someone greps, and a model client's exception repr can carry an entire HTTP body.
+`default_model` was simply missing while `reviewer_model` was present, so the first `--model sonnet`
+arm would have written rows indistinguishable from every Haiku row.
+
+`commit` is the interesting one, and it went on the frozen `RunConfig` rather than being annotated
+by the harness at write time. The rule it follows is `RunConfig`'s own: a row must be
+self-describing from the state alone, which is the property that stops a row being labelled by
+something outside the run that could disagree with what actually ran. Which code produced a run is a
+condition exactly like `naming` or `loop_cap` -- and it is the general instrument for a class of
+difference no flag can express, which is every unconditional change this project has made. Every
+code boundary reasoned about so far (the sticky-drop fix, the naming ablation's schema change, the 7
+rows that cross the forced-drop boundary) was reconstructed from commit messages after the fact.
+Putting it here also means `--results` rows and harness rows share one schema, so `results_row()`
+stays the single definition of a row. `-dirty` is suffixed onto the same string rather than kept as
+a second boolean, which keeps the cell key one value wide and makes a dirty run group as its own
+cell in `eval-diff` -- correct, because a dirty run is not reproducible. `provenance.git_commit`
+never raises: a provenance helper that can take a benchmark run down is worse than a null field.
+
+The contrast is deliberate and it is the reason the two labels live in different places.
+`cell`, `replicate` and `run_index` are facts about the *sampling design of an invocation*, not
+about what the run did, and no node may ever be able to read which replicate it is in -- so those
+stay write-time annotations passed through `_append_results_row(extra=...)`, above the state
+boundary, while everything describing the run comes off the frozen config below it.
+
+None of the three back-fill onto the six committed results files: only rows were committed, the
+states they came from are gone, and results files are never edited by hand. For `commit`
+specifically, `LOG.md`'s prose is the only provenance some earlier cells have -- the reviewer
+ablation records `2d5c1fc`, the naming ablation records nothing.
+
+## 2026-08-29 (third entry): the harness is replicate-aware before it is anything else, and the
+## refusal to call a difference an effect lives in the tool rather than in a reader's discipline.
+Phase 4 started with the harness rather than the manifest, because the manifest is blocked on an
+open question carried since session 0 (which OpenML suite has citable published baselines) and
+because the constraint the harness had to be built around was discovered the session before: a
+single 10-run cell cannot resolve a 4-in-10 difference. That is a design constraint, not a caveat to
+add later, and retrofitting it would have meant rewriting whatever got built first.
+
+So `plan()` is replicate-major: every cell's replicate 1 before any cell's replicate 2. The
+alternative, cell-major, is what put the Sonnet reviewer cells at n=4 and n=3 against a budgeted
+n=8 -- a cap that binds partway through a cell-major plan starves the last cell entirely, and
+unequal n is what made that 2x2 unquotable. Replicate-major truncates every cell by roughly the same
+fraction instead. The cost cap is invocation-level and not per-cell, because replicate-major
+ordering already solves the starvation problem a per-cell cap would have been for, and a second
+budget is a second number to reason about; two budgets means two invocations. A run that raises is
+counted and skipped rather than ending the cell (the parking-lot fix for `cmd_run --repeat`), and it
+is charged its cell's ESTIMATE, reported separately as `charged_estimate_usd` -- the tokens it spent
+are unrecoverable because the state that counted them never came back, and a cap that ignored failed
+runs would let a cell failing late, after paying for most of a pipeline, spend without limit.
+`SystemExit` still propagates: `cli` raises it to mean the run never started, and whatever stopped
+run 7 from starting will stop run 8.
+
+The refusal rules live in `evaldiff.py`, not in the harness and not in a reader's discipline.
+Underpowered is checked before anything else: fewer than 2 replicates on either side prints
+"underpowered" and no delta, which covers every row this project has committed, since none carry a
+`replicate`. Then overlapping Wilson intervals print "not separating", and disjoint ones print
+"separates at this n" -- never the word "effect" and never a p-value. A `None` metric is excluded
+from the denominator and reported, never counted as a failure: `leakage_remediated` is `None` on an
+empty matrix, and counting that as False would make a `feature_eng` crash look like a reviewer miss.
+A cell present on one side only is reported rather than dropped, because silently dropping it is how
+an arm loses its control. Worth recording that the cheap half of this would have been enough on its
+own: pooled Wilson alone refuses the retired sticky-drop headline, since 5/10 is [0.237, 0.763] and
+9/10 is [0.596, 0.982]. The replicate requirement is therefore not about narrowing the interval --
+it is about testing the iid-Bernoulli assumption the interval rests on, which is why `Count` carries
+per-replicate counts beside the pooled number.
+
+`random_seed` never becomes a `Cell` field or a `run_eval` argument. It is a DATA seed -- the split
+and the estimators -- so moving it would fold split variance into the number this project reports as
+model variance and break comparability with all 84 committed rows. The honest limitation, recorded
+rather than fixed: every rate here is conditional on one split, so "the pipeline remediates 70% of
+the time" is a claim about this split, not about the fixture.
+
+Two placements. The code lives in `src/ds_agents/harness.py`, not `evals/harness.py` as CLAUDE.md's
+layout block said -- `evals/` is not a package and is not in the wheel, and `cmd_eval` has to import
+it; CLAUDE.md is corrected in the same commit. And `harness` imports `cli` inside its functions
+while `cli` imports `harness` inside `cmd_eval`, because `harness` needs `_run_once` and
+`_append_results_row` while `cli` needs `run_eval`. The clean fix is a `runner.py` holding the
+pieces both need. It is deferred deliberately: taking it now would churn three test modules in a
+session already landing three things, and the deferred import costs nothing at a function call.

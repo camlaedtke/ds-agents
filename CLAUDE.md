@@ -12,10 +12,11 @@ src/ds_agents/
   graph.py        # LangGraph wiring only. No logic.
   nodes/          # one file per node: intake, profiler, feature_eng, modeler, reviewer, reporter
   tools/          # MCP client wrappers the nodes call (sandbox, artifacts, metrics)
+  harness.py      # runs the pipeline over the benchmark set, writes evals/results/
+  evaldiff.py     # compares two results files; refuses to call an underpowered difference an effect
 mcp_server/       # our MCP server: run_python sandbox, artifact store, metric log
 evals/
   datasets/       # manifest.yaml + loaders. Never edit the datasets or baselines by hand.
-  harness.py      # runs the pipeline over the benchmark set, writes results/
   results/        # one JSONL per run, committed
 tests/
   fixtures/toy/   # 200-row toy dataset with planted leakage. Full pipeline runs on it in <60s.

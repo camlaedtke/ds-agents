@@ -21,6 +21,8 @@ from ds_agents.cli import (
     _fixture_state,
     _select_model,
     _select_reviewer_model,
+    cmd_eval,
+    cmd_eval_diff,
     cmd_run,
 )
 from ds_agents.fixtures import load_fixture
@@ -393,3 +395,86 @@ class TestTheResultsWriter:
         assert len(rows) == 2
         assert rows[0]["dataset_id"] == "toy"
         assert rows[0]["naming"] == "descriptive"
+
+
+class TestTheEvalCommands:
+    """`cmd_eval` and `cmd_eval_diff` are the code path a real benchmark invocation takes.
+
+    The harness and the comparison tool have their own suites; what is pinned here is the wiring
+    between argv and them -- exit codes, flag validation, and the defaults. A benchmark that
+    silently exits 0 having written nothing is the failure this class exists to prevent, because
+    the number that does not appear is the one nobody notices is missing.
+    """
+
+    def parse(self, *argv):
+        return _build_parser().parse_args(argv)
+
+    def test_the_eval_parser_carries_the_sampling_design_and_the_cost_cap(self):
+        args = self.parse(
+            "eval",
+            "--subset",
+            "ci",
+            "--name",
+            "a-cell",
+            "--replicates",
+            "2",
+            "--n",
+            "5",
+            "--max-cost-usd",
+            "0.25",
+        )
+
+        assert (args.subset, args.name, args.replicates, args.n) == ("ci", "a-cell", 2, 5)
+        assert args.max_cost_usd == 0.25
+        assert args.dry_run is False
+
+    def test_eval_requires_a_name(self):
+        """`--name reviewer-haiku`, not `--name test3`: the name is what the results file is
+        called, and a run nobody can identify later is a run nobody can cite."""
+        with pytest.raises(SystemExit):
+            self.parse("eval", "--subset", "toy")
+
+    @pytest.mark.parametrize(("flag", "value"), [("--replicates", "0"), ("--n", "0")])
+    def test_a_sampling_flag_below_one_is_refused_with_exit_2(self, flag, value, capsys):
+        """Zero produces an empty plan and a bare "0 rows written", which reads like the harness
+        broke rather than like the flag was wrong."""
+        args = self.parse("eval", "--subset", "toy", "--name", "x", flag, value)
+
+        assert cmd_eval(args) == 2
+        assert "must be at least 1" in capsys.readouterr().err
+
+    def test_an_unrunnable_subset_exits_2_and_says_why(self, capsys):
+        args = self.parse("eval", "--subset", "full", "--name", "x")
+
+        assert cmd_eval(args) == 2
+        assert "manifest.yaml" in capsys.readouterr().err
+
+    def test_a_dry_run_exits_0_without_writing(self, tmp_path):
+        """Zero rows is only an error when something was supposed to run. A dry run writing no
+        file is the whole point of it."""
+        args = self.parse(
+            "eval", "--subset", "toy", "--name", "x", "--dry-run", "--out-dir", str(tmp_path)
+        )
+
+        assert cmd_eval(args) == 0
+        assert list(tmp_path.iterdir()) == []
+
+    def test_eval_diff_on_a_missing_file_exits_2(self, tmp_path, capsys):
+        args = self.parse("eval-diff", str(tmp_path / "nope.jsonl"), str(tmp_path / "also.jsonl"))
+
+        assert cmd_eval_diff(args) == 2
+        assert "no such results file" in capsys.readouterr().err
+
+    def test_eval_diff_compares_two_real_files_and_refuses_to_call_it_an_effect(
+        self, tmp_path, capsys
+    ):
+        """End to end through argv, on rows carrying no `replicate` -- which is every row this
+        project committed before today. The answer has to be "underpowered", not a delta."""
+        row = {"dataset_id": "toy", "naming": "descriptive", "leakage_remediated": True}
+        before, after = tmp_path / "b.jsonl", tmp_path / "a.jsonl"
+        for path in (before, after):
+            path.write_text(json.dumps(row) + "\n")
+        args = self.parse("eval-diff", str(before), str(after))
+
+        assert cmd_eval_diff(args) == 0
+        assert "underpowered" in capsys.readouterr().out
