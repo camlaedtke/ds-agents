@@ -16,7 +16,7 @@ from typing import Literal
 import pytest
 from conftest import FakeTools, ScriptedModel
 
-from ds_agents.nodes.router import route_target, router
+from ds_agents.nodes.router import _route_for_block, route_target, router
 from ds_agents.state import (
     Disposition,
     Objection,
@@ -467,3 +467,98 @@ def test_route_target_reads_the_latest_pass_by_iteration_not_list_order():
 def test_route_target_on_pending_or_pass_always_goes_to_the_reporter():
     assert route_target(state(review_verdict="pending")) == "reporter"
     assert route_target(state(review_verdict="pass")) == "reporter"
+
+
+# --- the shared "is this block actionable" predicate -------------------------------------------
+
+
+class TestTheRouterAndTheReviewerAgreeOnWhatIsActionable:
+    """`_route_for_block` and the reviewer's retry trigger must be the same question.
+
+    Both ask "once this pass lands, is anything still open for feature_eng or modeler to act on".
+    Before 2026-08-29 the router asked it and the reviewer did not ask it at all, which is how a
+    `block` with nothing to act on reached the router in the first place. They now share
+    `PipelineState.would_be_open`, and these tests exist so that a future edit to either caller
+    cannot quietly reintroduce two answers -- the same dual-authority split router.py's invariant 3
+    and `effective_target` exist to close.
+    """
+
+    @pytest.mark.parametrize(
+        ("objections", "dispositions", "expected"),
+        [
+            ([], {}, "reporter"),
+            ([objection(target_node="feature_eng")], {}, "feature_eng"),
+            ([objection(target_node="modeler")], {}, "modeler"),
+            (
+                [objection(target_node="modeler"), objection(target_node="feature_eng")],
+                {},
+                "feature_eng",
+            ),
+        ],
+    )
+    def test_the_refactored_router_routes_exactly_where_it_used_to(
+        self, objections, dispositions, expected
+    ):
+        """The `would_be_open` refactor is behaviour-preserving for the router. Every routing case
+        the file already covered must land on the same destination it landed on before."""
+        s = state(objections=objections)
+
+        assert _route_for_block(s, dispositions) == expected
+
+    def test_a_block_routes_to_the_reporter_exactly_when_nothing_would_be_open(self):
+        """The equivalence itself: the router refuses a block on precisely the condition the
+        reviewer now retries on. If these two ever disagree, one of them is acting on an objection
+        the other believes does not exist."""
+        cases = [
+            (state(objections=[]), {}),
+            (state(objections=[objection()]), {}),
+            (state(objections=[objection(target_node="modeler")]), {}),
+        ]
+        for s, dispositions in cases:
+            nothing_open = not s.would_be_open(dispositions=dispositions)
+            assert (_route_for_block(s, dispositions) == "reporter") is nothing_open
+
+    def test_this_pass_resolving_the_only_objection_leaves_nothing_open(self):
+        """The projected set, not the pre-pass set: an objection this pass resolved must not send
+        the run back upstream, and must not look 'open' to the reviewer's retry check either."""
+        obj = objection()
+        s = state(objections=[obj])
+
+        assert s.would_be_open(dispositions={obj.id: "resolved"}) == []
+        assert _route_for_block(s, {obj.id: "resolved"}) == "reporter"
+
+    def test_objections_being_added_this_pass_count_as_open(self):
+        """The reviewer's new objections are not on `state.objections` yet when it asks. Without
+        `adding`, every first-pass block would look unactionable and retry."""
+        s = state(objections=[])
+        fresh = objection()
+
+        assert [o.id for o in s.would_be_open(adding=[fresh], dispositions={})] == [fresh.id]
+
+    def test_an_objection_closed_by_an_earlier_pass_stays_closed(self):
+        """`would_be_open` folds the recorded passes before applying this pass's dispositions, the
+        same order `open_objections` uses. A resolved objection nobody mentioned again is not
+        open."""
+        obj = objection()
+        s = state(
+            objections=[obj],
+            review_passes=[
+                ReviewPass(
+                    iteration=1,
+                    claim="block",
+                    routed_to="feature_eng",
+                    dispositions={obj.id: "resolved"},
+                )
+            ],
+        )
+
+        assert s.would_be_open(dispositions={}) == []
+
+    def test_the_target_filter_follows_the_routing_condition(self):
+        """`would_be_open(target_node=...)` asks who ACTS, not who the reviewer addressed, so under
+        `by_category` a column-scoped objection addressed to `modeler` answers to feature_eng.
+        Inherited from `effective_target` rather than re-derived here."""
+        s = state(objections=[objection(target_node="modeler")], objection_routing="by_category")
+
+        assert s.would_be_open(dispositions={}, target_node="feature_eng")
+        assert s.would_be_open(dispositions={}, target_node="modeler") == []

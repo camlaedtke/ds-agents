@@ -111,12 +111,16 @@ class QueuedModel:
     answer may be the `BaseModel` value directly, or a callable that receives the prompt's parsed
     facts (the same JSON block `StubModel` reads) and returns one -- so a later pass can react to
     ids the node only mints during the run, like an objection's `id`.
+
+    An answer may also be an `Exception`, which is raised instead of returned, the same way
+    `ScriptedModel` does it. The reviewer's block-retry needs a second call that fails while the
+    first succeeded, which a single scripted answer per schema cannot express.
     """
 
     def __init__(
         self,
         schema: type[BaseModel],
-        answers: list[BaseModel | Callable[[dict[str, Any]], BaseModel]],
+        answers: list[BaseModel | Exception | Callable[[dict[str, Any]], BaseModel]],
         name: str = "queued",
     ) -> None:
         self.schema = schema
@@ -132,6 +136,8 @@ class QueuedModel:
         if not self.answers:
             raise AssertionError(f"QueuedModel ran out of scripted answers for {schema.__name__}")
         answer = self.answers.pop(0)
+        if isinstance(answer, Exception):
+            raise answer
         value = answer(_payload(user)) if callable(answer) else answer
         return Completion(
             value=value, model=self.name, input_tokens=11, output_tokens=7, cost_usd=0.0001

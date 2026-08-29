@@ -57,18 +57,21 @@ def _route_for_block(state: PipelineState, dispositions: dict[str, Disposition])
     matrix that still holds an objected column, then dropping it, invalidates the fit that was
     just made.
 
-    Asks `open_objections(destination)` rather than comparing `Objection.target_node` here, so
-    this function and `feature_eng._forced_drops` inherit the `objection_routing` condition from
-    the one place that applies it (`PipelineState.effective_target`). A `target_node ==` check in
-    this file would be a second, independently maintained answer to "who acts on this" -- the same
-    dual-authority split that invariant 3 above exists to close -- and under `by_category` the two
-    answers would disagree: the router would send the run to `modeler` while `feature_eng` was the
-    only node able to act.
+    Asks `would_be_open(target_node=destination)` rather than comparing `Objection.target_node`
+    here, so this function and `feature_eng._forced_drops` inherit the `objection_routing`
+    condition from the one place that applies it (`PipelineState.effective_target`). A
+    `target_node ==` check in this file would be a second, independently maintained answer to "who
+    acts on this" -- the same dual-authority split that invariant 3 above exists to close -- and
+    under `by_category` the two answers would disagree: the router would send the run to `modeler`
+    while `feature_eng` was the only node able to act.
+
+    `would_be_open` is shared with the reviewer, which asks the same question one node earlier to
+    decide whether its own `block` is a dead end. Two derivations of "is this actionable" is
+    exactly how a `block` with nothing to act on used to reach this function at all.
     """
-    closing_now = {oid for oid, d in dispositions.items() if d in {"resolved", "withdrawn"}}
     upstream_first: tuple[RoutedTo, ...] = ("feature_eng", "modeler")
     for destination in upstream_first:
-        if any(o.id not in closing_now for o in state.open_objections(destination)):
+        if state.would_be_open(dispositions=dispositions, target_node=destination):
             return destination
     return "reporter"
 

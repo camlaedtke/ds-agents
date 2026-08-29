@@ -11,10 +11,11 @@ REJECTED, not downgraded to `other`.
 import json
 
 import pytest
-from conftest import FakeTools, ScriptedModel
+from conftest import FakeTools, QueuedModel, ScriptedModel
 
 from ds_agents.fixtures import available, load_fixture
 from ds_agents.nodes.reviewer import (
+    BLOCK_RETRY_PREFIX,
     CLOSURE_RULE,
     REVIEWER_SYSTEM,
     WHICH_COLUMN_RULE,
@@ -530,3 +531,289 @@ def test_the_prompt_variant_is_a_config_change_not_a_second_code_path():
     )
 
     assert len(model.calls) == 1
+
+
+# --- a block with nothing to act on ------------------------------------------------------------
+
+
+def bad_proposal(subcategory: str = "bogus") -> ProposedObjection:
+    """A column-scoped objection naming a column the profile does not have: the filter rejects it
+    outright, which is one of the three ways a `block` ends up with nothing to act on."""
+    return ProposedObjection(
+        category="leakage",
+        subcategory=subcategory,
+        target_node="feature_eng",
+        columns=["not_a_real_column"],
+        evidence="made up",
+        severity="high",
+    )
+
+
+def good_proposal() -> ProposedObjection:
+    return ProposedObjection(
+        category="leakage",
+        subcategory="status code",
+        target_node="feature_eng",
+        columns=["account_status_code"],
+        evidence="nmi 0.518",
+        severity="high",
+    )
+
+
+class TestABlockWithNothingToActOn:
+    """The zero-objection `block` bug: the reviewer claims `block` while nothing survives for
+    feature_eng or modeler to act on, the router correctly refuses it, and the run goes straight to
+    the reporter having dropped nothing (`route_sequence: ["reporter"]`, `errored: true`).
+
+    Live base rate was 1-2 runs in 10 and it was the single largest cause of failure -- and, once
+    it drew 3-and-0 across the two arms of the forced-drop cell, a measurement hazard as well: it
+    eats a cell's numerator without touching what the cell is measuring.
+
+    The node now asks the router's own question (`would_be_open`) one step early and, when the
+    answer is "nothing", re-asks the model ONCE with its own rejection reasons. The claim is still
+    never repaired here -- a retry that produces nothing actionable falls through to the router's
+    documented terminal-block path, which is why invariant 2 in this module's docstring survives.
+    """
+
+    def test_a_block_whose_only_objection_was_filtered_away_retries_once(self):
+        """Cause (a), the hypothesis last session could not check: objections were raised, and the
+        malformed-objection filter dropped them one at a time."""
+        model = QueuedModel(
+            ReviewFinding,
+            [
+                finding(claim="block", objections=[bad_proposal()]),
+                finding(claim="block", objections=[good_proposal()]),
+            ],
+        )
+
+        update = reviewer(state(), tools=FakeTools(), model=model)
+
+        assert len(model.calls) == 2
+        assert update["reviewer_claim"] == "block"
+        (raised,) = update["objections"]
+        assert raised.columns == ["account_status_code"]
+
+    def test_a_successful_retry_still_records_why_the_first_response_failed(self):
+        """The rejection diagnostic is the only evidence of what the model actually got wrong, and
+        a retry that works is exactly the case where it would otherwise be lost -- `adjudged` is
+        replaced wholesale, so an error appended only for the survivor would erase it."""
+        model = QueuedModel(
+            ReviewFinding,
+            [
+                finding(claim="block", objections=[bad_proposal("adjuster touches")]),
+                finding(claim="block", objections=[good_proposal()]),
+            ],
+        )
+
+        update = reviewer(state(), tools=FakeTools(), model=model)
+
+        assert any("adjuster touches" in e.message for e in update["errors"])
+        assert any(BLOCK_RETRY_PREFIX in e.message for e in update["errors"])
+
+    def test_a_block_with_no_objections_at_all_also_retries(self):
+        """Cause (b). The fix must not depend on which cause was real -- the teed logs that would
+        have decided it were never committed -- so the trigger is the router's question, which is
+        blind to how the objection set got empty."""
+        model = QueuedModel(
+            ReviewFinding,
+            [
+                finding(claim="block", objections=[]),
+                finding(claim="block", objections=[good_proposal()]),
+            ],
+        )
+
+        update = reviewer(state(), tools=FakeTools(), model=model)
+
+        assert len(model.calls) == 2
+        assert [o.columns for o in update["objections"]] == [["account_status_code"]]
+
+    def test_a_block_whose_dispositions_close_every_open_objection_retries(self):
+        """Cause (c): the objections existed, and this pass's own dispositions closed all of them.
+        Nothing was filtered and nothing was malformed, and the block is still a dead end."""
+        existing = objection()
+        model = QueuedModel(
+            ReviewFinding,
+            [
+                finding(
+                    claim="block",
+                    dispositions=[
+                        DispositionUpdate(objection_id=existing.id, disposition="resolved")
+                    ],
+                ),
+                finding(claim="block", objections=[good_proposal()]),
+            ],
+        )
+
+        reviewer(state(objections=[existing]), tools=FakeTools(), model=model)
+
+        assert len(model.calls) == 2
+
+    def test_a_block_with_a_surviving_prior_open_objection_never_retries(self):
+        """The trigger is the router's question, not "did this pass raise something". An earlier
+        pass's objection that is still open is something feature_eng can act on, so this block is
+        actionable and costs no second call."""
+        model = ScriptedModel({ReviewFinding: finding(claim="block", objections=[])})
+
+        update = reviewer(state(objections=[objection()]), tools=FakeTools(), model=model)
+
+        assert len(model.calls) == 1
+        assert update["reviewer_claim"] == "block"
+
+    def test_a_pass_claim_never_retries(self):
+        """The happy path pays nothing. A retry on `pass` would double the cost of every clean run
+        in the benchmark."""
+        model = ScriptedModel({ReviewFinding: finding(claim="pass")})
+
+        reviewer(state(), tools=FakeTools(), model=model)
+
+        assert len(model.calls) == 1
+
+    def test_a_block_with_a_surviving_objection_never_retries(self):
+        model = ScriptedModel({ReviewFinding: finding(claim="block", objections=[good_proposal()])})
+
+        reviewer(state(), tools=FakeTools(), model=model)
+
+        assert len(model.calls) == 1
+
+    def test_the_retry_names_the_rejection_reason_and_the_known_columns(self):
+        """The correction travels INSIDE the JSON facts block, keyed `retry_reason` and
+        `known_columns`, for the same reason `feature_code` does: `tools/llm.py:_payload` locates
+        the block with find("{")/rfind("}"), so prose appended after it is invisible to the stub
+        and to anything else reading the same span."""
+        model = QueuedModel(
+            ReviewFinding,
+            [
+                finding(claim="block", objections=[bad_proposal("adjuster touches")]),
+                finding(claim="pass"),
+            ],
+        )
+
+        reviewer(state(), tools=FakeTools(), model=model)
+
+        first_facts = json.loads(model.calls[0][1])
+        retry_facts = json.loads(model.calls[1][1])
+        assert "retry_reason" not in first_facts
+        assert "known_columns" not in first_facts
+        assert "adjuster touches" in retry_facts["retry_reason"]
+        assert "account_status_code" in retry_facts["known_columns"]
+
+    def test_the_known_columns_offered_are_the_profile_columns_minus_the_target(self):
+        """The retry may only hand back data the reviewer is already shown. It names no fixture and
+        no trap -- the same line WHICH_COLUMN_RULE draws between repairing a prompt and injecting
+        the answer -- and in particular it never offers the target."""
+        model = QueuedModel(
+            ReviewFinding, [finding(claim="block", objections=[]), finding(claim="pass")]
+        )
+
+        reviewer(state(), tools=FakeTools(), model=model)
+
+        offered = json.loads(model.calls[1][1])["known_columns"]
+        assert set(offered) == {c.name for c in PROFILE.columns} - {"churned"}
+
+    def test_the_first_call_is_byte_identical_to_a_run_that_never_retried(self):
+        """The comparability guarantee. Every committed row was produced by a pipeline that made
+        exactly this first call; if the retry changed it, no reviewer number from before
+        2026-08-29 would be comparable with anything after it."""
+        retrying = QueuedModel(
+            ReviewFinding, [finding(claim="block", objections=[]), finding(claim="pass")]
+        )
+        clean = ScriptedModel({ReviewFinding: finding(claim="pass")})
+
+        reviewer(state(), tools=FakeTools(), model=retrying)
+        reviewer(state(), tools=FakeTools(), model=clean)
+
+        assert retrying.calls[0][0] == clean.calls[0][0]  # system prompt
+        assert retrying.calls[0][1] == clean.calls[0][1]  # user message
+
+    def test_both_calls_are_billed_to_one_node_event(self):
+        """One pass is one row in the cost table. The retry is a real cost and must show up, but a
+        second `NodeEvent` would make a pass that happened once look like two."""
+        model = QueuedModel(
+            ReviewFinding, [finding(claim="block", objections=[]), finding(claim="pass")]
+        )
+
+        update = reviewer(state(), tools=FakeTools(), model=model)
+
+        (event,) = update["node_trace"]
+        assert event.input_tokens == 22  # 11 per call, both booked
+        assert event.cost_usd == pytest.approx(0.0002)
+
+    def test_a_retry_that_still_produces_nothing_falls_through_to_the_block(self):
+        """The claim is never repaired here. A second empty answer leaves `block` standing so the
+        router can refuse it on the record -- promoting it to `pass` would hide the failure in the
+        one column (`review_verdict`) the eval reads."""
+        model = QueuedModel(
+            ReviewFinding,
+            [finding(claim="block", objections=[]), finding(claim="block", objections=[])],
+        )
+
+        update = reviewer(state(), tools=FakeTools(), model=model)
+
+        assert update["reviewer_claim"] == "block"
+        assert update["objections"] == []
+        assert any(BLOCK_RETRY_PREFIX in e.message for e in update["errors"])
+
+    def test_a_failing_retry_keeps_the_first_response(self):
+        """A retry is a repair attempt, not a new failure mode: if the second call raises, the pass
+        still reports what the model actually said the first time."""
+        existing = objection()
+        model = QueuedModel(
+            ReviewFinding,
+            [
+                finding(
+                    claim="block",
+                    dispositions=[
+                        DispositionUpdate(objection_id=existing.id, disposition="resolved")
+                    ],
+                ),
+                RuntimeError("rate limited"),
+            ],
+        )
+
+        update = reviewer(state(objections=[existing]), tools=FakeTools(), model=model)
+
+        assert update["reviewer_claim"] == "block"
+        assert update["reviewer_dispositions"][existing.id] == "resolved"
+        assert any("retry call failed" in e.message for e in update["errors"])
+
+    def test_the_retry_replaces_the_first_response_wholesale(self):
+        """Chosen over merging the two responses: one pass is one adjudication act, and splicing a
+        claim from one call onto dispositions from another reports something the model never said.
+
+        The consequence is deliberate and pinned here -- dispositions the first call made are gone,
+        so an objection it resolved reverts to `not_reviewed` and stays open. That is conservative
+        (the column stays dropped) and it agrees with the model's own standing `block`.
+        """
+        existing = objection()
+        model = QueuedModel(
+            ReviewFinding,
+            [
+                finding(
+                    claim="block",
+                    dispositions=[
+                        DispositionUpdate(objection_id=existing.id, disposition="resolved")
+                    ],
+                ),
+                finding(claim="block", objections=[good_proposal()]),
+            ],
+        )
+
+        update = reviewer(state(objections=[existing]), tools=FakeTools(), model=model)
+
+        assert update["reviewer_dispositions"][existing.id] == "not_reviewed"
+
+    def test_the_retry_is_attempted_at_most_once(self):
+        """No loop and no config knob. A model that answers empty twice has told us something, and
+        a third call would just cost money to hear it again."""
+        model = QueuedModel(
+            ReviewFinding,
+            [
+                finding(claim="block", objections=[]),
+                finding(claim="block", objections=[]),
+                finding(claim="pass"),
+            ],
+        )
+
+        reviewer(state(), tools=FakeTools(), model=model)
+
+        assert len(model.calls) == 2

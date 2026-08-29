@@ -1001,3 +1001,43 @@ So the reversal recorded above was correct on its own terms and for a reason bet
 given: the axis was justified as the way to confirm a headline, and its actual value was to
 **refute** one. Had it not been built, the project would have carried a causal claim into Phase 5
 that a single replicate dissolves.
+
+## 2026-08-29: a `block` with nothing to act on gets asked again, once, and the router's question
+## moves onto the state where both callers can share it.
+The zero-objection `block` bug -- the reviewer claims `block` while nothing survives for
+`feature_eng` or `modeler` to act on, the router correctly refuses it, and the run reaches the
+reporter having dropped nothing -- was the leading cause of failure at 1-2 runs in 10, and after it
+drew 3-and-0 across the two arms of the forced-drop cell it was a measurement hazard as well: it
+eats a cell's numerator without touching what the cell measures. The cause was never established.
+Two teed logs existed and were not committed, so the standing hypothesis (objections raised, then
+dropped one at a time by the malformed-objection filter) could not be checked this session. The fix
+is therefore deliberately blind to the cause: `PipelineState.would_be_open` answers "what will still
+be open once this pass lands", `router._route_for_block` now calls it instead of deriving the answer
+itself, and the reviewer asks the same question one node earlier through `_nothing_to_act_on`. All
+three ways the open set can end up empty -- every objection filtered away, none raised at all, this
+pass's own dispositions closing the last one -- reach the reporter identically and are treated
+identically. Sharing the predicate is the other half of the decision: a reviewer and a router
+holding two independently maintained answers to "is this actionable" is the shape of the bug, and
+the same dual-authority split `effective_target` and router invariant 3 already exist to close.
+
+When the answer is "nothing", the node re-asks the model **once**, with a `retry_reason` and the
+profile's `known_columns` added inside the JSON facts block (inside, because `tools/llm.py:_payload`
+reads `find("{")..rfind("}")` and prose appended after the block reaches nobody). Three alternatives
+were rejected. Repairing the claim to `pass` in the node would hide the failure in the one column
+the eval reads, and would break the reviewer's invariant 2. Adding a rule to `REVIEWER_SYSTEM` would
+break byte-identity of the `base` prompt against all 84 committed rows -- and the rule is already
+there as bullet 5, so the model is violating an instruction it has rather than missing one. Looping
+the retry would spend money to hear the same answer a third time. A second empty answer falls
+through to the router's documented terminal-block path unchanged, which is why this is a retry and
+not a repair.
+
+Two consequences are recorded rather than mitigated. A run the retry rescues now reports
+`errored: true`, because every retry appends a `PipelineError` -- the stable `block-retry` prefix is
+how a cell counts firings and rescues off the new `errors` column, and there is deliberately no
+`block_retries` field, since a counter derived by string-matching our own messages is exactly the
+kind of metric `state.py`'s rule 2 rejects. And a malformed block on the final pass can now end
+`pass` where it would have ended `exhausted`, so verdict distributions shift at this commit. This is
+applied unconditionally rather than behind a `RunConfig` axis, unlike `forced_drop_release`: no
+published claim rests on the buggy behaviour, nobody will want to measure "the retry moved
+remediation by X", and the general instrument for a boundary like this is the `commit` field added
+in the same session, not a condition per bug fix.

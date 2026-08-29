@@ -6,21 +6,28 @@ Reads `spec`, `profile`, `feature_summary`, `final_features`, `dropped_features`
 `read_artifact`). Writes `objections` (append), `reviewer_claim`, `reviewer_dispositions`,
 `node_trace`, and `errors` conditionally. Never `review_verdict`, `review_iterations`, or
 `review_passes` -- those belong to the router, which is the sole authority that turns a claim into
-an outcome. Tools: `read_artifact` only. One `model.generate` call per pass.
+an outcome. Tools: `read_artifact` only. One `model.generate` call per pass, and a second one only
+on the block-retry path below -- both booked to the same `NodeEvent`, so one pass stays one row in
+the cost table.
 
 The reviewer is a model under test, not a trusted judge, so two things here are deliberately not
 the reviewer's call:
 
-1. **A crashed pass reads as no pass.** If the model call fails, the node does not fall back to a
-   safe default claim the way `profiler` and `feature_eng` fall back to an empty nomination --
+1. **A crashed pass reads as no pass.** If the FIRST model call fails, the node does not fall back
+   to a safe default claim the way `profiler` and `feature_eng` fall back to an empty nomination --
    there is no safe default "claim". Instead both handoff fields (`reviewer_claim`,
    `reviewer_dispositions`) are cleared on every return path, including this one, so the router
    sees exactly what it would see from a disabled reviewer: `pending`, not a stale claim left over
-   from whatever the field held before this node ran.
+   from whatever the field held before this node ran. A failed *retry* is the one exception and the
+   opposite case: the first response is a completed pass, so it stands rather than being discarded.
 2. **The claim is never repaired.** A `claim: "block"` that ends up with nothing open after
    filtering and dispositions is not silently promoted to `pass` here -- that is the router's
    documented terminal-block path (an error, routed to the reporter), not something this node gets
-   to paper over.
+   to paper over. What the node does instead, as of 2026-08-29, is ASK AGAIN once: such a block is
+   a dead end the router will refuse, so the model is shown the reasons its objections did not
+   survive and given one chance to name something real or claim `pass` itself. The distinction is
+   the point -- re-asking the model is not the node overruling it, and a second empty answer still
+   reaches the router as the `block` the model claimed. See `_nothing_to_act_on`.
 
 Column filtering follows the profiler's own rule: a proposed objection's columns are checked
 against the profile's columns minus the target, and a column-scoped category (`leakage`,
@@ -30,6 +37,7 @@ which guarantees `exhausted` rather than giving the model a real path to `pass`.
 """
 
 import json
+from dataclasses import dataclass
 from typing import Any, Literal
 
 from pydantic import Field
@@ -121,6 +129,13 @@ later step said it would act. And a column listed in `final_features` is still i
 whatever any summary says; while it is there, that objection is `still_open`."""
 
 
+# The stable prefix on every error the block-retry writes. Results rows carry error text as of
+# 2026-08-29, so this string is how a cell counts how often the bug fired and how often the retry
+# rescued it -- there is deliberately no `block_retries` column, because a counter derived by
+# string-matching our own messages is the kind of metric state.py's rule 2 rejects.
+BLOCK_RETRY_PREFIX = "block-retry"
+
+
 def _system_prompt(state: PipelineState) -> str:
     """`base` with nothing appended must stay byte-identical to what every run before 2026-08-28
     used, and `base + WHICH_COLUMN_RULE` byte-identical to the reviewer-ablation and routing cells,
@@ -207,7 +222,13 @@ def _feature_code(
     return payload.content, "shown below", None
 
 
-def _user_message(state: PipelineState, *, feature_code: str | None, feature_code_note: str) -> str:
+def _user_message(
+    state: PipelineState,
+    *,
+    feature_code: str | None,
+    feature_code_note: str,
+    retry_reason: str | None = None,
+) -> str:
     assert state.spec is not None and state.profile is not None
     facts = {
         "task_description": state.task_description,
@@ -243,7 +264,138 @@ def _user_message(state: PipelineState, *, feature_code: str | None, feature_cod
         "feature_code": feature_code,
         "feature_code_note": feature_code_note,
     }
+    if retry_reason is not None:
+        # Present only on the retry, and absent -- not null -- on the first call, so the first call
+        # stays byte-identical to every run this project has published. Inside the facts block for
+        # the same reason `feature_code` is: `_payload` reads find("{")..rfind("}"), so a
+        # correction appended after the JSON would never reach the model that needs it.
+        facts["retry_reason"] = retry_reason
+        # Only what the reviewer is already shown. The profile's columns minus the target names no
+        # fixture and no trap: it is the same set the filter above checks proposals against, handed
+        # over so a second attempt can name something that will survive.
+        facts["known_columns"] = sorted(
+            {c.name for c in state.profile.columns} - {state.spec.target}
+        )
     return json.dumps(facts, indent=2)
+
+
+@dataclass(frozen=True)
+class _Adjudication:
+    """One model response, filtered: what the node would return if it stopped here.
+
+    A value rather than four loose locals because the filtering has to run twice -- once on the
+    first response and once on the retry's -- and two copies of that loop would be two chances for
+    them to disagree about what survives.
+    """
+
+    claim: Literal["pass", "block"]
+    objections: list[Objection]
+    dispositions: dict[str, Disposition]
+    filter_error: PipelineError | None
+    rejected: list[str]
+
+
+def _adjudicate(state: PipelineState, finding: ReviewFinding) -> _Adjudication:
+    """Filter one `ReviewFinding` against the profile: the column rule, then the disposition keys.
+
+    Pure -- it writes nothing and calls no model -- so a response can be adjudged, judged
+    unactionable, and thrown away for a second one without leaving anything behind.
+    """
+    assert state.spec is not None and state.profile is not None
+    known_columns = {c.name for c in state.profile.columns} - {state.spec.target}
+    kept_objections: list[Objection] = []
+    rejected: list[str] = []
+    dropped_columns: set[str] = set()
+
+    for proposal in finding.objections:
+        filtered = [c for c in proposal.columns if c in known_columns]
+        dropped_columns |= set(proposal.columns) - set(filtered)
+        if proposal.category in COLUMN_SCOPED_CATEGORIES and not filtered:
+            # Rejected outright, not downgraded to "other": a column-scoped objection that named
+            # only unknown, dropped, or target columns has nothing left to act on, and relabelling
+            # it would just guarantee an unresolvable objection and an eventual "exhausted".
+            rejected.append(f"{proposal.category} ({proposal.subcategory})")
+            continue
+        kept_objections.append(
+            Objection(
+                category=proposal.category,
+                subcategory=proposal.subcategory,
+                target_node=proposal.target_node,
+                columns=filtered,
+                evidence=proposal.evidence,
+                severity=proposal.severity,
+                raised_at_iteration=state.review_iterations,
+            )
+        )
+
+    filter_error = None
+    if dropped_columns or rejected:
+        # One aggregated error for the whole pass, not one per proposal: a model that names three
+        # bad columns in one pass should cost the trace one row, not three.
+        parts = []
+        if dropped_columns:
+            parts.append(
+                f"unknown/target columns dropped from proposals: {sorted(dropped_columns)}"
+            )
+        if rejected:
+            parts.append(f"objections rejected for having no surviving column: {rejected}")
+        filter_error = PipelineError(node="reviewer", message="; ".join(parts))
+
+    open_ids = {o.id for o in state.open_objections()}
+    dispositions: dict[str, Disposition] = {}
+    for update in finding.dispositions:
+        # Keyed only to ids that were actually open: a hallucinated id, or one naming an objection
+        # already closed, cannot land on the handoff field the router folds straight into the
+        # durable ReviewPass record.
+        if update.objection_id in open_ids:
+            dispositions[update.objection_id] = update.disposition
+    for oid in open_ids:
+        dispositions.setdefault(oid, "not_reviewed")
+
+    return _Adjudication(
+        claim=finding.claim,
+        objections=kept_objections,
+        dispositions=dispositions,
+        filter_error=filter_error,
+        rejected=rejected,
+    )
+
+
+def _nothing_to_act_on(state: PipelineState, adjudged: _Adjudication) -> bool:
+    """The router's question, asked one node early: is this `block` a dead end?
+
+    `would_be_open` is the router's own predicate, so this cannot drift from what
+    `_route_for_block` will decide about the very same pass. It is deliberately blind to HOW the
+    open set came to be empty -- all three causes (every objection filtered away, no objection
+    raised at all, this pass's dispositions closing the last one) reach the reporter identically,
+    and the teed logs that would have said which one dominates live were never kept.
+    """
+    return adjudged.claim == "block" and not state.would_be_open(
+        adding=adjudged.objections, dispositions=adjudged.dispositions
+    )
+
+
+def _retry_reason(adjudged: _Adjudication) -> str:
+    """What the retry tells the model about its own last answer.
+
+    Names the rejections when there were any, because "you named a column that does not exist" and
+    "you claimed block and raised nothing" are different mistakes and only the model can tell which
+    one it made.
+    """
+    reason = (
+        "Your last response claimed 'block', but once filtering and your dispositions were "
+        "applied nothing was left open for feature_eng or modeler to act on, so there is nowhere "
+        "to route the run and the block would be discarded."
+    )
+    if adjudged.rejected:
+        reason += (
+            f" These objections were rejected for naming no column that exists in this dataset: "
+            f"{adjudged.rejected}."
+        )
+    return (
+        f"{reason} Either raise an objection naming at least one column from known_columns below, "
+        f"or claim 'pass'."
+    )
 
 
 def reviewer(state: PipelineState, *, tools: Tools, model: StructuredModel) -> dict[str, Any]:
@@ -295,59 +447,73 @@ def reviewer(state: PipelineState, *, tools: Tools, model: StructuredModel) -> d
             "reviewer_dispositions": {},
         }
 
-    known_columns = {c.name for c in state.profile.columns} - {state.spec.target}
-    kept_objections: list[Objection] = []
-    rejected: list[str] = []
-    dropped_columns: set[str] = set()
+    adjudged = _adjudicate(state, finding)
+    # Recorded per adjudication rather than once at the end, because the retry below replaces
+    # `adjudged` wholesale: appending only the surviving one would throw away the very diagnostic
+    # that says WHY the retry fired, on exactly the passes where the retry worked.
+    if adjudged.filter_error is not None:
+        errors.append(adjudged.filter_error)
 
-    for proposal in finding.objections:
-        filtered = [c for c in proposal.columns if c in known_columns]
-        dropped_columns |= set(proposal.columns) - set(filtered)
-        if proposal.category in COLUMN_SCOPED_CATEGORIES and not filtered:
-            # Rejected outright, not downgraded to "other": a column-scoped objection that named
-            # only unknown, dropped, or target columns has nothing left to act on, and relabelling
-            # it would just guarantee an unresolvable objection and an eventual "exhausted".
-            rejected.append(f"{proposal.category} ({proposal.subcategory})")
-            continue
-        kept_objections.append(
-            Objection(
-                category=proposal.category,
-                subcategory=proposal.subcategory,
-                target_node=proposal.target_node,
-                columns=filtered,
-                evidence=proposal.evidence,
-                severity=proposal.severity,
-                raised_at_iteration=state.review_iterations,
+    if _nothing_to_act_on(state, adjudged):
+        # The router's own question, asked one node early. Re-ask the model once with what its
+        # answer ran into; see BLOCK_RETRY_PREFIX for why this is a retry and not a repair.
+        errors.append(
+            PipelineError(
+                node="reviewer",
+                message=f"{BLOCK_RETRY_PREFIX}: claimed 'block' with nothing left for feature_eng "
+                f"or modeler to act on; re-asking once",
             )
         )
-
-    if dropped_columns or rejected:
-        # One aggregated error for the whole pass, not one per proposal: a model that names three
-        # bad columns in one pass should cost the trace one row, not three.
-        parts = []
-        if dropped_columns:
-            parts.append(
-                f"unknown/target columns dropped from proposals: {sorted(dropped_columns)}"
+        try:
+            second = run.record(
+                model.generate(
+                    system=_system_prompt(state),
+                    user=_user_message(
+                        state,
+                        feature_code=feature_code,
+                        feature_code_note=feature_code_note,
+                        retry_reason=_retry_reason(adjudged),
+                    ),
+                    schema=ReviewFinding,
+                )
             )
-        if rejected:
-            parts.append(f"objections rejected for having no surviving column: {rejected}")
-        errors.append(PipelineError(node="reviewer", message="; ".join(parts)))
-
-    open_ids = {o.id for o in state.open_objections()}
-    dispositions: dict[str, Disposition] = {}
-    for update in finding.dispositions:
-        # Keyed only to ids that were actually open: a hallucinated id, or one naming an objection
-        # already closed, cannot land on the handoff field the router folds straight into the
-        # durable ReviewPass record.
-        if update.objection_id in open_ids:
-            dispositions[update.objection_id] = update.disposition
-    for oid in open_ids:
-        dispositions.setdefault(oid, "not_reviewed")
+        except Exception as exc:  # noqa: BLE001 - same reason as the first call, one step milder:
+            # the first response is intact, so a failed repair falls back to it rather than
+            # discarding a pass the model did complete.
+            errors.append(
+                PipelineError(
+                    node="reviewer",
+                    message=f"{BLOCK_RETRY_PREFIX}: the retry call failed: {exc}; keeping the "
+                    f"first response",
+                )
+            )
+        else:
+            # Wholesale replacement, not a merge of the two responses: one pass is one adjudication
+            # act, and splicing a claim from one call onto dispositions from another would report
+            # something the model never said. The cost of that choice is real and deliberate -- a
+            # disposition the first call made is gone, so an objection it resolved reverts to
+            # `not_reviewed` and stays open, which is conservative and agrees with the block the
+            # model is still claiming.
+            adjudged = _adjudicate(state, second)
+            if adjudged.filter_error is not None:
+                errors.append(adjudged.filter_error)
+            resolved = not _nothing_to_act_on(state, adjudged)
+            errors.append(
+                PipelineError(
+                    node="reviewer",
+                    message=f"{BLOCK_RETRY_PREFIX}: the retry "
+                    + (
+                        f"produced {len(adjudged.objections)} actionable objection(s)"
+                        if resolved
+                        else "still produced nothing actionable; the router will refuse this block"
+                    ),
+                )
+            )
 
     result: dict[str, Any] = {
-        "objections": kept_objections,
-        "reviewer_claim": finding.claim,
-        "reviewer_dispositions": dispositions,
+        "objections": adjudged.objections,
+        "reviewer_claim": adjudged.claim,
+        "reviewer_dispositions": adjudged.dispositions,
         "node_trace": [run.event()],
     }
     if errors:

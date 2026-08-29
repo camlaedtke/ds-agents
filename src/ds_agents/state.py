@@ -15,6 +15,7 @@ Two rules shape most of what follows, both of them consequences of the project's
 
 import operator
 import uuid
+from collections.abc import Sequence
 from datetime import UTC, datetime
 from typing import Annotated, Any, Literal, Self, get_args
 
@@ -811,6 +812,39 @@ class PipelineState(Contract):
         pending = [o for o in self.objections if o.id not in closed]
         if target_node is not None:
             pending = [o for o in pending if self.effective_target(o) == target_node]
+        return pending
+
+    def would_be_open(
+        self,
+        *,
+        adding: Sequence[Objection] = (),
+        dispositions: dict[str, Disposition],
+        target_node: RoutableNode | None = None,
+    ) -> list[Objection]:
+        """`open_objections`, asked against the state as it is ABOUT to be.
+
+        `open_objections` folds only the dispositions already recorded in `review_passes`. Two
+        callers need the question asked one step earlier, against objections this pass is adding
+        and dispositions this pass has not handed to the router yet: the router, deciding where a
+        `block` goes, and the reviewer, deciding whether its own `block` has anything to act on at
+        all. One implementation, because two would eventually disagree about whether a `block` is
+        actionable -- and a reviewer and a router disagreeing about that is the zero-objection
+        `block` bug's whole shape.
+
+        `dispositions` can only CLOSE here, never reopen: it is applied by removing the ids it
+        resolves or withdraws from the already-open set, rather than by overwriting
+        `latest_dispositions`. That mirrors `_route_for_block`'s pre-2026-08-29 arithmetic exactly,
+        and it is unreachable to do otherwise through the graph -- the reviewer keys its
+        dispositions to ids that were open when the pass began.
+        """
+        closing_now = {oid for oid, d in dispositions.items() if d in {"resolved", "withdrawn"}}
+        pending = [o for o in self.open_objections(target_node) if o.id not in closing_now]
+        pending += [
+            o
+            for o in adding
+            if o.id not in closing_now
+            and (target_node is None or self.effective_target(o) == target_node)
+        ]
         return pending
 
     def latest_dispositions(self) -> dict[str, Disposition]:
