@@ -265,13 +265,19 @@ class TestALeakageFlipIsFlaggedRegardlessOfPower:
 
 
 class TestTheCommittedResultsFilesStillParseAndGroup:
-    """Ground truth per CLAUDE.md: read-only, never written to. These six files predate `commit`,
-    `errors`, and `default_model` -- exactly the schema drift `cell_key` has to tolerate, since a
-    tool that raises on its own archive is useless the day it ships."""
+    """Ground truth per CLAUDE.md: read-only, never written to. The six files written before
+    2026-08-29 predate `commit`, `errors`, and `default_model` -- exactly the schema drift
+    `cell_key` has to tolerate, since a tool that raises on its own archive is useless the day it
+    ships.
+
+    The count is asserted as a floor rather than an exact number on purpose: every future cell adds
+    a file, and a test that had to be edited after each successful benchmark run would be edited
+    without being read.
+    """
 
     def test_every_committed_file_loads_and_every_row_groups_without_raising(self):
         files = sorted(RESULTS_DIR.glob("*.jsonl"))
-        assert len(files) == 6, "expected exactly the six committed results files"
+        assert len(files) >= 6, "the six pre-2026-08-29 results files must still be readable"
 
         for path in files:
             rows = load_rows(path)

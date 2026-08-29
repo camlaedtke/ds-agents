@@ -220,11 +220,28 @@ prompt-shaped, and both are Phase 4/5 work: the zero-objection `block` bug, now 
 10, and late detection against the cap, which is what every remaining `exhausted` run is.
 
 ## Phase 4: Eval harness (3 to 5 sessions, plan mode)
+Scope note: the harness landed before the manifest, reversing the order listed here. The manifest is
+blocked on an open question carried since session 0 (which OpenML suite has citable baselines) and
+the harness was not, but the deciding reason is that replicate-awareness is a harness *design*
+constraint rather than a feature: a single 10-run cell cannot resolve a 4/10 difference, and
+retrofitting that onto a harness built without it would have meant rewriting it. Also folded in:
+the zero-objection `block` fix NEXT.md named as the first code change, and three new results-row
+columns (`errors`, `commit`, `default_model`) the harness needed in order to be worth running.
 - [ ] evals/datasets/manifest.yaml with 10 to 15 OpenML / Kaggle playground datasets and
       published baselines, sources cited
-- [ ] harness.py, results JSONL, eval-diff command
-- [ ] `ci` subset, GitHub Actions job with thresholds
-- [ ] LOG.md running
+- [x] harness.py, results JSONL, eval-diff command. `src/ds_agents/harness.py` (not `evals/`, which
+      is not a package -- see DECISIONS.md 2026-08-29 third entry) and `src/ds_agents/evaldiff.py`,
+      behind `ds-agents eval` and `ds-agents eval-diff`. Replicate-major planning, an
+      invocation-level cost cap, per-run failure isolation, and an injected `Runner` seam that makes
+      the whole thing testable with no API key. `eval-diff` refuses to call an underpowered
+      difference an effect, excludes `None` metrics from denominators, and reports per-replicate
+      counts beside pooled Wilson intervals. Smoked live at n=1 on `toy` for $0.0135 --
+      `evals/results/2026-08-29_harness-smoke.jsonl`, which is a write-path proof and not a cell.
+- [~] `ci` subset, GitHub Actions job with thresholds. The subset is defined and runnable (three
+      cells, one per fixture, ~$0.065 a replicate) and has NOT been run live. No CI job and no
+      thresholds: a threshold needs a replicated baseline to be a threshold rather than a coin
+      flip, and no such baseline exists yet.
+- [x] LOG.md running. Seven entries; the newest is the harness smoke, labelled as not-a-cell.
 
 ## Phase 5: Ablations and writeup (3 to 4 sessions)
 - [~] reviewer on/off, Haiku/Sonnet reviewer, single agent vs team, loop cap 1/3. Two of these ran

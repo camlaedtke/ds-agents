@@ -745,3 +745,38 @@ predicted to carry the effect and did not. Mechanism (c)'s sticky half was predi
 **Comparability.** The 20 rows here are comparable to each other on every field. The four-cell table
 above crosses a code boundary in its first row and a schema boundary in its first two, and the
 `objections_falsely_resolved` column does not exist before the closure cell.
+
+## 2026-08-29 — harness smoke, `toy`, n=1. NOT A CELL. Never pool this row.
+
+`2026-08-29_harness-smoke.jsonl`, **1 row**, $0.0135. The first file this project's harness wrote
+rather than a human assembling it out of `ds-agents run --results`. It exists to prove the write
+path end to end and for no other reason: **n=1, one replicate, one fixture, and no comparison of
+any kind is licensed by it.** It must never be averaged, pooled, or cited as a rate.
+
+Command: `uv run ds-agents eval --subset toy --name harness-smoke --max-cost-usd 0.05`, at commit
+`1e5f30a`, clean tree, live Haiku over MCP.
+
+What it verified, which is all it verified:
+
+- The harness plans, runs, gates and writes. 1 row written, 0 refused, 0 runs failed, $0.0135 spent
+  against a $0.05 cap and a $0.0100 estimate.
+- The row carries every column added this session: `commit: "1e5f30a"` (clean, no `-dirty` suffix),
+  `default_model: "haiku"`, `errors: []`, plus the harness's own annotations `cell: "toy-default"`,
+  `replicate: 1`, `run_index: 0`, `eval_subset: "toy"`, `eval_name: "harness-smoke"`. 62 fields.
+- The run itself was ordinary and correct: the planted `account_status_code` was dropped,
+  `leakage_remediated: true`, `review_verdict: "pass"`, `errored: false`, one review loop.
+- `eval-diff` of the file against ITSELF reports `underpowered` on all four metrics and prints no
+  delta. A tool that called a file identical to itself an effect would be worse than no tool.
+
+**What it did not verify, stated plainly.** The zero-objection `block` retry landed this session
+and **has never been observed firing on a live run.** Its base rate was 1-2 per 10 on
+`claims_timing` at ~$0.03 a run, so seeing it once is a ~$0.30 coin flip -- a benchmark run, not
+infrastructure. The unit tests cover all three trigger paths. The first live evidence will be the
+`block-retry` prefix in the new `errors` column of the next real cell, which is now greppable.
+The `ci` subset has also never been run live; only `toy-default` has.
+
+**Comparability.** This row shares no cell with anything committed before it: it is the first row
+written at a commit where the reviewer can retry a dead-end block, and the first carrying `commit`,
+`errors` and `default_model` at all. Those three columns cannot be back-filled onto any earlier row
+-- only rows were committed and the states they came from are gone -- so `eval-diff` will always
+group pre-2026-08-29 rows into their own cells. That is correct rather than inconvenient.
