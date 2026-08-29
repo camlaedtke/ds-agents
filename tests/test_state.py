@@ -7,6 +7,7 @@ import pytest
 from pydantic import ValidationError
 
 from ds_agents.state import (
+    ERROR_MESSAGE_LIMIT,
     ColumnProfile,
     LeakageCandidate,
     ModelResult,
@@ -1296,3 +1297,108 @@ def test_a_node_that_called_no_model_does_not_count_as_a_placeholder():
         NodeEvent(node="router", started=utc_now(), model=None),
     ]
     assert state.publishable()[0] is True
+
+
+class TestTheRowCarriesItsErrors:
+    """A results row without error text cannot tell "the reviewer named a column that does not
+    exist" from "the sandbox died". `errored` is one bit for every way a run can go wrong, which
+    made the zero-objection `block` bug invisible in the six committed results files -- it had to
+    be counted by hand off `route_sequence == ["reporter"]` instead, and the two teed logs that
+    would have explained it were never kept.
+
+    Not back-fillable onto any row written before 2026-08-29: only rows were committed, the states
+    they came from are gone, and results files are never edited by hand.
+    """
+
+    def test_every_error_reaches_the_row_with_its_node_and_message(self):
+        state = PipelineState(dataset_id="toy", task_description="t")
+        state.errors = [
+            PipelineError(node="reviewer", message="block-retry: re-asking once"),
+            PipelineError(node="router", message="reviewer claimed 'block' with no open objection"),
+        ]
+
+        row = state.results_row()
+
+        assert [e["node"] for e in row["errors"]] == ["reviewer", "router"]
+        assert "block-retry" in row["errors"][0]["message"]
+
+    def test_a_clean_run_carries_an_empty_list_not_null(self):
+        """Zero errors is a real 0, the same argument `objections_resolved` makes. `None` would be
+        indistinguishable from a row written before the column existed."""
+        row = PipelineState(dataset_id="toy", task_description="t").results_row()
+
+        assert row["errors"] == []
+
+    def test_an_unrecoverable_error_is_distinguishable_on_the_row(self):
+        """The conflation `errored` cannot fix: a filtered column name and a fatal crash are both
+        `errored: true`, and only `recoverable` separates them."""
+        state = PipelineState(dataset_id="toy", task_description="t")
+        state.errors = [
+            PipelineError(node="modeler", message="fit failed", recoverable=False),
+            PipelineError(node="reviewer", message="dropped a column", recoverable=True),
+        ]
+
+        row = state.results_row()
+
+        assert [e["recoverable"] for e in row["errors"]] == [False, True]
+
+    def test_errored_agrees_with_the_error_list(self):
+        state = PipelineState(dataset_id="toy", task_description="t")
+        state.errors = [PipelineError(node="reviewer", message="something")]
+
+        row = state.results_row()
+
+        assert row["errored"] is True
+        assert len(row["errors"]) == 1
+
+    def test_a_long_message_is_truncated_on_the_row_but_not_in_the_state(self):
+        """A model client's exception repr can carry a whole HTTP body. The row is a line in a file
+        someone greps; the state keeps the full text for whoever is debugging the run."""
+        state = PipelineState(dataset_id="toy", task_description="t")
+        state.errors = [PipelineError(node="reviewer", message="x" * 900)]
+
+        row = state.results_row()
+
+        assert len(row["errors"][0]["message"]) == ERROR_MESSAGE_LIMIT
+        assert len(state.errors[0].message) == 900
+
+
+class TestTheRowCarriesItsProvenance:
+    """Which code produced the row, and which model ran upstream.
+
+    Every code boundary this project has had to reason about -- the sticky-drop fix, the naming
+    ablation's schema change, the 7 rows that cross the forced-drop boundary -- was reconstructed
+    from commit messages after the fact, because no row said what it ran under. `commit` is the
+    general instrument for that, which is why the block-retry needed no `RunConfig` axis of its own.
+    """
+
+    def test_the_commit_is_null_when_nothing_recorded_it(self):
+        """Null, not a guess. A row from a state built in a test or from a tarball has no commit,
+        and inventing one would be worse than admitting it."""
+        row = PipelineState(dataset_id="toy", task_description="t").results_row()
+
+        assert row["commit"] is None
+
+    def test_the_row_reports_the_commit_off_the_frozen_config(self):
+        """On `RunConfig` rather than annotated at write time, so the row stays self-describing
+        from the state alone -- the property that stops a row being labelled by something outside
+        the run that could disagree with what actually ran."""
+        state = PipelineState(
+            dataset_id="toy", task_description="t", config=RunConfig(commit="c17a885-dirty")
+        )
+
+        assert state.results_row()["commit"] == "c17a885-dirty"
+
+    def test_the_row_carries_the_upstream_model_as_well_as_the_reviewers(self):
+        """`reviewer_model` was on the row and `default_model` was not, so the first `--model
+        sonnet` arm would have produced rows indistinguishable from every Haiku row."""
+        state = PipelineState(
+            dataset_id="toy",
+            task_description="t",
+            config=RunConfig(default_model="sonnet", reviewer_model="haiku"),
+        )
+
+        row = state.results_row()
+
+        assert row["default_model"] == "sonnet"
+        assert row["reviewer_model"] == "haiku"

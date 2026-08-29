@@ -116,6 +116,11 @@ Severity = Literal["low", "medium", "high"]
 # must never reach a results file; `PipelineState.publishable()` is the single gate.
 PLACEHOLDER_MODEL_NAMES = frozenset({"stub"})
 
+# How much of an error message `results_row` keeps. The full text stays on the state for whoever is
+# debugging the run; the row is a line in a JSONL someone greps, and a model client's exception
+# repr can carry an entire HTTP response body into it.
+ERROR_MESSAGE_LIMIT = 500
+
 ReviewVerdict = Literal["pending", "pass", "block", "exhausted"]
 
 # Which reviewer system prompt the run used. A run condition for the same reason `naming` is:
@@ -250,6 +255,16 @@ class RunConfig(Contract):
     )
     random_seed: int = 20260822
     dataset_hash: str | None = None
+    commit: str | None = Field(
+        default=None,
+        description="Short git hash of the tree that produced this run, `-dirty` suffixed when the "
+        "working tree was not clean. Null when nothing recorded it. On the frozen config for the "
+        "same reason `naming` and `loop_cap` are: which code ran is a run condition no other field "
+        "carries, and every code boundary this project has had to reason about so far -- the "
+        "sticky-drop fix, the naming ablation's schema change, the block-retry -- had to be "
+        "reconstructed from commit messages after the fact. A dirty tree groups as its own cell in "
+        "`eval-diff`, which is correct: a dirty run is not reproducible.",
+    )
 
 
 class TaskSpec(Contract):
@@ -698,6 +713,7 @@ class PipelineState(Contract):
             "dataset_id": self.dataset_id,
             "arm": self.config.arm,
             "reviewer_enabled": self.config.reviewer_enabled,
+            "default_model": self.config.default_model,
             "reviewer_model": self.config.reviewer_model,
             "reviewer_prompt": self.config.reviewer_prompt,
             "reviewer_sees_code": self.config.reviewer_sees_code,
@@ -707,6 +723,7 @@ class PipelineState(Contract):
             "objection_closure": self.config.objection_closure,
             "forced_drop_release": self.config.forced_drop_release,
             "random_seed": self.config.random_seed,
+            "commit": self.config.commit,
             # scores. `claimed` is what the agent said; `verified` is what we measured.
             "claimed_holdout_score": claimed,
             "verified_holdout_score": self.verified_holdout_score,
@@ -772,6 +789,20 @@ class PipelineState(Contract):
             "wall_seconds": self.wall_seconds,
             "cost_usd": self.total_cost_usd,
             "errored": bool(self.errors),
+            # What went wrong, not just that something did. `errored` is one bit for every failure
+            # mode a run has, which is why the zero-objection `block` bug was invisible in the
+            # committed results files and had to be counted by hand off `route_sequence`. Always a
+            # list: zero errors is a real 0, and `None` would be indistinguishable from a row
+            # written before this column existed. Truncated here and not in the state, because the
+            # row is a line someone greps and a client's exception repr can carry an HTTP body.
+            "errors": [
+                {
+                    "node": e.node,
+                    "message": e.message[:ERROR_MESSAGE_LIMIT],
+                    "recoverable": e.recoverable,
+                }
+                for e in self.errors
+            ],
         }
 
     def effective_target(self, objection: Objection) -> RoutableNode:

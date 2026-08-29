@@ -15,6 +15,7 @@ import json
 import sys
 import tempfile
 from pathlib import Path
+from typing import Any
 
 from dotenv import load_dotenv
 
@@ -22,6 +23,7 @@ from ds_agents.fixtures import Fixture, available, load_fixture
 from ds_agents.graph import run_pipeline
 from ds_agents.naming import NAMINGS, Naming, materialize, rename_map
 from ds_agents.naming import apply as apply_rename
+from ds_agents.provenance import git_commit
 from ds_agents.state import (
     FORCED_DROP_RELEASES,
     OBJECTION_CLOSURES,
@@ -54,6 +56,7 @@ def _fixture_state(
     objection_routing: ObjectionRouting = "as_addressed",
     objection_closure: ObjectionClosure = "off",
     forced_drop_release: ForcedDropRelease = "withdrawn_only",
+    commit: str | None = None,
 ) -> PipelineState:
     """The starting state for one run of `fixture` under one naming condition.
 
@@ -110,6 +113,10 @@ def _fixture_state(
             # come back into the matrix, so their remediation rates are not comparable and
             # averaging them would report a capability the control arm does not have.
             forced_drop_release=forced_drop_release,
+            # Which tree ran. Not a condition anyone sets, but the only field that can tell two
+            # rows apart when the difference between them is a bug fix rather than a flag -- which
+            # is every unconditional change this project has made, the block-retry included.
+            commit=commit,
         ),
         dataset_id=fixture.dataset_id,
         # No `spec`: naming the target is intake's job, and pre-filling it here would skip the
@@ -244,7 +251,21 @@ def cmd_run(args: argparse.Namespace) -> int:
         run_root = root if args.repeat == 1 else root / f"run-{index:0{width}d}"
         if args.repeat > 1:
             print(f"\n=== run {index + 1} of {args.repeat} ===", file=sys.stderr)
-        state = _run_once(args, fixture, run_root, dataset_path)
+        state = _run_once(
+            fixture,
+            root=run_root,
+            dataset_path=dataset_path,
+            transport=args.tools,
+            no_live=args.no_live,
+            model_name=args.model,
+            reviewer_model_name=args.reviewer_model,
+            naming=args.naming,
+            reviewer_prompt=args.reviewer_prompt,
+            loop_cap=args.loop_cap,
+            objection_routing=args.objection_routing,
+            objection_closure=args.objection_closure,
+            forced_drop_release=args.forced_drop_release,
+        )
 
         if args.repeat == 1:
             print(state.model_dump_json(indent=2, exclude_none=True))
@@ -258,29 +279,27 @@ def cmd_run(args: argparse.Namespace) -> int:
 
 
 def _run_once(
-    args: argparse.Namespace,
     fixture: Fixture,
+    *,
     root: Path,
     dataset_path: Path,
+    transport: str = "mcp",
+    no_live: bool = False,
+    **conditions: Any,
 ) -> PipelineState:
     """One pipeline run, start to finish. Extracted so `--repeat` is a loop and not a second path.
 
     `dataset_path` rather than `fixture.csv_path`: under `--naming opaque` the agents see a
     materialised copy with a rewritten header. Nothing below this line knows that -- the rename is
     entirely above the tools boundary, which is why no node, tool or MCP change was needed for it.
+
+    Takes keywords rather than the `argparse.Namespace` it used to, so the harness can call it
+    without inventing a fake namespace. `conditions` is forwarded straight to `_fixture_state`,
+    whose parameters are keyword-only -- the transposition guard that star exists for survives the
+    hop, and the two callers cannot drift into two different ideas of what a run condition is.
     """
-    tools = _select_tools(args.tools, root, dataset_path, fixture.dataset_id)
-    state = _fixture_state(
-        fixture,
-        model_name=args.model,
-        reviewer_model_name=args.reviewer_model,
-        naming=args.naming,
-        reviewer_prompt=args.reviewer_prompt,
-        loop_cap=args.loop_cap,
-        objection_routing=args.objection_routing,
-        objection_closure=args.objection_closure,
-        forced_drop_release=args.forced_drop_release,
-    )
+    tools = _select_tools(transport, root, dataset_path, fixture.dataset_id)
+    state = _fixture_state(fixture, commit=git_commit(), **conditions)
     # Said out loud for the same reason the StubModel warning is: this arm reproduces a known
     # defect, and a run that produced numbers under it without anyone noticing would be worse than
     # no run. A stderr line reads nothing any node reads, so the condition still has exactly one
@@ -293,8 +312,8 @@ def _run_once(
             f"sticky-drop cell. Do not use it as a baseline for anything else.",
             file=sys.stderr,
         )
-    model = _select_model(state.config, no_live=args.no_live)
-    reviewer_model = _select_reviewer_model(state.config, model, no_live=args.no_live)
+    model = _select_model(state.config, no_live=no_live)
+    reviewer_model = _select_reviewer_model(state.config, model, no_live=no_live)
     if isinstance(model, StubModel):
         print(
             f"WARNING: running with {model.name!r}, which is a placeholder and not a model. It "
@@ -315,21 +334,30 @@ def _run_once(
         tools.close()
 
 
-def _append_results_row(state: PipelineState, path: Path) -> None:
-    """One JSONL line per run, behind the same gate the Phase 4 harness will apply.
+def _append_results_row(
+    state: PipelineState, path: Path, *, extra: dict[str, Any] | None = None
+) -> bool:
+    """One JSONL line per run, behind the gate the harness and `--results` both apply.
 
     `publishable()` is checked here and not by the caller because this is the only place a number
     leaves a run and lands in a file someone will later average. A stub run refused at this line is
-    the difference between a results file and a file that looks like one.
+    the difference between a results file and a file that looks like one. Returns whether it wrote,
+    so the harness can count refusals -- a refused row changes a cell's denominator.
+
+    `extra` carries the harness's write-time annotations (`cell`, `replicate`, ...), which are facts
+    about the sampling design of an invocation rather than about what the run did. Everything that
+    describes the RUN comes from `results_row()` off the frozen config, where no node could have
+    read it and nothing outside the run can disagree with it.
     """
     publishable, reason = state.publishable()
     if not publishable:
         print(f"  results row  : REFUSED -- {reason}", file=sys.stderr)
-        return
+        return False
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a", encoding="utf-8") as handle:
-        handle.write(json.dumps(state.results_row()) + "\n")
+        handle.write(json.dumps(state.results_row() | (extra or {})) + "\n")
     print(f"  results row  : appended to {path}", file=sys.stderr)
+    return True
 
 
 def _print_summary(state: PipelineState, root: Path) -> None:
