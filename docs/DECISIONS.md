@@ -1129,3 +1129,60 @@ while `cli` imports `harness` inside `cmd_eval`, because `harness` needs `_run_o
 `_append_results_row` while `cli` needs `run_eval`. The clean fix is a `runner.py` holding the
 pieces both need. It is deferred deliberately: taking it now would churn three test modules in a
 session already landing three things, and the deferred import costs nothing at a function call.
+
+## 2026-08-31: the `ci` subset is pre-registered as a baseline rather than a hypothesis, and what a
+## zero-count on the block-retry is allowed to mean is fixed before the run rather than after it.
+
+The `ci` subset has been runnable since 2026-08-29 and has never been run. This entry pre-registers
+the first live invocation, written and committed before the runner is called:
+
+```
+ds-agents eval --subset ci --name ci-baseline --replicates 2 --n 5 --max-cost-usd 1.00
+```
+
+30 runs, three cells (`toy-default`, `claims-opaque-which`, `reissued-opaque-which`), 2 replicates
+of n=5 each, live Haiku over MCP, `random_seed=20260822`, on a clean tree at the commit this entry
+itself creates -- `2b6a22e` plus this pre-registration, which touches `docs/` only, so the rows'
+`commit` field is not `2b6a22e` and the tree that produced them is behaviourally identical to it.
+Estimated $0.65
+against a $1.00 cap; the estimate is three guesses that have never been checked, which is one of the
+things the run is for.
+
+**This is a baseline, not an ablation, and that changes what a pre-registration is for.** There is
+no hypothesis and no contrast: the three cells differ in *fixture*, so any difference between them
+is a fixture difference and is not evidence about anything else. Nothing here may be quoted as an
+arm. What the pre-registration fixes instead is what the run is allowed to claim afterwards, which
+matters more here than usual, because the most interesting endpoint is one where the tempting
+reading of a null is wrong.
+
+**Descriptive endpoints, per cell**, each reported as per-replicate counts beside a pooled Wilson
+interval, never as a pooled count alone: `leakage_remediated`, `leakage_caught`, `reviewer_caught`,
+`errored`, plus mean `cost_usd` and mean `review_loops`.
+
+**The block-retry endpoint, and its null.** The zero-objection `block` retry landed at `1e5f30a` and
+has never been observed firing live. Its base rate was 1-2 runs in 10 on `claims_timing`, so the
+expected count here is roughly 1-3, and only the 10 `claims-opaque-which` runs are on the fixture
+that produced that rate. Fixed in advance: **at least one `block-retry` in the `errors` column is
+the first live evidence the path fires; zero is not evidence the bug is gone.** At a ~15% per-run
+rate over the 10 runs that carry it, seeing nothing has probability around 0.2, which is an ordinary
+outcome and not a result. A zero gets written up as "still unobserved" and the question stays open.
+The two messages -- "retry produced N actionable objection(s)" versus "still produced nothing
+actionable" -- are separate findings and are not to be merged into one count: the first says the
+repair works, the second says the model meant it.
+
+**Stopping rule.** If the cap binds, every cell is reported at its real truncated n and no cell is
+topped up. The Sonnet cells on 2026-08-28 were topped up and that was defensible only because the
+top-up was to a pre-registered n; topping up after seeing the numbers is what turns an n into a
+choice. Three consecutive failures abort the invocation, which is `MAX_CONSECUTIVE_FAILURES` and not
+a decision made here.
+
+**Replicate check.** The replicate exists to test the iid-Bernoulli assumption the Wilson interval
+rests on, not to narrow it. If between-replicate spread on any cell exceeds what binomial noise
+allows, that cell's pooled interval is thrown out rather than reported narrower.
+
+**What the run is expected to buy, stated so a later reader can see whether it did.** The first
+replicate-aware cells in the repo, so that every remaining ablation has something `eval-diff` will
+legally compare against; the first live rows for `reissued_ids`; measured per-run costs to replace
+the three guesses in `SUBSETS`; and the block-retry observation above. It does not buy a CI
+threshold. A threshold also needs a policy for who pays for a gate that spends API money per push,
+and this repo has no `.github/` and no key available to Actions.
