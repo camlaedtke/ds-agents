@@ -256,10 +256,46 @@ LangSmith tracing on by default (env var). Every node appends a `NodeEvent` to `
 token counts and cost so results files do not depend on the tracing backend. All timestamps are
 timezone-aware UTC; naive ones make committed JSONL inconsistent across machines.
 
+## Two dataset registries, and why they are not one
+
+`src/ds_agents/fixtures.py` resolves the synthetic fixtures under `tests/fixtures/`: small, seeded,
+each with a `generate.py` and a `manifest.json` recording exactly what leak was planted.
+`src/ds_agents/benchmark.py` reads `evals/datasets/manifest.yaml`: real datasets from the AutoML
+Benchmark, pinned by OpenML data id and upstream md5, with no answer key at all. They are separate
+types on purpose. `FixtureManifest` requires a `seed` and a non-empty `planted_leakage` — a fixture
+with nothing planted grades nothing — and an external dataset has neither. Making those optional
+would delete four ground-truth guarantees from the three fixtures that depend on them. `Fixture`
+and `DatasetEntry` are also deliberately not duck-substitutable: if they were, `_fixture_state`
+would accept a `DatasetEntry` and silently build a run with `planted_leakage_columns=[]`.
+
+`evals/datasets/manifest.yaml` is **generated, never written**. `.claude/settings.json` denies Edit
+and Write under `evals/datasets/`, so `ds-agents datasets refresh` is the only thing that produces
+it. Every number in it is an API response field or a measurement on the fetched CSV; the prose is
+constants in `benchmark.py`. `ds-agents datasets verify --online` re-fetches and diffs.
+
+Neither registry may be imported from `nodes/` — a node that can read a registry can read the
+answer key — and that rule is now enforced by an AST test rather than by three docstrings.
+
+**A published number is not a baseline.** Each manifest entry carries a `published_reference`: the
+best AUC uploaded to that OpenML task, with its run id. It was produced on OpenML's 10-fold CV by
+another flow, so it is informational and must never reach `baseline_score`, which is measured on
+this repo's own withheld holdout alongside the run it grades. Dividing across the two protocols
+would produce a `score_ratio` that looks reasonable and means nothing. No code path from the
+manifest to `baseline_score` exists, and an AST test keeps it that way.
+
 ## Eval outcomes per dataset
 
 Produced by `PipelineState.results_row()`. If a number in the published tables cannot be traced to
 that method, it is not a real number.
+
+**Nine columns are graded only when there is something to grade against.** `planted_leakage_columns`
+is read as a *complete* enumeration, which it is on a fixture and is not on a benchmark dataset.
+When it is empty, `graded_for_leakage` makes `leakage_caught`, `leakage_precision`, the two
+`false_alarm*` counts, `false_alarm_columns`, and the four `profiler_/reviewer_caught` and
+`*_false_alarm` columns report `None` rather than `False`/`0` — the rule `leakage_remediated` and
+the `*_recall` columns already followed. `evaldiff` excludes `None` metrics from its denominators,
+so an unlabelled dataset drops out of a rate instead of dragging it down. What was flagged and
+nominated is still recorded; not-graded is not not-observed.
 
 Scores: `claimed_holdout_score`, `verified_holdout_score`, `holdout_claim_gap`, `baseline_score`,
 `score_ratio` (direction-aware — a ratio means the opposite thing for RMSE and AUC), `metric`.

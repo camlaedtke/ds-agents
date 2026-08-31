@@ -147,16 +147,24 @@ class TestForcedDropReleaseIsAClosedAxis:
 
 
 class TestTheFullSubsetIsNotYetRunnable:
-    """`full` needs `evals/datasets/manifest.yaml`, which does not exist yet -- PLAN.md Phase 4's
-    first unchecked box, itself blocked on an open question from session 0."""
+    """`full` no longer waits on the manifest -- it waits on the re-scorer.
 
-    def test_full_raises_pointing_at_the_missing_manifest_and_the_open_question(self):
+    The manifest landed 2026-08-31 and the session-0 question behind it is answered, so the old
+    message (which named the missing file and the open OpenML question) is now false on both
+    counts. What blocks `full` is that nothing withholds a holdout or computes
+    `verified_holdout_score` / `baseline_score`, so every row would carry a null `score_ratio`.
+    The assertion below deliberately checks the message names the SCORE fields: if someone wires
+    up `Cell` for manifest datasets without the re-scorer, this is what should still fail.
+    """
+
+    def test_full_raises_pointing_at_the_missing_re_scorer(self):
         with pytest.raises(ValueError) as excinfo:
             run_eval(subset="full", name="probe", dry_run=True)
 
         message = str(excinfo.value)
         assert "manifest.yaml" in message
-        assert "OpenML" in message
+        assert "verified_holdout_score" in message
+        assert "baseline_score" in message
         assert "toy" in message
         assert "ci" in message
 

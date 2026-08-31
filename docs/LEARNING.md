@@ -66,9 +66,14 @@ Priority: **load-bearing** means the thesis breaks if this is wrong and you cann
 ### eval-baselines — why published numbers are the ground truth and get no hand edits
 - Priority: load-bearing
 - Came up: 2026-08-22, CLAUDE.md rules
-- Status: flagged
+- Status: flagged (acted on 2026-08-31 — the rule is now enforced by tooling, not by discipline)
 - Why it matters here: findings are the product. A baseline quietly adjusted to make a run look
   good destroys the only thing this repo is for.
+- Acted on 2026-08-31: `evals/datasets/manifest.yaml` is generated-only, because
+  `.claude/settings.json` denies Edit and Write there. So "no baseline was hand-edited" stopped
+  being a promise and became a property of the tooling. Still `flagged` because the concept has
+  not been sat with — see [[published-vs-computed-baseline]] for the distinction the manifest
+  turns on.
 
 ### measurement-independence — why the thing being tested cannot report its own score
 - Priority: load-bearing
@@ -603,3 +608,42 @@ Priority: **load-bearing** means the thesis breaks if this is wrong and you cann
   recorded is the one thing this project will not do -- the defect is documented in place instead.
   Related: [[measurement-independence]], [[controlled-ablation]], [[eval-baselines]],
   [[caught-vs-remediated]].
+
+### published-vs-computed-baseline — a cited number and a comparand are different objects
+- Priority: load-bearing
+- Came up: 2026-08-31, building evals/datasets/manifest.yaml
+- Status: flagged
+- Why it matters here: `evals/datasets/manifest.yaml` records, per dataset, the best AUC anyone has
+  uploaded to that OpenML task. It is tempting to divide this pipeline's `verified_holdout_score`
+  by it and call the result `score_ratio` — the field already exists and would populate. That would
+  be wrong, and wrong in the worst way: it produces a plausible number rather than an error. The
+  published score came from OpenML's own 10-fold cross-validation run by a third-party flow; ours
+  will come from a single holdout this repo withholds. The ratio would attribute the difference
+  between two *protocols* to the difference between two *systems*, and no amount of replication
+  would reveal it, because the bias is constant. So the manifest carries the published number as
+  `published_reference` (informational, labelled with its protocol on the value itself) and carries
+  the baseline separately as a *definition* with no number in it — AMLB's constant class-prior
+  predictor and tuned RandomForest — which the harness must fit on this repo's own train split and
+  score on the same holdout as the run. A comparand has to be measured alongside the thing it is
+  compared to. The rule is enforced by an AST test rather than a comment, because the failure it
+  prevents is silent. Related: [[eval-baselines]], [[measurement-independence]], [[two-splits]],
+  [[controlled-ablation]].
+
+### complete-list-or-nothing — an empty answer key is not an answer of zero
+- Priority: load-bearing
+- Came up: 2026-08-31, external datasets arriving with no planted leak
+- Status: flagged
+- Why it matters here: `planted_leakage_columns` is read as a *complete* enumeration of a dataset's
+  leaks. On a fixture that is true by construction — the generator writes the manifest as it writes
+  the CSV. On a real dataset nobody has enumerated anything, and the list is empty because it is
+  unknown, not because the answer is none. Left alone, nine results-row columns read that emptiness
+  as fact: `leakage_caught` says the reviewer missed something, and every column the reviewer
+  flagged is counted a false alarm. Both are claims with no evidence, and both pool straight into a
+  published rate. The fix is one named gate (`graded_for_leakage`) returning `None` — not measured
+  — which is what `leakage_remediated` and the `*_recall` columns already did for the same reason.
+  The general shape: whenever a denominator can be empty, decide whether empty means *zero* or
+  *unknown*, and make the type say which. The same question is why `known_leakage` in the manifest
+  is a documented observation and never ground truth — one cited leak in `bank_marketing` does not
+  make the list complete, and pretending it does would turn every other suspicious column into a
+  scored mistake. Related: [[eval-baselines]], [[caught-vs-remediated]], [[fixture-difficulty]],
+  [[measurement-independence]].

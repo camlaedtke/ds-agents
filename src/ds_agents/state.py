@@ -592,6 +592,24 @@ class PipelineState(Contract):
         """
         leak_categories = frozenset({"leakage", "contamination"})
         planted = set(self.planted_leakage_columns)
+        # `planted` is a COMPLETE ground-truth list or it is nothing at all.
+        #
+        # On a fixture it is complete by construction -- `generate.py` writes the manifest at the
+        # moment it writes the CSV. On an external benchmark dataset there is no such list, and
+        # nobody has enumerated the leaks in `adult` or `nomao`; `evals/datasets/manifest.yaml`
+        # says so per entry with `leakage_labelled: false`. Left ungated, an empty `planted` makes
+        # eight columns below assert two things this project has no evidence for at once: that the
+        # dataset contains no leak, and that the reviewer failed to find it. `leakage_caught` would
+        # read False, and every column the reviewer flagged would be counted a false alarm.
+        #
+        # So they report `None` -- not measured -- exactly as `leakage_remediated` and the three
+        # `*_recall` columns already do on the same reasoning. `evaldiff` excludes `None` metrics
+        # from its denominators, so a dataset with no answer key drops out of a rate rather than
+        # dragging it down.
+        #
+        # Deliberately derived rather than stored: a `leakage_ground_truth` field on the state
+        # would be a second source of truth for something `planted` already says.
+        graded_for_leakage = bool(planted)
         flagged = self.objected_columns(leak_categories)
         standing = self.objected_columns(leak_categories, standing_only=True)
         true_positives = planted & flagged
@@ -732,16 +750,26 @@ class PipelineState(Contract):
             "score_ratio": self.score_ratio,
             "metric": self.spec.metric if self.spec else None,
             # leakage, as a set comparison against ground truth
+            #
+            # Stated outright rather than left to be inferred from nine separate `None`s. This is
+            # the same defect docs/NEXT.md already records against `errored`, whose two meanings
+            # can only be separated by string-matching an error prefix -- a column whose absence
+            # of a value carries information needs a companion that says so. A reader pooling
+            # `leakage_caught` across a results file can filter on this instead of guessing why a
+            # null is null.
+            "leakage_graded": graded_for_leakage,
             "leakage_planted": sorted(planted),
             "leakage_flagged": sorted(flagged),
-            "leakage_caught": bool(true_positives),
+            "leakage_caught": bool(true_positives) if graded_for_leakage else None,
             "leakage_remediated": remediated,
             "leakage_recall": len(true_positives) / len(planted) if planted else None,
-            "leakage_precision": len(true_positives) / len(flagged) if flagged else None,
-            "false_alarm_columns": sorted(false_positives),
-            "false_alarm": len(false_positives),
+            "leakage_precision": (
+                len(true_positives) / len(flagged) if graded_for_leakage and flagged else None
+            ),
+            "false_alarm_columns": sorted(false_positives) if graded_for_leakage else None,
+            "false_alarm": len(false_positives) if graded_for_leakage else None,
             "leakage_flagged_standing": sorted(standing),
-            "false_alarm_standing": len(standing - planted),
+            "false_alarm_standing": len(standing - planted) if graded_for_leakage else None,
             # How wide the matrix the run actually shipped is. `leakage_remediated` is None on an
             # EMPTY matrix but True on a one-column one, so without this a run that remediated by
             # force-dropping most of the fixture is indistinguishable from one that dropped only
@@ -754,20 +782,28 @@ class PipelineState(Contract):
             # never ran: a node that crashed nominated nothing in a different sense than a node
             # that looked and declined, and averaging those together would be a lie.
             "profiler_nominated": sorted(nominated) if nominated is not None else None,
-            "profiler_caught": bool(nominated & planted) if nominated is not None else None,
+            "profiler_caught": (
+                bool(nominated & planted) if nominated is not None and graded_for_leakage else None
+            ),
             "profiler_recall": (
                 len(nominated & planted) / len(planted)
                 if nominated is not None and planted
                 else None
             ),
-            "profiler_false_alarm": len(nominated - planted) if nominated is not None else None,
+            "profiler_false_alarm": (
+                len(nominated - planted) if nominated is not None and graded_for_leakage else None
+            ),
             # the same comparison at the reviewer, all column-scoped categories
             "reviewer_nominated": sorted(objected) if objected is not None else None,
-            "reviewer_caught": bool(objected & planted) if objected is not None else None,
+            "reviewer_caught": (
+                bool(objected & planted) if objected is not None and graded_for_leakage else None
+            ),
             "reviewer_recall": (
                 len(objected & planted) / len(planted) if objected is not None and planted else None
             ),
-            "reviewer_false_alarm": len(objected - planted) if objected is not None else None,
+            "reviewer_false_alarm": (
+                len(objected - planted) if objected is not None and graded_for_leakage else None
+            ),
             # the loop
             "review_verdict": self.review_verdict,
             "review_loops": self.review_iterations,

@@ -147,21 +147,25 @@ def _resolve_subset(subset: str) -> tuple[Cell, ...]:
     """`SUBSETS[subset]`, or a `ValueError` that says why the name did not resolve.
 
     `full` gets its own message because it is not a typo -- it is real Phase 4 scope that has not
-    started. `evals/datasets/manifest.yaml` does not exist yet (PLAN.md Phase 4's first unchecked
-    box), and that manifest is itself blocked on an open question carried since session 0: which
-    OpenML suite has citable published baselines. Any other unknown name is more likely a typo, so
-    it gets the shorter message -- but both list what IS runnable, because that is what the caller
-    needs next either way.
+    finished. The blocker has MOVED: `evals/datasets/manifest.yaml` now exists, and the session-0
+    question it waited on (which OpenML suite has citable published baselines) is answered -- AMLB,
+    OpenML suite 271. What is missing is the run path. Nothing withholds a holdout, nothing
+    computes `verified_holdout_score` or `baseline_score`, and no `Cell` can name a manifest
+    dataset. Running `full` today would emit a row per dataset whose headline column is null.
+
+    Any other unknown name is more likely a typo, so it gets the shorter message -- but both list
+    what IS runnable, because that is what the caller needs next either way.
     """
     if subset in SUBSETS:
         return SUBSETS[subset]
     available = ", ".join(sorted(SUBSETS))
     if subset == "full":
         raise ValueError(
-            "subset 'full' is not runnable yet: it needs evals/datasets/manifest.yaml, which does "
-            "not exist (docs/PLAN.md Phase 4's first unchecked box). That manifest is itself "
-            "blocked on an open question from session 0 -- which OpenML suite has citable "
-            "published baselines -- see docs/NEXT.md. "
+            "subset 'full' is not runnable yet. evals/datasets/manifest.yaml now EXISTS (see "
+            "`ds-agents datasets list`) -- what is missing is the run path for its datasets: "
+            "nothing withholds a holdout, nothing computes verified_holdout_score or "
+            "baseline_score, and no Cell can name a manifest dataset, so every row would carry a "
+            "null score_ratio. See docs/PLAN.md Phase 4 and docs/NEXT.md. "
             f"Available subsets: {available}."
         )
     raise ValueError(f"unknown eval subset {subset!r}. Available subsets: {available}.")

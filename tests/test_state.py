@@ -2,6 +2,7 @@
 
 import json
 from datetime import UTC, datetime
+from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
@@ -935,10 +936,25 @@ class TestProfilerColumnsOnTheRow:
         assert row["profiler_recall"] is None
         assert row["profiler_false_alarm"] is None
 
-    def test_no_planted_columns_means_no_recall(self):
+    def test_no_planted_columns_means_nothing_is_graded_not_that_everything_is_wrong(self):
+        """Changed 2026-08-31, when external benchmark datasets arrived.
+
+        This used to assert `profiler_false_alarm == 1`: with no planted list, every nominated
+        column scored a mistake. That was defensible while every dataset was a fixture with a
+        complete answer key, and it is wrong for `evals/datasets/manifest.yaml`, whose entries all
+        carry `leakage_labelled: false` because nobody has enumerated the leaks in `adult`. An
+        empty planted list now means NOT MEASURED, matching what `profiler_recall` already did.
+
+        No committed row moves: all 145 rows in `evals/results/*.jsonl` carry a non-empty
+        `leakage_planted`, checked by
+        `TestTheLeakageGate::test_no_committed_results_row_has_an_empty_planted_list`.
+        """
         row = self._state(["a"], []).results_row()
         assert row["profiler_recall"] is None
-        assert row["profiler_false_alarm"] == 1
+        assert row["profiler_false_alarm"] is None
+        assert row["profiler_caught"] is None
+        # Still recorded: what it nominated is an observation, not a grade.
+        assert row["profiler_nominated"] == ["a"]
 
 
 class TestReviewerColumnsOnTheRow:
@@ -1402,3 +1418,105 @@ class TestTheRowCarriesItsProvenance:
 
         assert row["default_model"] == "sonnet"
         assert row["reviewer_model"] == "haiku"
+
+
+class TestTheLeakageGate:
+    """`planted` is a complete ground-truth list or it is nothing. Added 2026-08-31.
+
+    External benchmark datasets (`evals/datasets/manifest.yaml`) carry no answer key and say so
+    with `leakage_labelled: false`. Before this gate, running one would have produced a row
+    asserting both that the dataset contains no leak and that the reviewer failed to find it --
+    two claims with no evidence behind either, in columns that pool straight into a published
+    rate.
+    """
+
+    GATED = (
+        "leakage_caught",
+        "leakage_precision",
+        "false_alarm",
+        "false_alarm_columns",
+        "false_alarm_standing",
+        "profiler_caught",
+        "profiler_false_alarm",
+        "reviewer_caught",
+        "reviewer_false_alarm",
+    )
+
+    def test_no_committed_results_row_has_an_empty_planted_list(self):
+        """The precondition for the gate, proved rather than assumed.
+
+        If this ever fails, the gate silently changed a published number and the change should be
+        reverted rather than the test relaxed.
+        """
+        results = Path(__file__).resolve().parents[1] / "evals" / "results"
+        rows = 0
+        for path in sorted(results.glob("*.jsonl")):
+            for line in path.read_text().splitlines():
+                if not line.strip():
+                    continue
+                row = json.loads(line)
+                rows += 1
+                assert row["leakage_planted"], f"{path.name}: a row has no planted columns"
+        assert rows > 100, "expected the committed corpus, did it move?"
+
+    def _reviewed(self, planted: list[str]) -> PipelineState:
+        """A state where the profiler AND the reviewer both ran and both named column `a`.
+
+        Both must have run, or the gated columns would come back `None` for the unrelated
+        pre-existing reason that a node never happened -- and the test would pass without the gate
+        existing at all.
+        """
+        state = PipelineState(
+            dataset_id="d",
+            task_description="x",
+            planted_leakage_columns=planted,
+            profile=ProfileReport(
+                n_rows=10,
+                n_columns=2,
+                leakage_candidates=[
+                    LeakageCandidate(
+                        column="a", reason="looks post hoc", evidence="nmi 0.4", suspicion="high"
+                    )
+                ],
+            ),
+        )
+        objection = leak_objection(columns=["a"])
+        state.objections = [objection]
+        state.review_passes = [
+            ReviewPass(iteration=1, claim="block", routed_to="feature_eng", dispositions={})
+        ]
+        state.final_features = ["b"]
+        return state
+
+    def test_every_gated_column_is_none_when_nothing_was_planted(self):
+        row = self._reviewed([]).results_row()
+        for column in self.GATED:
+            assert row[column] is None, column
+
+    def test_every_gated_column_still_reports_when_something_was_planted(self):
+        """The no-regression half. The gate must not quietly null a fixture's numbers."""
+        row = self._reviewed(["a"]).results_row()
+        for column in self.GATED:
+            assert row[column] is not None, column
+        assert row["leakage_caught"] is True
+        assert row["profiler_caught"] is True
+        assert row["reviewer_caught"] is True
+
+    def test_the_row_says_outright_whether_it_was_graded(self):
+        """One column, rather than nine nulls a reader has to interpret.
+
+        `evaldiff` excludes `None` metrics from denominators, so an ungraded row drops out of a
+        rate on its own -- but anything reading the JSONL directly needs to be able to tell "not
+        measured" from "measured as zero" without knowing this gate exists.
+        """
+        assert self._reviewed([]).results_row()["leakage_graded"] is False
+        assert self._reviewed(["a"]).results_row()["leakage_graded"] is True
+
+    def test_observations_are_still_recorded_when_nothing_was_planted(self):
+        """Not-graded is not not-recorded. What was flagged is still on the row, so a human can
+        read a benchmark run even though no rate can be computed from it."""
+        row = self._reviewed([]).results_row()
+        assert row["leakage_flagged"] == ["a"]
+        assert row["profiler_nominated"] == ["a"]
+        assert row["reviewer_nominated"] == ["a"]
+        assert row["leakage_planted"] == []

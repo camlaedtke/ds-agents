@@ -13,6 +13,7 @@ dependencies = [
     "anthropic>=1.0.0",
     "python-dotenv>=1.2.3",
     "mcp>=1.2",
+    "pyyaml>=6.0",
 ]
 
 [project.scripts]
@@ -43,5 +44,6 @@ select = ["E", "F", "I", "UP", "B", "SIM"]
 testpaths = ["tests"]
 markers = [
     "fast: unit tests on fixed fixtures, no model calls, no container. Runs on every edit.",
+    "network: hits openml.org and raw.githubusercontent.com. Opt in with DS_AGENTS_NETWORK_TESTS=1.",
 ]
 addopts = "--strict-markers"

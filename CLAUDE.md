@@ -36,7 +36,10 @@ docs/             # ARCHITECTURE.md, PLAN.md, DECISIONS.md, NEXT.md, LEARNING.md
 - All node I/O goes through `PipelineState`. No node reads files or env directly; it calls a tool.
 - Agents execute code only through the `run_python` MCP tool. Never `exec` in-process.
 - The toy pipeline must pass at the end of every session. If it is broken, fixing it is the next task.
-- Do not touch `evals/datasets/` or published baseline numbers. They are the ground truth.
+- Do not **hand-edit** `evals/datasets/` or published baseline numbers. They are the ground
+  truth, and `.claude/settings.json` denies Edit and Write there, which is what makes
+  "nothing in the manifest was typed by a person" a property rather than a promise. Change
+  it only by running `ds-agents datasets refresh`, then `ds-agents datasets verify --online`.
 - New nodes follow /add-node. Benchmark runs follow /run-eval. End every session with /session-wrap.
 - Log architecture choices in `docs/DECISIONS.md`, one paragraph each, when they are made.
 - Cost discipline: default agent model is Haiku. Sonnet only for the reviewer, and only when testing that ablation.

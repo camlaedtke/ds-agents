@@ -11,6 +11,7 @@ run, because a results row built from a stub would look like a system that never
 """
 
 import argparse
+import difflib
 import json
 import sys
 import tempfile
@@ -465,6 +466,72 @@ def cmd_eval_diff(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_datasets(args: argparse.Namespace) -> int:
+    """The benchmark registry's three verbs.
+
+    `refresh` is the only write to `evals/datasets/` in the repo -- the manifest is a generated
+    artifact and Edit/Write are denied there, which is what makes "no number in it was typed"
+    a property of the tooling rather than a promise. `verify --online` is the counterpart: it
+    re-fetches and diffs, so the file can be checked rather than trusted.
+    """
+    from ds_agents import benchmark
+
+    if args.datasets_command == "list":
+        names = benchmark.available()
+        if not names:
+            print("no manifest yet -- run `ds-agents datasets refresh`", file=sys.stderr)
+            return 1
+        manifest = benchmark.load_manifest()
+        print(f"{len(manifest.datasets)} datasets, {len(manifest.excluded)} excluded")
+        for entry in manifest.datasets:
+            reference = (
+                f"{entry.published_reference.value:.3f}" if entry.published_reference else "--"
+            )
+            print(
+                f"  {entry.dataset_id:<28} data={entry.openml_data_id:<6} "
+                f"task={entry.openml_task_id:<7} {entry.n_rows:>7} x {entry.n_features:<4} "
+                f"usable={entry.n_usable_features:<4} pos={entry.positive_rate:.3f} "
+                f"published_auc={reference}"
+            )
+        return 0
+
+    from ds_agents import benchmark_build
+
+    if args.datasets_command == "refresh":
+        manifest = benchmark_build.refresh()
+        print(
+            f"wrote {benchmark.MANIFEST_PATH} -- {len(manifest.datasets)} datasets, "
+            f"{len(manifest.excluded)} excluded"
+        )
+        low, high = manifest.selection.target_count
+        if not low <= len(manifest.datasets) <= high:
+            print(
+                f"WARNING: {len(manifest.datasets)} datasets is outside the target range "
+                f"{low}-{high}. The rule decided this; do not hand-pick to close the gap.",
+                file=sys.stderr,
+            )
+        return 0
+
+    if args.datasets_command == "verify":
+        on_disk = benchmark.MANIFEST_PATH.read_text()
+        if not args.online:
+            benchmark.load_manifest()
+            print("manifest parses and matches the schema (offline check only)")
+            return 0
+        rebuilt = benchmark_build.render(benchmark_build.build())
+        if rebuilt == on_disk:
+            print("manifest matches a fresh rebuild")
+            return 0
+        print("manifest DIFFERS from a fresh rebuild:", file=sys.stderr)
+        for line in difflib.unified_diff(
+            on_disk.splitlines(), rebuilt.splitlines(), "on-disk", "rebuilt", lineterm="", n=1
+        ):
+            print(line, file=sys.stderr)
+        return 1
+
+    raise AssertionError(f"unreachable datasets command {args.datasets_command!r}")
+
+
 def _build_parser() -> argparse.ArgumentParser:
     """Built here rather than inline in `main` so the flags can be tested without running a
     pipeline. `--naming`, `--repeat` and `--results` between them decide what a benchmark row
@@ -610,6 +677,19 @@ def _build_parser() -> argparse.ArgumentParser:
     diff.add_argument("before", help="the earlier results JSONL")
     diff.add_argument("after", help="the later results JSONL")
     diff.set_defaults(func=cmd_eval_diff)
+
+    ds = sub.add_parser("datasets", help="the external benchmark dataset registry")
+    ds_sub = ds.add_subparsers(dest="datasets_command", required=True)
+    ds_sub.add_parser("list", help="what is in evals/datasets/manifest.yaml")
+    ds_sub.add_parser("refresh", help="re-fetch and rewrite the manifest (the only writer)")
+    ds_verify = ds_sub.add_parser("verify", help="check the manifest against its sources")
+    ds_verify.add_argument(
+        "--online",
+        action="store_true",
+        help="re-fetch everything and diff; without it only the schema is checked",
+    )
+    ds.set_defaults(func=cmd_datasets)
+
     return parser
 
 

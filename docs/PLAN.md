@@ -227,8 +227,27 @@ constraint rather than a feature: a single 10-run cell cannot resolve a 4/10 dif
 retrofitting that onto a harness built without it would have meant rewriting it. Also folded in:
 the zero-objection `block` fix NEXT.md named as the first code change, and three new results-row
 columns (`errors`, `commit`, `default_model`) the harness needed in order to be worth running.
-- [ ] evals/datasets/manifest.yaml with 10 to 15 OpenML / Kaggle playground datasets and
-      published baselines, sources cited
+
+Scope note (2026-08-31): the manifest landed and that session-0 question is answered -- AMLB,
+OpenML suite 271. The phase does NOT close with it, because building the manifest revealed that
+the box was two boxes: a registry of datasets, and a path by which a dataset without a planted
+answer key can be run and scored at all. The first is done. The second is listed below as its own
+box, and it is what `--subset full` now waits on.
+- [~] evals/datasets/manifest.yaml with 10 to 15 OpenML / Kaggle playground datasets and
+      published baselines, sources cited. **The file exists and the session-0 blocker is closed.**
+      13 binary datasets from the AutoML Benchmark (Gijsbers et al., JMLR 25(101) 2024; OpenML
+      suite 271), chosen by a recorded rule applied to measurements rather than by hand, each
+      pinned by OpenML data id + task id + upstream md5 and each carrying a `published_reference`
+      citable to a stable OpenML run id. The manifest is GENERATED -- `.claude/settings.json`
+      denies Edit/Write under `evals/datasets/`, so `ds-agents datasets refresh` is the only
+      writer, which is what makes "no number in it was typed" a property rather than a promise.
+      Verified against the live APIs by 25 opt-in `network` tests and by `datasets verify
+      --online`, which re-fetches and diffs clean. `[~]` and not `[x]` for one honest reason:
+      AMLB's OWN per-dataset numbers are not vendored, because its raw-results store presents a
+      self-signed certificate and a number this repo cannot re-fetch is one it will not publish --
+      what is cited instead is OpenML's evaluation API. Kaggle is declined, not deferred: no
+      reproducible published protocol. **No dataset here can be run yet** -- see the box below.
+      See DECISIONS.md 2026-08-31 (second entry).
 - [x] harness.py, results JSONL, eval-diff command. `src/ds_agents/harness.py` (not `evals/`, which
       is not a package -- see DECISIONS.md 2026-08-29 third entry) and `src/ds_agents/evaldiff.py`,
       behind `ds-agents eval` and `ds-agents eval-diff`. Replicate-major planning, an
@@ -251,6 +270,15 @@ columns (`errors`, `commit`, `default_model`) the harness needed in order to be 
       an `eval-diff` condition field and a new arm is a new commit, so both arms of a comparison
       have to run in one invocation -- see DECISIONS.md 2026-08-31.
 - [x] LOG.md running. Seven entries; the newest is the harness smoke, labelled as not-a-cell.
+- [ ] **The re-scorer, which is what `--subset full` now waits on.** Nothing withholds a holdout and
+      nothing computes `verified_holdout_score` or `baseline_score`, so running the manifest today
+      would emit 13 rows whose headline column is null. Needs, in order: a `Runnable` protocol over
+      `Fixture | DatasetEntry`; `_dataset_state` beside `_fixture_state`; the holdout split before
+      the graph starts; `verified_holdout_score` by re-applying `feature_code_artifact` to the
+      withheld rows (the reason Phase 1 made the feature artifact *code*); and `baseline_score`
+      from the two AMLB-defined baseline points on that same holdout. Wire ONE dataset first
+      (`credit_g`, 1000 rows) rather than thirteen. Budget note: `dataset_id` is an `eval-diff`
+      condition field, so 13 datasets is 13 cells.
 
 ## Phase 5: Ablations and writeup (3 to 4 sessions)
 - [~] reviewer on/off, Haiku/Sonnet reviewer, single agent vs team, loop cap 1/3. Two of these ran

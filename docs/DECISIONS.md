@@ -1228,3 +1228,97 @@ fit any candidate, and ended `review_verdict: "pass"` with `n_final_features: 0`
 verdict derivation is what needs to say so -- it is left open rather than patched here, because
 changing verdict derivation changes a column every committed row carries and that is its own cell,
 not a footnote to this one.
+
+## 2026-08-31: the benchmark manifest is generated, and a published number is not a baseline
+
+`evals/datasets/manifest.yaml` exists. It carries 13 external binary-classification datasets from
+the AutoML Benchmark -- Gijsbers et al., JMLR 25(101), 2024, whose classification tasks are OpenML
+suite 271 -- and it closes the question carried open since session 0. AMLB was chosen over
+OpenML-CC18 and Grinsztajn45 for one reason: it is the only one of the three that publishes
+*baseline framework definitions* (a constant class-prior predictor at 0, a tuned RandomForest at 1)
+rather than only a curated list of datasets. CC18 has no per-dataset baseline table; Grinsztajn45
+rebalances classes and drops rows with missing values, so its CSVs are not the canonical ones and a
+number computed on them is not comparable to anything published elsewhere.
+
+**The manifest is generated, and that is enforced rather than promised.** `.claude/settings.json`
+denies `Edit` and `Write` under `evals/datasets/`, so the file cannot be typed into -- it can only
+be produced by `uv run ds-agents datasets refresh`, which runs as a program. That constraint was
+discovered while planning and it turned out to be the right architecture rather than an obstacle to
+route around. A manifest is exactly the shape of file an agent will happily fill with
+plausible-looking baseline numbers; it is ground truth, so a wrong number in it is unfalsifiable
+and would silently poison every table in the Phase 5 writeup. Under the generated-only rule, every
+number in the file is either a field of an API response or a measurement taken on the fetched
+frame, and every sentence a person chose lives in `src/ds_agents/benchmark.py` where review and the
+fast-test hook can see it. Acquisition needed no new dependency: `sklearn.datasets.fetch_openml`
+plus stdlib `urllib`. Only `pyyaml` was promoted from transitive to direct.
+
+**A published score is recorded, and it is deliberately not `baseline_score`.** Each entry carries
+a `published_reference`: the best AUC uploaded to that OpenML task, with the run id that produced
+it, fetched from OpenML's evaluation API. That API is clean HTTPS and re-checkable, which AMLB's
+own raw-results store is not -- `openml1.win.tue.nl` presents a self-signed certificate, and a
+number this repo cannot re-fetch and re-verify is a number it will not publish. But a
+`published_reference` was produced on OpenML's 10-fold cross-validation by a third-party flow,
+while `verified_holdout_score` will be produced by this pipeline on a holdout this repo withholds.
+Dividing one by the other and calling it `score_ratio` would attribute the difference between two
+*protocols* to the difference between two *systems*. So the manifest carries two separate things
+under two separate names: a `published_reference` that is informational and labelled with its
+protocol on the value itself, and a `baselines` block that is a *definition* with no number in it,
+naming what `baseline_score` must be computed from -- both AMLB points, fit on this repo's train
+split and scored on the same withheld holdout as the run they are compared against. The separation
+is pinned by an AST test asserting no code path in either module reads or writes `baseline_score`.
+
+**The selection rule is data, and it was applied to measurements rather than to expectations.**
+`SELECTION_RULE` is a typed constant written into the manifest and checked against it: binary
+only, <=100k rows, <=200 features, <=5M cells, and >=5 features surviving `feature_eng`'s
+mechanical filters. That last criterion is the one with teeth and it earned its place immediately.
+The session's planning notes predicted a specific 12 datasets from recalled and API-read shapes;
+the rule, run against what was actually fetched, returned 13 and disagreed about membership. Two
+disagreements are worth recording. `blood-transfusion` has only 4 usable features and is out.
+`amazon_employee_access` was excluded on the first build with **zero** usable features and admitted
+on the second with nine -- because the first build measured the frame `fetch_openml` returns, where
+its nine ID columns are high-cardinality `category`, and the second measured the CSV as re-read,
+where they are `int64`. The CSV is what gets mounted at `$DS_DATASET`, so the second measurement is
+the correct one and all measured fields now come from the re-read file. The same round trip moved
+`kc1`'s `positive_class` from `'true'` to `'True'`; a manifest recording the former would have
+named a positive class no run could ever match. Its nine integer-encoded ID columns still make
+`amazon_employee_access` a plausible candidate for a degenerate run, which is an open question
+rather than a reason to hand-adjust the rule.
+
+**One documented leak landed, and the check that validates it caught a real error.**
+`bank_marketing` carries `V12` under `known_leakage`, sourced to UCI's own statement that call
+duration must be discarded for a realistic model. It is the project's first non-synthetic,
+independently documented leak, against the standing weakness that every leakage finding so far is
+on a fixture this repo wrote itself -- a reviewer that catches our traps may only be catching our
+habits. It was first recorded as `duration`, the name UCI uses; OpenML data 1461 ships anonymised
+headers and has no such column, so the entry named a phantom and could never have fired. The
+identification of `V12` is measured, not recalled: it is the twelfth feature, matching UCI's
+documented column order, its observed range is 0 to 4918 against UCI's documented duration maximum
+of 4918, and the neighbours corroborate the offset (V6 goes negative as `balance`, V14 bottoms out
+at the `-1` sentinel as `pdays`). The build now fails loudly when a `known_leakage` column is
+absent from the frame. `known_leakage` is emphatically **not** promoted into
+`planted_leakage_columns`, and `in_planted_leakage_columns` is a `Literal[False]` so it cannot be
+without a schema change: that field is read as a *complete* list, and claiming completeness for a
+real dataset would score every other genuinely-suspicious column the reviewer names as a false
+alarm.
+
+**`planted_leakage_columns` is now a complete list or nothing, and nine columns respect that.**
+Before this session, an empty planted list made `leakage_caught` read `False`, `leakage_precision`
+read `0.0`, and the four `*_false_alarm` columns count every flagged column as a mistake -- which
+on an unlabelled benchmark dataset asserts both that the dataset contains no leak and that the
+reviewer failed to find it, with no evidence for either. A single named gate,
+`graded_for_leakage = bool(planted)`, returns `None` from all nine, generalising the rule
+`leakage_remediated` and the three `*_recall` columns already followed. Observations are still
+recorded: what was flagged and nominated stays on the row, so a benchmark run is readable by a
+human even though no rate can be computed from it. This was safe to do now rather than later
+because the precondition was proved rather than assumed -- all 145 committed rows in
+`evals/results/*.jsonl` carry a non-empty `leakage_planted`, checked by a test that will fail if
+that ever stops being true. No published number moves.
+
+**What is deliberately not here.** No dataset in this manifest can be run. There is no `Runnable`
+protocol over `Fixture | DatasetEntry`, no withheld holdout, and nothing computes
+`verified_holdout_score` or `baseline_score` -- so `--subset full` still refuses, and its error
+message was rewritten because the old one was wrong on both counts it named. Running the set today
+would emit 13 rows whose headline column is null, which is money spent for no finding. Kaggle was
+declined rather than deferred: it needs credentials and per-competition licence acceptance, and a
+leaderboard score has no reproducible published protocol, which is the exact property AMLB was
+chosen for.

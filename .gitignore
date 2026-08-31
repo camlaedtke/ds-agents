@@ -6,3 +6,7 @@ __pycache__/
 .env
 artifacts/
 .DS_Store
+# Fetched benchmark datasets. Deliberately not committed: evals/datasets/manifest.yaml pins each
+# one by OpenML data id and md5, so the CSVs are reproducible from the manifest and do not need to
+# live in git. Some of them are tens of thousands of rows.
+.cache/

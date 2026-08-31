@@ -1,141 +1,131 @@
 # Next session
 
 ## Start here
-**The `ci` subset ran live for the first time, and it paid for itself twice over.** 30 rows at
-`evals/results/2026-08-31_ci-baseline.jsonl` -- 3 cells x 2 replicates x n=5, $0.7291 against a
-$1.00 cap, 0 refused, 0 failed, pre-registered in DECISIONS.md before the runner was called. It
-bought the two things it was run for and one it was not.
+**The manifest landed, and the question that blocked it since session 0 is answered.**
+`evals/datasets/manifest.yaml` holds **13 binary-classification datasets** from the AutoML
+Benchmark (Gijsbers et al., JMLR 25(101) 2024; OpenML suite 271), each pinned by OpenML data id +
+task id + upstream md5, each carrying a `published_reference` citable to a stable OpenML run id.
+AMLB was chosen because it is the only candidate that publishes *baseline framework definitions*
+rather than only a dataset list. Cost: $0 in API spend to build it.
 
-**The zero-objection `block` retry fired, and this is its first live evidence.** 7 of 30 runs, and
-**4 of those 7 retries produced an actionable objection; all 4 remediated.** The other 3 produced
-nothing actionable, which is the model saying it meant the block. The pre-registration expected 1-3
-and the count came in high for an instructive reason: 5 of the 7 were on `reissued_ids`, which
-contributed nothing to the 1-2-in-10 base rate the estimate was extrapolated from. Note the
-bookkeeping cost -- every retry appends a `PipelineError`, so a *rescued* run reads `errored: true`,
-and **`errored` on this file is not a reliability rate.**
+**The manifest is generated, and that is enforced rather than promised.** `.claude/settings.json`
+denies Edit and Write under `evals/datasets/`, so `ds-agents datasets refresh` is the only writer.
+Every number in the file is an API response field or a measurement on the fetched CSV; the prose
+lives in `src/ds_agents/benchmark.py`. Verified two ways: 27 opt-in `network` tests against the
+live APIs, and `datasets verify --online`, which re-fetches and diffs clean.
 
-**The run exposed a defect that only a multi-run invocation could show, and it is fixed.**
-`_run_once` read `git_commit()` per run; the results file it writes is untracked; so writing row 0
-dirtied the tree and runs 1-29 recorded `8a629bf-dirty` against run 0's `8a629bf`. `commit` is an
-`eval-diff` condition field, so **`toy-default` fragmented into cells of n=1 and n=9** -- the field
-that guarantees rows came from one tree instead guaranteed they could not be pooled. Provenance is
-now read **once per invocation**, the same rule `_live_run` already applied to `materialize`, and
-`commit` is a required keyword on `_run_once` with no default, because the bug was a default rather
-than a call site. Both callers carry a behavioural regression test. **The committed rows are not
-back-fixed** -- they record what the run recorded.
+**A published number is recorded and is deliberately NOT `baseline_score`.** An OpenML score comes
+from OpenML's 10-fold CV run by a third-party flow; `verified_holdout_score` will come from our own
+withheld holdout. Dividing them would attribute a *protocol* difference to a *system* difference,
+silently. So `published_reference` is informational and labelled with its protocol on the value,
+and `baselines` is a *definition with no number in it* naming what `baseline_score` must be
+computed from. An AST test asserts no code path from either module reaches `baseline_score`.
 
-Also landed: the three `ci` `est_cost_usd` guesses replaced by measured means (0.015 / 0.030 /
-0.029, planning-only, no published number moves), and `commit` + `default_model` added to
-ARCHITECTURE.md's two `RunConfig` field lists, where they had been missing since the session that
-introduced them.
+**The rule chose the datasets, and it disagreed with the plan twice — both times correctly.**
+`SELECTION_RULE` (binary, <=100k rows, <=200 features, <=5M cells, >=5 features surviving
+`feature_eng`'s filters) was applied to measurements, not to expectations. `amazon_employee_access`
+scored 0 usable features on the first build and 9 on the second, because the first measured the
+frame `fetch_openml` returns (ID columns as high-cardinality `category`) and the second measured
+the CSV as re-read (`int64`). **The CSV is what gets mounted at `$DS_DATASET`, so all measured
+fields now come from the re-read file.** The same round trip moved `kc1`'s `positive_class` from
+`'true'` to `'True'` — a manifest recording the former would have named a class no run could match.
 
-The floor: **580 tests pass** (up from 577), ruff clean, `uv run ds-agents run --dataset toy` green
-live at $0.0133. Session spend ~$0.76 all in.
+**Nine results-row columns stopped lying about datasets with no answer key.**
+`graded_for_leakage = bool(planted)` returns `None` from `leakage_caught`, `leakage_precision`, the
+`false_alarm*` columns and the four `profiler_/reviewer_` grades, generalising the rule
+`leakage_remediated` and the `*_recall` columns already followed. A new `leakage_graded` column
+says so outright rather than making a reader infer it from nine nulls. **No published number
+moves** — the precondition was proved, not assumed: all 145 committed rows carry a non-empty
+`leakage_planted`, and a test fails if that stops being true.
+
+The floor: **681 tests pass offline** (up from 580) plus 27 network tests, ruff clean,
+`uv run ds-agents run --dataset toy` green live at $0.0129. Session spend ~$0.07 all in.
 
 ## First prompt
-Read CLAUDE.md, docs/PLAN.md Phase 4, and the "Start here" above. **The highest-value next thing is
-free**: `evals/datasets/manifest.yaml`, PLAN.md Phase 4's last unchecked box, blocked since session
-0 on one researchable question -- which OpenML suite has citable published baselines. Research it
-before spending anything; it is the only Phase 4 item left that does not need a live run, and Phase
-5's writeup needs it.
+Read CLAUDE.md, docs/PLAN.md Phase 4, and the "Start here" above. **The next box is the re-scorer,
+and it is what `--subset full` now waits on**: nothing withholds a holdout and nothing computes
+`verified_holdout_score` or `baseline_score`, so running the 13 datasets today writes 13 rows whose
+headline column is null.
 
-If the user would rather spend money, the two cheap live candidates are:
+**Wire ONE dataset end to end, not thirteen.** `credit_g` (1,000 rows) is the cheapest. In order:
+a `Runnable` protocol over `Fixture | DatasetEntry`; `_dataset_state` beside `_fixture_state`; the
+holdout split *before* the graph starts (never in `split_artifact`); `verified_holdout_score` by
+re-applying `feature_code_artifact` to the withheld rows — which is the whole reason Phase 1 made
+the feature artifact *code*; then `baseline_score` from AMLB's two points (constant class-prior
+predictor, tuned RandomForest) fit on the same train split and scored on the same holdout.
 
-1. **The `pass`-with-no-model defect** (see open questions). ~$0.30 to characterize at n=10 on
-   `claims-opaque-which`, or $0 to fix the verdict derivation and unit-test it -- but a verdict
-   change touches a column every committed row carries, so it is its own cell, not a footnote.
-2. **`loop_cap=4`**, the late-detection re-check carried from Phase 3. ~$0.30, and both arms must
-   run in one invocation (see below).
+Budget warning before anyone types `--subset full`: `dataset_id` is an `eval-diff` condition field,
+so 13 datasets is **13 cells**, and these are real datasets — the measured $0.015-$0.030 and
+21-86s per run on 200-row toys are floors, not estimates.
 
 ## Open questions
 
-- **A run produced no model at all and was recorded `review_verdict: "pass"`.**
-  `claims-opaque-which` rep=1 idx=2: `by_category` dropped every column across two `feature_eng`
-  passes, both candidates failed to fit on an empty matrix, the reviewer had nothing left to object
-  to, blocked, and its retry produced nothing. `n_final_features: 0`, `claimed_holdout_score: null`,
-  verdict `pass`, and **`publishable()` admitted the row.** `leakage_remediated` is correctly `null`
-  and `eval-diff` excluded it, but the verdict is the opposite of what happened. Left open
-  deliberately: fixing verdict derivation changes a column every committed row carries.
-- **The `ci` baseline is NOT a comparand for future ablations, and the last NEXT.md was wrong to say
-  it would be.** `commit` is a condition field and a new arm is usually a new `Literal` on
-  `RunConfig`, hence a new tree, which `eval-diff` refuses to pool. **Both arms of any comparison
-  must run in one invocation at one commit** -- as the forced-drop-release cell already did. This
-  roughly doubles every remaining Phase 5 cost estimate a second time, because each arm now has to
-  fund its own control.
-- **No CI job and no thresholds, and the reason has changed.** A threshold is now affordable to set,
-  but the baseline says an honest one is wide: `leakage_remediated` 8/10 carries [0.490, 0.943], so
-  a gate is roughly "fail under 4/10" and catches only outright breakage. There is no `.github/` in
-  this repo, no key available to Actions, and a gate that spends real API money per push is a policy
-  nobody has written. The cheap deterministic gate (pytest + ruff + toy green) is the better buy.
-- **`errored` needs a companion column, or a caveat everywhere it appears.** The retry made it
-  ambiguous: a rescued run and a broken run both read `true`. Counting `block-retry` by string
-  prefix is the only way to separate them today.
-- **`exhausted` is still uninformative** and now has two reasons to be. Unchanged; still worth
-  saying in the README.
-- **Late detection against the cap is the remaining structural defect.** Unchanged. Worth one cheap
-  re-check at `loop_cap=4`, now with a same-invocation control.
-- **Should `by_category` become the default?** Unchanged, and this run adds a data point against
-  taking it lightly: it is what produced the zero-feature run above.
-- **Does the reviewer ever use `withdrawn` unaided?** Unchanged: roughly 1 run in 4.
-- **`customer_id` as a false positive is measured and it is every run.** Unchanged.
-- **Duplicate-rows-across-split is still unbuilt**, same structural reason.
-- **A refused model call loses its token accounting.** Unchanged.
+- **Is `amazon_employee_access` a real dataset or a degenerate one?** It passes the rule with 9
+  usable features, but all nine are integer-encoded high-cardinality IDs (resource, manager,
+  role_family...). It may still produce the zero-signal run the `min_usable_features` criterion
+  exists to prevent — the criterion measures *survivability*, not *learnability*. Worth one cheap
+  run once the run path exists, before it goes in any table.
+- **Is a partially-labelled dataset gradeable at all?** `bank_marketing` carries one documented
+  leak (`V12`) and `leakage_labelled: false`. It is deliberately NOT in `planted_leakage_columns`,
+  because that field is read as a complete list and claiming completeness would score every other
+  suspicious column a false alarm. So today the one real, externally-documented leak this project
+  has access to is unscored. Some third state between "complete answer key" and "nothing" may be
+  worth inventing — but only with a run to test it against.
+- **`published_reference` picks the max over uploaded runs, which is not a protocol-stable anchor.**
+  `kr_vs_kp` reads 1.000 and `numerai28_6` reads 0.530. Both are real and both are the best anyone
+  uploaded, which mostly measures who uploaded. Fine as a realism sanity check, not as a target.
+- **The AMLB self-signed certificate is the reason PLAN.md's box is `[~]` and not `[x]`.** AMLB's
+  *own* per-dataset numbers are not vendored because `openml1.win.tue.nl` cannot be verified from
+  here. If it ever gets a valid cert, those numbers are worth adding as a second reference.
+- **Two AMLB candidates could not be fetched at all** — `guillermo` and `Robert`, both md5
+  mismatches from OpenML itself. Recorded as `fetch_failed` in `excluded`. Both would have failed
+  `max_features` anyway, so nothing was lost, but a *recurring* upstream md5 mismatch is a finding.
+- **A run produced no model at all and was recorded `review_verdict: "pass"`.** Unchanged from last
+  session; fixing verdict derivation changes a column every committed row carries.
+- **The `ci` baseline is NOT a comparand for future ablations.** Unchanged. Both arms of any
+  comparison must run in one invocation at one commit.
+- **No CI job and no thresholds.** Unchanged; the cheap deterministic gate is the better buy.
+- **`errored` needs a companion column.** Unchanged — and `leakage_graded` is now the worked
+  example of what that fix looks like.
+- **`exhausted` is still uninformative.** Unchanged.
+- **Late detection against the cap** is the remaining structural defect. Unchanged.
+- **Should `by_category` become the default?** Unchanged.
+- **`customer_id` as a false positive is every run.** Unchanged.
+- **Duplicate-rows-across-split is still unbuilt.** Unchanged.
 - **LangSmith is wired but never exercised.** Unverified until a key exists.
-- Which OpenML suite has citable published baselines. Open since session 0; see First prompt.
 - `ModelResult` has no field for the modeler's `rationale` or a per-candidate `fit_error`.
 
 ## Parking lot
 
-- **`reissued_ids` is the slow cell**: mean 86.1s a run against 34.7s for `claims` and 21.0s for
-  `toy`, at comparable dollar cost. Wall time is not on any results row, so nothing gates on it.
-- **The `ci` baseline's `toy-default` row pools two cells that `eval-diff` will not pool** (n=1 at
-  `8a629bf`, n=9 at `8a629bf-dirty`). LOG.md says so; anything reading that file programmatically
-  must group by the full condition key, never by `dataset_id`.
-- **`cli` imports `git_commit` at module scope while `harness` imports it inside `_live_run`** (to
-  break the import cycle), so the two provenance tests must monkeypatch two different names. Both
-  say so in their docstrings.
-- **The n=1 smoke could not have caught the provenance bug**: with one run there is no second read
-  to disagree with the first. Worth remembering the next time a write-path proof feels sufficient.
-- **`harness.py` and `cli.py` still import each other inside functions.** The clean fix is a
-  `runner.py`; deferred again. `_run_once`'s signature grew a parameter this session without pain,
-  so it has not started hurting yet.
-- **A failed run is charged its cell's ESTIMATE, not its real cost.** Reported separately as
-  `charged_estimate_usd`, which was $0.00 for this run -- every dollar measured.
+- **`.mcp.json` still hardcodes the toy dataset on argv.** Now more visibly wrong: there are 13
+  other datasets it cannot see, and Phase 5's generalist arm needs it parameterised.
+- **`benchmark.py` and `benchmark_build.py` are split so reading the manifest never imports
+  sklearn or urllib.** Worth keeping if a third module ever wants the registry.
+- **`csv_sha256` is recorded but deliberately not asserted in the always-on test tier** — it
+  depends on pandas' float formatting, so a version bump would turn it red with nothing wrong.
+- **`network` tests are gated on `DS_AGENTS_NETWORK_TESTS=1`, NOT on `-m "not network"` in
+  addopts.** pytest's `-m` is a single option, so the hook's `pytest -m fast` would *replace* an
+  addopts filter and silently re-enable them.
+- **The `min_usable_features` criterion re-implements `feature_eng`'s filters** using its imported
+  constants, so the two cannot drift. `blood-transfusion` (4 usable) is what it excludes today.
+- **OpenML data ids and task ids are different namespaces and coincide for `credit-g` (31/31).**
+  A test asserts at least one entry where they differ, so the pair stays evidence.
+- **`positive_class` is the minority level, named explicitly**, because "the second one
+  alphabetically" is not a definition anyone can rely on.
+- **13 datasets, 22 excluded, every exclusion recorded with the measurement that caused it** — so
+  "why is `christine` not in here" is answerable from the file rather than a transcript.
+- **The harness's `SUBSETS` still has no `full` entry** and `_resolve_subset`'s message now names
+  the re-scorer rather than the manifest.
+- **A failed run is charged its cell's ESTIMATE, not its real cost.** Unchanged.
 - **The cost cap is invocation-level by choice.** Unchanged.
-- **`ds-agents eval` appends to a same-day, same-name file rather than refusing.** Unchanged, and
-  now slightly more dangerous: a careless re-run would append post-fix rows carrying a different
-  `commit` to this baseline.
-- **`--results` on `ds-agents run` still exists** for one-off cells; its rows carry no `cell` or
-  `replicate`.
+- **`ds-agents eval` appends to a same-day, same-name file rather than refusing.** Unchanged.
 - **`forced_drop_release` is closed to further use.** Unchanged.
-- **The 2026-08-28 sticky fix changed a prompt string as well as a predicate.** Unchanged.
 - **`feature_eng.py`'s comment on the justification string is still wrong** for a future reader.
-- **`binding_objections`' single-caller invariant is enforced by an AST walk**, and
-  `test_run_once_has_no_default_commit_to_fall_back_to` is now a second signature-shaped invariant
-  in the same spirit.
-- **7 of 84 pre-2026-08-31 committed rows are code-boundary-crossed on the sticky-drop fix.**
-- **`errors`, `commit` and `default_model` cannot be back-filled** onto any row before 2026-08-29.
-- **`objection_closure`, `objections_resolved`, `objections_withdrawn` and
-  `objections_falsely_resolved` cannot be back-filled** onto any row before the closure cell.
-- **`CLOSURE_RULE` deliberately omits a bullet** saying `withdrawn` is the only restoring
-  disposition.
-- **`test_no_appended_rule_names_a_fixture_column` is the answer-injection guard** and must not be
-  extended to cover the retry's `known_columns`.
+- **`harness.py` and `cli.py` still import each other inside functions.** Deferred again.
 - **The loop-cap default `3` is written in three places.**
-- **`cmd_run` has no per-run `try/except`**, so an unhandled API error still ends a `--repeat` cell
-  early. The harness fixed this for `eval` only.
-- **The opaque arm's numbering is dense and positional (`var_01..var_NN`).**
-- **A stub named anything but `"stub"` slips past `PLACEHOLDER_MODEL_NAMES`.**
-- **`materialize` does untranslated I/O** to preserve byte identity across platforms.
-- **`load_fixture` raises `SystemExit` and `cmd_run` catches it**; the harness lets it propagate.
-- **The trap fixtures' `mutual_info_with_target` is documentation, not a difficulty dial.**
-- **A per-item rule on a response schema is a whole-response rule.** Still worth checking `intake`
-  and `modeler`'s LLM-facing schemas.
-- **The split manifest is still embedded in snippet text.**
+- **`cmd_run` has no per-run `try/except`.** Unchanged.
 - **Docker is deferred, not rejected, and `SandboxPool` is the seam.**
-- **The reviewer-off arm still runs the reviewer node** as a zero-cost no-op.
-- `permutation_importance` costs `n_source_columns x n_repeats` scoring passes per candidate.
-- `_strip_value` in `state.py` returns on the first `BaseModel` in `get_args`.
-- `ArtifactStore` copies the dataset per run and chmods it 0444.
-- **`.mcp.json` hardcodes the toy dataset on argv.** Still wrong for Phase 5's generalist arm.
+- **`ArtifactStore` copies the dataset per run and chmods it 0444** — at 98k rows (`higgs`) that
+  copy is no longer free, and `register_dataset` also runs `pd.read_csv` + per-column `nunique`
+  **per run**. Worth measuring before the first `full` invocation.
 - ruff formats Python blocks inside `docs/*.md`, so the hook rewrites design docs on every edit.

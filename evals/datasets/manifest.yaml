@@ -1,0 +1,661 @@
+# GENERATED FILE -- do not edit by hand.
+#
+# Written by `uv run ds-agents datasets refresh`; checked by `uv run ds-agents datasets verify
+# --online`, which re-fetches, regenerates, and diffs. .claude/settings.json denies Edit and Write
+# under evals/datasets/, and that deny is what makes the following claim true: every number below
+# is either a field of an API response or a measurement taken on the fetched frame. Nothing here
+# was typed by a person. The prose lives in src/ds_agents/benchmark.py, where it is reviewable.
+#
+# `published_reference` is INFORMATIONAL. It was produced on OpenML's own 10-fold cross-validation
+# by a third-party flow, so it is not comparable to this pipeline's verified_holdout_score and must
+# never be assigned to PipelineState.baseline_score. See `baselines` below for what baseline_score
+# is to be computed from instead.
+
+'schema_version': 1
+'source':
+  'benchmark': 'AutoML Benchmark (AMLB)'
+  'citation': 'Gijsbers, P., Bueno, M. L. P., Coors, S., LeDell, E., Poirier, S., Thomas, J., Bischl,
+    B., & Vanschoren, J. (2024). AMLB: an AutoML Benchmark. Journal of Machine Learning Research, 25(101),
+    1-65.'
+  'paper_url': 'https://jmlr.org/papers/v25/22-0493.html'
+  'openml_suite_id': 271
+  'openml_suite_name': 'AutoML Benchmark All Classification'
+  'amlb_repo': 'https://github.com/openml/automlbenchmark'
+  'amlb_ref': 'dfe8d21871e2dec2b7cab6c9fbfe3575ce4dadc6'
+  'amlb_lists':
+    'small': 'resources/benchmarks/small.yaml'
+    'medium': 'resources/benchmarks/medium.yaml'
+  'openml_data_api': 'https://www.openml.org/api/v1/json/data/{data_id}'
+  'openml_eval_api': 'https://www.openml.org/api/v1/json/evaluation/list/task/{task_id}/function/{function}'
+  'retrieved': '2026-08-31'
+  'generated_with':
+    'python': '3.12'
+    'pandas': '3.0.5'
+    'scikit_learn': '1.9.0'
+'baselines':
+  'definition_source': 'Gijsbers et al. 2024, framework score normalisation'
+  'zero_point': 'constant class-prior predictor'
+  'unit_point': 'tuned RandomForest'
+  'note': 'This is a definition, not a measurement. AMLB''s own per-dataset per-framework scores live
+    in an object store at openml1.win.tue.nl which presents a self-signed TLS certificate, so they cannot
+    be re-fetched or re-verified from this repo and are not quoted here -- a number this repo cannot
+    re-check is a number it will not publish. What IS quoted, per dataset, is `published_reference`:
+    a real score from OpenML''s own evaluation API, citable to a stable run id. That number is informational.
+    It was produced on OpenML''s 10-fold CV by another flow, so dividing this pipeline''s verified_holdout_score
+    by it would compare two protocols rather than two systems. `baseline_score` must instead be computed
+    by fitting the two points above on this repo''s own train split and scoring them on the same withheld
+    holdout as the run.'
+'selection':
+  'rule_version': 1
+  'task_types':
+  - 'binary'
+  'metric': 'roc_auc'
+  'max_rows': 100000
+  'max_features': 200
+  'max_cells': 5000000
+  'min_usable_features': 5
+  'target_count':
+  - 10
+  - 15
+'datasets':
+- 'dataset_id': 'adult'
+  'openml_data_id': 1590
+  'openml_task_id': 7592
+  'openml_name': 'adult'
+  'openml_version': 2
+  'openml_format': 'ARFF'
+  'openml_url': 'https://openml.org/data/v1/download/1595261/adult.arff'
+  'md5_checksum': 'bb6510925e5d4b23d136715febb2cdf5'
+  'amlb_list': 'medium'
+  'target': 'class'
+  'task_type': 'binary'
+  'metric': 'roc_auc'
+  'positive_class': '>50K'
+  'n_rows': 48842
+  'n_features': 14
+  'n_usable_features': 13
+  'positive_rate': 0.239282
+  'csv_sha256': '8f970e20c9991979ec0a9ccb65ce97543d678709a2c6f8ef23f7fb32f40adddc'
+  'leakage_labelled': false
+  'known_leakage': []
+  'published_reference':
+    'source': 'OpenML evaluation API'
+    'openml_run_id': 1664564
+    'openml_run_url': 'https://www.openml.org/r/1664564'
+    'flow_name': 'weka.A2DE(5)'
+    'metric': 'roc_auc'
+    'value': 0.925081
+    'protocol': 'OpenML task estimation procedure (10-fold cross-validation), run by a third-party flow.
+      NOT this repo''s withheld holdout -- informational only, never baseline_score.'
+- 'dataset_id': 'amazon_employee_access'
+  'openml_data_id': 4135
+  'openml_task_id': 34539
+  'openml_name': 'Amazon_employee_access'
+  'openml_version': 1
+  'openml_format': 'ARFF'
+  'openml_url': 'https://openml.org/data/v1/download/1681098/Amazon_employee_access.arff'
+  'md5_checksum': '5502ee73e563ddf5b699ffe0c633905b'
+  'amlb_list': 'medium'
+  'target': 'target'
+  'task_type': 'binary'
+  'metric': 'roc_auc'
+  'positive_class': '0'
+  'n_rows': 32769
+  'n_features': 9
+  'n_usable_features': 9
+  'positive_rate': 0.05789
+  'csv_sha256': '232d703e09642099b914be013d91a5d0e2eb0e1554be8806451625bfb5b4fd6b'
+  'leakage_labelled': false
+  'known_leakage': []
+  'published_reference':
+    'source': 'OpenML evaluation API'
+    'openml_run_id': 1675562
+    'openml_run_url': 'https://www.openml.org/r/1675562'
+    'flow_name': 'weka.Bagging_IBk(3)'
+    'metric': 'roc_auc'
+    'value': 0.853962
+    'protocol': 'OpenML task estimation procedure (10-fold cross-validation), run by a third-party flow.
+      NOT this repo''s withheld holdout -- informational only, never baseline_score.'
+- 'dataset_id': 'australian'
+  'openml_data_id': 40981
+  'openml_task_id': 146818
+  'openml_name': 'Australian'
+  'openml_version': 4
+  'openml_format': 'ARFF'
+  'openml_url': 'https://openml.org/data/v1/download/18151910/Australian.arff'
+  'md5_checksum': '920e2419a28215109651fcc5cbd1662e'
+  'amlb_list': 'small'
+  'target': 'A15'
+  'task_type': 'binary'
+  'metric': 'roc_auc'
+  'positive_class': '1'
+  'n_rows': 690
+  'n_features': 14
+  'n_usable_features': 14
+  'positive_rate': 0.444928
+  'csv_sha256': 'e6bc0c9ec96b0054b570f1fac4bf521584f0cf1c0487805c230ae6ef1572b1fa'
+  'leakage_labelled': false
+  'known_leakage': []
+  'published_reference':
+    'source': 'OpenML evaluation API'
+    'openml_run_id': 8908317
+    'openml_run_url': 'https://www.openml.org/r/8908317'
+    'flow_name': 'sklearn.pipeline.Pipeline(imputation=hyperimp.utils.preprocessing.ConditionalImputer,hotencoding=sklearn.preprocessing.data.OneHotEncoder,variencethreshold=sklearn.feature_selection.variance_threshold.VarianceThreshold,clf=sklearn.ensemble.forest.RandomForestClassifier)(1)'
+    'metric': 'roc_auc'
+    'value': 0.934207
+    'protocol': 'OpenML task estimation procedure (10-fold cross-validation), run by a third-party flow.
+      NOT this repo''s withheld holdout -- informational only, never baseline_score.'
+- 'dataset_id': 'bank_marketing'
+  'openml_data_id': 1461
+  'openml_task_id': 14965
+  'openml_name': 'bank-marketing'
+  'openml_version': 1
+  'openml_format': 'ARFF'
+  'openml_url': 'https://openml.org/data/v1/download/1586218/bank-marketing.arff'
+  'md5_checksum': 'b29d2eb78e508569fd41172c97bda00e'
+  'amlb_list': 'medium'
+  'target': 'Class'
+  'task_type': 'binary'
+  'metric': 'roc_auc'
+  'positive_class': '2'
+  'n_rows': 45211
+  'n_features': 16
+  'n_usable_features': 16
+  'positive_rate': 0.116985
+  'csv_sha256': '2d4130e3009a6550168a83d2c9c55cfed05b1ecedb8f8814e276fe23a8bebbc0'
+  'leakage_labelled': false
+  'known_leakage':
+  - 'column': 'V12'
+    'kind': 'recorded_after_outcome'
+    'why': 'Last contact duration in seconds. It is not known before a call is placed, and the call''s
+      outcome is known the moment it ends, so a non-zero duration already implies the label. UCI says
+      so explicitly. The column is V12 rather than `duration` because OpenML data 1461 ships anonymised
+      headers (V1..V16), and the identification is measured rather than recalled: V12 is the twelfth
+      feature, matching UCI''s documented column order, and its observed range is 0 to 4918 -- 4918
+      being exactly the duration maximum UCI documents for this dataset. The surrounding columns corroborate
+      the same offset: V6 takes negative values (balance) and V14 bottoms out at the -1 sentinel (pdays).
+      That the header is opaque makes this a BETTER probe, not a worse one -- the reviewer cannot catch
+      it off the name and has to notice the column''s behaviour.'
+    'source': 'UCI Bank Marketing dataset description: ''this attribute highly affects the output target
+      (e.g., if duration=0 then y=no). Yet, the duration is not known before a call is performed ...
+      Thus, this input should only be included for benchmark purposes and should be discarded if the
+      intention is to have a realistic predictive model.'''
+    'source_url': 'https://archive.ics.uci.edu/dataset/222/bank+marketing'
+    'in_planted_leakage_columns': false
+  'published_reference':
+    'source': 'OpenML evaluation API'
+    'openml_run_id': 1840655
+    'openml_run_url': 'https://www.openml.org/r/1840655'
+    'flow_name': 'weka.FilteredClassifier_MultiSearch_LogitBoost_REPTree(1)'
+    'metric': 'roc_auc'
+    'value': 0.935802
+    'protocol': 'OpenML task estimation procedure (10-fold cross-validation), run by a third-party flow.
+      NOT this repo''s withheld holdout -- informational only, never baseline_score.'
+- 'dataset_id': 'credit_g'
+  'openml_data_id': 31
+  'openml_task_id': 31
+  'openml_name': 'credit-g'
+  'openml_version': 1
+  'openml_format': 'ARFF'
+  'openml_url': 'https://openml.org/data/v1/download/31/credit-g.arff'
+  'md5_checksum': '9a475053fed0c26ee95cd4525e50074c'
+  'amlb_list': 'small'
+  'target': 'class'
+  'task_type': 'binary'
+  'metric': 'roc_auc'
+  'positive_class': 'bad'
+  'n_rows': 1000
+  'n_features': 20
+  'n_usable_features': 20
+  'positive_rate': 0.3
+  'csv_sha256': '38b6dbf6fb4b0311a3ffc005730f42623128591fb36473ab3c22d270c0467632'
+  'leakage_labelled': false
+  'known_leakage': []
+  'published_reference':
+    'source': 'OpenML evaluation API'
+    'openml_run_id': 578772
+    'openml_run_url': 'https://www.openml.org/r/578772'
+    'flow_name': 'weka.LMT(4)'
+    'metric': 'roc_auc'
+    'value': 0.788814
+    'protocol': 'OpenML task estimation procedure (10-fold cross-validation), run by a third-party flow.
+      NOT this repo''s withheld holdout -- informational only, never baseline_score.'
+- 'dataset_id': 'higgs'
+  'openml_data_id': 23512
+  'openml_task_id': 146606
+  'openml_name': 'higgs'
+  'openml_version': 2
+  'openml_format': 'ARFF'
+  'openml_url': 'https://openml.org/data/v1/download/2063675/higgs.arff'
+  'md5_checksum': '1a216f3bb3f6a961b4023179fca78452'
+  'amlb_list': 'medium'
+  'target': 'class'
+  'task_type': 'binary'
+  'metric': 'roc_auc'
+  'positive_class': '0'
+  'n_rows': 98050
+  'n_features': 28
+  'n_usable_features': 28
+  'positive_rate': 0.471423
+  'csv_sha256': 'aa9aeafffd0a8a735f143b169c02ed8fade5fca67134b3a32e3f439a6902b9e0'
+  'leakage_labelled': false
+  'known_leakage': []
+  'published_reference':
+    'source': 'OpenML evaluation API'
+    'openml_run_id': 6103004
+    'openml_run_url': 'https://www.openml.org/r/6103004'
+    'flow_name': 'sklearn.pipeline.Pipeline(imputation=openmlstudy14.preprocessing.ConditionalImputer,hotencoding=sklearn.preprocessing.data.OneHotEncoder,variencethreshold=sklearn.feature_selection.variance_threshold.VarianceThreshold,classifier=sklearn.ensemble.forest.RandomForestClassifier)(1)'
+    'metric': 'roc_auc'
+    'value': 0.802503
+    'protocol': 'OpenML task estimation procedure (10-fold cross-validation), run by a third-party flow.
+      NOT this repo''s withheld holdout -- informational only, never baseline_score.'
+- 'dataset_id': 'jasmine'
+  'openml_data_id': 41143
+  'openml_task_id': 168911
+  'openml_name': 'jasmine'
+  'openml_version': 1
+  'openml_format': 'ARFF'
+  'openml_url': 'https://openml.org/data/v1/download/19335516/jasmine.arff'
+  'md5_checksum': '9bd95589ae1a6c7076f172f1ce2f37d8'
+  'amlb_list': 'small'
+  'target': 'class'
+  'task_type': 'binary'
+  'metric': 'roc_auc'
+  'positive_class': '1'
+  'n_rows': 2984
+  'n_features': 144
+  'n_usable_features': 144
+  'positive_rate': 0.5
+  'csv_sha256': 'e37f919741e69a7c185150c224cd4278a667b9781114ad62d0036d9100d8d258'
+  'leakage_labelled': false
+  'known_leakage': []
+  'published_reference':
+    'source': 'OpenML evaluation API'
+    'openml_run_id': 10434942
+    'openml_run_url': 'https://www.openml.org/r/10434942'
+    'flow_name': 'sklearn.tree._classes.DecisionTreeClassifier(2)'
+    'metric': 'roc_auc'
+    'value': 0.749743
+    'protocol': 'OpenML task estimation procedure (10-fold cross-validation), run by a third-party flow.
+      NOT this repo''s withheld holdout -- informational only, never baseline_score.'
+- 'dataset_id': 'kc1'
+  'openml_data_id': 1067
+  'openml_task_id': 3917
+  'openml_name': 'kc1'
+  'openml_version': 1
+  'openml_format': 'ARFF'
+  'openml_url': 'https://openml.org/data/v1/download/53950/kc1.arff'
+  'md5_checksum': 'bcc004464934075ecaf54d84e45c427a'
+  'amlb_list': 'small'
+  'target': 'defects'
+  'task_type': 'binary'
+  'metric': 'roc_auc'
+  'positive_class': 'True'
+  'n_rows': 2109
+  'n_features': 21
+  'n_usable_features': 21
+  'positive_rate': 0.154576
+  'csv_sha256': '8e8a8df2f55fce88697d46129045398f33d1582add7c52c4024c68c644bedf9d'
+  'leakage_labelled': false
+  'known_leakage': []
+  'published_reference':
+    'source': 'OpenML evaluation API'
+    'openml_run_id': 1673106
+    'openml_run_url': 'https://www.openml.org/r/1673106'
+    'flow_name': 'weka.RandomForest(9)'
+    'metric': 'roc_auc'
+    'value': 0.833446
+    'protocol': 'OpenML task estimation procedure (10-fold cross-validation), run by a third-party flow.
+      NOT this repo''s withheld holdout -- informational only, never baseline_score.'
+- 'dataset_id': 'kr_vs_kp'
+  'openml_data_id': 3
+  'openml_task_id': 3
+  'openml_name': 'kr-vs-kp'
+  'openml_version': 1
+  'openml_format': 'ARFF'
+  'openml_url': 'https://openml.org/data/v1/download/3/kr-vs-kp.arff'
+  'md5_checksum': 'ad6eb32b7492524d4382a40e23cdbb8e'
+  'amlb_list': 'small'
+  'target': 'class'
+  'task_type': 'binary'
+  'metric': 'roc_auc'
+  'positive_class': 'nowin'
+  'n_rows': 3196
+  'n_features': 36
+  'n_usable_features': 36
+  'positive_rate': 0.477785
+  'csv_sha256': 'a3e5eee1290e27fef745dcb1b98c42e300476271b1a352a06961d211588543a5'
+  'leakage_labelled': false
+  'known_leakage': []
+  'published_reference':
+    'source': 'OpenML evaluation API'
+    'openml_run_id': 594412
+    'openml_run_url': 'https://www.openml.org/r/594412'
+    'flow_name': 'weka.FilteredClassifier_MultiSearch_RandomForest(1)'
+    'metric': 'roc_auc'
+    'value': 0.999839
+    'protocol': 'OpenML task estimation procedure (10-fold cross-validation), run by a third-party flow.
+      NOT this repo''s withheld holdout -- informational only, never baseline_score.'
+- 'dataset_id': 'nomao'
+  'openml_data_id': 1486
+  'openml_task_id': 9977
+  'openml_name': 'nomao'
+  'openml_version': 1
+  'openml_format': 'ARFF'
+  'openml_url': 'https://openml.org/data/v1/download/1592278/nomao.arff'
+  'md5_checksum': '8fc1ac73fbe5236892e166f9f24d7221'
+  'amlb_list': 'medium'
+  'target': 'Class'
+  'task_type': 'binary'
+  'metric': 'roc_auc'
+  'positive_class': '1'
+  'n_rows': 34465
+  'n_features': 118
+  'n_usable_features': 118
+  'positive_rate': 0.285623
+  'csv_sha256': 'a2d752c83d76b7be92d2890936a6a7f488e19feb1f689d47b812c7c936d81f52'
+  'leakage_labelled': false
+  'known_leakage': []
+  'published_reference':
+    'source': 'OpenML evaluation API'
+    'openml_run_id': 1830752
+    'openml_run_url': 'https://www.openml.org/r/1830752'
+    'flow_name': 'weka.FilteredClassifier_MultiSearch_RandomForest(1)'
+    'metric': 'roc_auc'
+    'value': 0.995014
+    'protocol': 'OpenML task estimation procedure (10-fold cross-validation), run by a third-party flow.
+      NOT this repo''s withheld holdout -- informational only, never baseline_score.'
+- 'dataset_id': 'numerai28_6'
+  'openml_data_id': 23517
+  'openml_task_id': 167120
+  'openml_name': 'numerai28.6'
+  'openml_version': 2
+  'openml_format': 'ARFF'
+  'openml_url': 'https://openml.org/data/v1/download/2160285/numerai28.6.arff'
+  'md5_checksum': '2a24bac4b82d3455436f6bcc328946a3'
+  'amlb_list': 'medium'
+  'target': 'attribute_21'
+  'task_type': 'binary'
+  'metric': 'roc_auc'
+  'positive_class': '0'
+  'n_rows': 96320
+  'n_features': 21
+  'n_usable_features': 21
+  'positive_rate': 0.49483
+  'csv_sha256': '3adcb0be8a4d12862ddbc050933889ad7c116351756870dab81a240e11646331'
+  'leakage_labelled': false
+  'known_leakage': []
+  'published_reference':
+    'source': 'OpenML evaluation API'
+    'openml_run_id': 8858412
+    'openml_run_url': 'https://www.openml.org/r/8858412'
+    'flow_name': 'sklearn.pipeline.Pipeline(imputation=openmlstudy14.preprocessing.ConditionalImputer,hotencoding=sklearn.preprocessing.data.OneHotEncoder,variencethreshold=sklearn.feature_selection.variance_threshold.VarianceThreshold,classifier=sklearn.linear_model.logistic.LogisticRegression)(1)'
+    'metric': 'roc_auc'
+    'value': 0.530295
+    'protocol': 'OpenML task estimation procedure (10-fold cross-validation), run by a third-party flow.
+      NOT this repo''s withheld holdout -- informational only, never baseline_score.'
+- 'dataset_id': 'phoneme'
+  'openml_data_id': 1489
+  'openml_task_id': 9952
+  'openml_name': 'phoneme'
+  'openml_version': 1
+  'openml_format': 'ARFF'
+  'openml_url': 'https://openml.org/data/v1/download/1592281/phoneme.arff'
+  'md5_checksum': '902ff27649dbfb512f3fb01fc05c6b24'
+  'amlb_list': 'small'
+  'target': 'Class'
+  'task_type': 'binary'
+  'metric': 'roc_auc'
+  'positive_class': '2'
+  'n_rows': 5404
+  'n_features': 5
+  'n_usable_features': 5
+  'positive_rate': 0.293486
+  'csv_sha256': 'b2992270f8816e0120d58afea5aa05ee0abc843c77e6b10327bee5e70d7809ca'
+  'leakage_labelled': false
+  'known_leakage': []
+  'published_reference':
+    'source': 'OpenML evaluation API'
+    'openml_run_id': 5965878
+    'openml_run_url': 'https://www.openml.org/r/5965878'
+    'flow_name': 'sklearn.pipeline.Pipeline(imputation=openmlstudy14.preprocessing.ConditionalImputer,hotencoding=sklearn.preprocessing.data.OneHotEncoder,variencethreshold=sklearn.feature_selection.variance_threshold.VarianceThreshold,classifier=sklearn.ensemble.weight_boosting.AdaBoostClassifier(base_estimator=sklearn.tree.tree.DecisionTreeClassifier))(1)'
+    'metric': 'roc_auc'
+    'value': 0.96893
+    'protocol': 'OpenML task estimation procedure (10-fold cross-validation), run by a third-party flow.
+      NOT this repo''s withheld holdout -- informational only, never baseline_score.'
+- 'dataset_id': 'sylvine'
+  'openml_data_id': 41146
+  'openml_task_id': 168912
+  'openml_name': 'sylvine'
+  'openml_version': 1
+  'openml_format': 'ARFF'
+  'openml_url': 'https://openml.org/data/v1/download/19335519/sylvine.arff'
+  'md5_checksum': '0788a60caa253cea1aa2e2fc2c1ecc69'
+  'amlb_list': 'small'
+  'target': 'class'
+  'task_type': 'binary'
+  'metric': 'roc_auc'
+  'positive_class': '1'
+  'n_rows': 5124
+  'n_features': 20
+  'n_usable_features': 20
+  'positive_rate': 0.5
+  'csv_sha256': 'ff4b31f874cb9728108ad55790c548e5780cbe8a648557272f01d8bc41d0d675'
+  'leakage_labelled': false
+  'known_leakage': []
+  'published_reference':
+    'source': 'OpenML evaluation API'
+    'openml_run_id': 10434943
+    'openml_run_url': 'https://www.openml.org/r/10434943'
+    'flow_name': 'sklearn.tree._classes.DecisionTreeClassifier(2)'
+    'metric': 'roc_auc'
+    'value': 0.905911
+    'protocol': 'OpenML task estimation procedure (10-fold cross-validation), run by a third-party flow.
+      NOT this repo''s withheld holdout -- informational only, never baseline_score.'
+'excluded':
+- 'openml_name': 'guillermo'
+  'openml_data_id': -1
+  'openml_task_id': 168337
+  'amlb_list': 'medium'
+  'failed': 'fetch_failed'
+  'measured':
+    'error': 'ValueError'
+- 'openml_name': 'Robert'
+  'openml_data_id': -1
+  'openml_task_id': 168332
+  'amlb_list': 'medium'
+  'failed': 'fetch_failed'
+  'measured':
+    'error': 'ValueError'
+- 'openml_name': 'APSFailure'
+  'openml_data_id': 41138
+  'openml_task_id': 168868
+  'amlb_list': 'medium'
+  'failed': 'max_cells'
+  'measured':
+    'n_rows': 76000
+    'n_features': 170
+    'n_classes': 2
+    'n_usable_features': 170
+    'positive_rate': 0.018092
+- 'openml_name': 'christine'
+  'openml_data_id': 41142
+  'openml_task_id': 168908
+  'amlb_list': 'small'
+  'failed': 'max_features'
+  'measured':
+    'n_rows': 5418
+    'n_features': 1636
+    'n_classes': 2
+    'n_usable_features': 1636
+    'positive_rate': 0.5
+- 'openml_name': 'KDDCup09_appetency'
+  'openml_data_id': 1111
+  'openml_task_id': 3945
+  'amlb_list': 'medium'
+  'failed': 'max_features'
+  'measured':
+    'n_rows': 50000
+    'n_features': 230
+    'n_classes': 2
+    'n_usable_features': 211
+    'positive_rate': 0.0178
+- 'openml_name': 'riccardo'
+  'openml_data_id': 41161
+  'openml_task_id': 168338
+  'amlb_list': 'medium'
+  'failed': 'max_features'
+  'measured':
+    'n_rows': 20000
+    'n_features': 4296
+    'n_classes': 2
+    'n_usable_features': 4296
+    'positive_rate': 0.25
+- 'openml_name': 'MiniBooNE'
+  'openml_data_id': 41150
+  'openml_task_id': 168335
+  'amlb_list': 'medium'
+  'failed': 'max_rows'
+  'measured':
+    'n_rows': 130064
+    'n_features': 50
+    'n_classes': 2
+    'n_usable_features': 50
+    'positive_rate': 0.280623
+- 'openml_name': 'blood-transfusion'
+  'openml_data_id': 1464
+  'openml_task_id': 10101
+  'amlb_list': 'small'
+  'failed': 'min_usable_features'
+  'measured':
+    'n_rows': 748
+    'n_features': 4
+    'n_classes': 2
+    'n_usable_features': 4
+    'positive_rate': 0.237968
+- 'openml_name': 'car'
+  'openml_data_id': -1
+  'openml_task_id': 146821
+  'amlb_list': 'small'
+  'failed': 'task_type'
+  'measured':
+    'n_rows': 1728
+    'n_features': 6
+    'n_classes': 4
+- 'openml_name': 'cnae-9'
+  'openml_data_id': -1
+  'openml_task_id': 9981
+  'amlb_list': 'small'
+  'failed': 'task_type'
+  'measured':
+    'n_rows': 1080
+    'n_features': 856
+    'n_classes': 9
+- 'openml_name': 'connect-4'
+  'openml_data_id': -1
+  'openml_task_id': 146195
+  'amlb_list': 'medium'
+  'failed': 'task_type'
+  'measured':
+    'n_rows': 67557
+    'n_features': 42
+    'n_classes': 3
+- 'openml_name': 'dilbert'
+  'openml_data_id': -1
+  'openml_task_id': 168909
+  'amlb_list': 'small'
+  'failed': 'task_type'
+  'measured':
+    'n_rows': 10000
+    'n_features': 2000
+    'n_classes': 5
+- 'openml_name': 'fabert'
+  'openml_data_id': -1
+  'openml_task_id': 168910
+  'amlb_list': 'small'
+  'failed': 'task_type'
+  'measured':
+    'n_rows': 8237
+    'n_features': 800
+    'n_classes': 7
+- 'openml_name': 'Fashion-MNIST'
+  'openml_data_id': -1
+  'openml_task_id': 146825
+  'amlb_list': 'medium'
+  'failed': 'task_type'
+  'measured':
+    'n_rows': 70000
+    'n_features': 784
+    'n_classes': 10
+- 'openml_name': 'Helena'
+  'openml_data_id': -1
+  'openml_task_id': 168329
+  'amlb_list': 'medium'
+  'failed': 'task_type'
+  'measured':
+    'n_rows': 65196
+    'n_features': 27
+    'n_classes': 100
+- 'openml_name': 'Jannis'
+  'openml_data_id': -1
+  'openml_task_id': 168330
+  'amlb_list': 'medium'
+  'failed': 'task_type'
+  'measured':
+    'n_rows': 83733
+    'n_features': 54
+    'n_classes': 4
+- 'openml_name': 'jungle_chess_2pcs_raw_endgame_complete'
+  'openml_data_id': -1
+  'openml_task_id': 167119
+  'amlb_list': 'medium'
+  'failed': 'task_type'
+  'measured':
+    'n_rows': 44819
+    'n_features': 6
+    'n_classes': 3
+- 'openml_name': 'mfeat-factors'
+  'openml_data_id': -1
+  'openml_task_id': 12
+  'amlb_list': 'small'
+  'failed': 'task_type'
+  'measured':
+    'n_rows': 2000
+    'n_features': 216
+    'n_classes': 10
+- 'openml_name': 'segment'
+  'openml_data_id': -1
+  'openml_task_id': 146822
+  'amlb_list': 'small'
+  'failed': 'task_type'
+  'measured':
+    'n_rows': 2310
+    'n_features': 18
+    'n_classes': 7
+- 'openml_name': 'Shuttle'
+  'openml_data_id': -1
+  'openml_task_id': 146212
+  'amlb_list': 'medium'
+  'failed': 'task_type'
+  'measured':
+    'n_rows': 58000
+    'n_features': 9
+    'n_classes': 7
+- 'openml_name': 'vehicle'
+  'openml_data_id': -1
+  'openml_task_id': 53
+  'amlb_list': 'small'
+  'failed': 'task_type'
+  'measured':
+    'n_rows': 846
+    'n_features': 18
+    'n_classes': 4
+- 'openml_name': 'Volkert'
+  'openml_data_id': -1
+  'openml_task_id': 168331
+  'amlb_list': 'medium'
+  'failed': 'task_type'
+  'measured':
+    'n_rows': 58310
+    'n_features': 180
+    'n_classes': 10
