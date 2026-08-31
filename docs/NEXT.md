@@ -1,98 +1,104 @@
 # Next session
 
 ## Start here
-**A dataset nobody in this repo wrote can now be run and graded.** `ds-agents run --dataset
-credit_g` works, and so does `eval --subset bench-smoke`. 20% of the rows are carved out *before*
-`run_pipeline` is called, above the tools boundary, and never enter `$DS_DATASET`, `split_artifact`
-or the run's artifact store; `verified_holdout_score` is the promoted model measured on them.
-Three new modules: `runnable.py`, `holdout.py`, `rescore.py`. `_fixture_state` became `_run_state`.
+**Phase 4's last box is closed. `baseline_score` and `score_ratio` are retired, not implemented.**
+`score_ratio` computed `verified / baseline`; AMLB's convention is `(x − zero) / (unit − zero)`, and
+those are different functions that disagree about what 1.0 means. What ships instead is two raw
+points plus one derived column: `baseline_zero_score`, `baseline_unit_score`,
+`baseline_normalised_score`, `baseline_status`, `baseline_detail`, `baseline_recipe`. Retiring two
+published columns was free and that is **checked rather than claimed** — all 149 committed rows
+carried both as `null`, pinned by test, and no committed results file was edited.
 
-**The number is earned by a self-check, not asserted.** No fitted model is persisted anywhere
-(`ModelResult.model_artifact` is still declared and never written), so grading means refitting --
-from `modeler.CANDIDATE_SPECS`, never from `ModelResult.params`, which is a flat merge across
-pipeline steps and is lossy by construction. Before the withheld rows are touched, the same
-pipeline is fit on the agents' train split and scored on the agents' *own* holdout and compared to
-what the modeler claimed there. That one comparison validates transform re-application, seed,
-positive class, scorer sign and split parsing at once. **`refit_claim_gap` is exactly 0.0 on every
-run so far**, offline and live.
+**The zero point is a correctness assertion, and it fired.** A constant class-prior predictor scores
+exactly 0.5 roc_auc by construction — every pair is a tie — so 0.5 is not a measurement with a
+tolerance, it is an assertion that the grader resolved the positive class, applied the scorer sign,
+and scored the rows it meant to. **Exactly 0.5 on 4 of 4 live rows.**
 
-**Sensitivity is proved by construction, not by the live rows.** `tests/test_rescore.py` builds a
-dataset whose one informative column is informative in exactly the rows the agents get and pure
-noise in the rows they are graded on: claimed 1.0, verified 0.45, gap 0.55. Without that, the
-module would be a number generator with no evidence it would ever disagree with the agents.
+**The pooling hazard is closed by a gate that cannot fire yet.** `baseline_normalised_score` returns
+`None` whenever `planted_leakage_columns` is non-empty, because the baseline is fit on every raw
+column including the trap. Said plainly: that contradiction is currently *unreachable* — fixtures
+have `withheld_fraction = 0.0`, so no fixture row is graded and every row that can carry a baseline
+has an empty planted list. The gate is written now because it costs one `if` now, and because
+widening the carve to fixtures is already parked as a future cell. The two raw points are **not**
+gated; only the quotient is.
 
-**The live rows: 4 at $0.0673, `rescore_status` ok 4/4, claimed 0.7520 against verified 0.7476.
-And all four are numerically identical in every column**, so the two replicates bought *no variance
-estimate at all* -- four samples of one deterministic outcome. `credit_g` has no planted leak, the
-reviewer raised zero objections and `feature_eng` dropped nothing, so no decision was available to
-be made differently. The +0.0044 gap is a fifth of the pre-registered noise floor and is not
-evidence the agents did not overstate themselves.
+**The baseline is independent, and it runs in its own process.** It sees the raw frame through the
+grader's own mechanical encoder — not the agents' `feature_code_artifact` — because a yardstick that
+inherits the decisions it measures cannot say whether those decisions helped. Its own sandbox, its
+own timeout, its own ten-value `BaselineStatus`, because a RandomForest that dies on a wide frame
+must not take `verified_holdout_score` with it; `unit_point_failed` keeps the zero point.
 
-**Fixtures withhold nothing, by decision.** `withheld_fraction` is 0.0 for every fixture, so all
-145 committed rows and every toy test are byte-for-byte unaffected. Carving a 200-row toy would
-change what the agents see for no gain: planted leakage is a *column*, so a random holdout still
-contains it.
+**Live: 4 rows at $0.0645, all four pre-registered endpoints passed.** `baseline_status` ok 4/4,
+zero exactly 0.5, `baseline_recipe` `rf-v1` 4/4, $0.0161/run against a measured $0.0168 — the two
+extra fits cost no tokens. Characterisation only, explicitly not a result: unit 0.7660, verified
+0.7476, normalised **0.9309**. `evals/results/2026-08-31_baseline-smoke.jsonl`.
 
-The floor: **716 tests pass** (up from 681), 27 skipped, ruff clean, `uv run ds-agents run
---dataset toy` green live at $0.0127. Session spend ~$0.14 all in.
+The floor: **741 tests pass** (up from 716), 27 skipped, ruff clean, `uv run ds-agents run --dataset
+toy` green live at $0.0130 and reporting `baseline_status: no_withheld_holdout`. Session spend
+~$0.11 all in.
 
 ## First prompt
-Read CLAUDE.md, docs/PLAN.md Phase 4, and the "Start here" above. **The remaining Phase 4 box is
-`baseline_score`, and it needs a decision before it needs code.**
+Read CLAUDE.md, docs/PLAN.md Phase 4, and the "Start here" above. **`--subset full` has one blocker
+left and it is money, not code.** The grading is complete: a manifest dataset runs, is scored on a
+withheld holdout, and is placed on a measured scale.
 
-The zero point is free: a constant class-prior predictor scores exactly 0.5 roc_auc by
-construction, so it is a correctness assertion on the re-scorer rather than a measurement. The unit
-point is the problem. AMLB publishes the *convention* (normalise from constant predictor to tuned
-RandomForest) but not a grid this repo can re-fetch -- `openml1.win.tue.nl` presents a self-signed
-certificate -- so any recipe is **ours**, untraceable in a way nothing else in the manifest is.
+**Start from the timing table, because it is the finding that changes the plan.** The unit point was
+timed at three shapes: **0.20s at `credit_g` (1000×20), 9.85s at `adult` (48842×14), 72.09s at
+`higgs` (98050×28)**, against an LLM portion of ~21s per run. So the baseline is invisible at the
+cheapest dataset and roughly quadruples wall time at the largest, and **none of that was visible
+from `bench-smoke`**. This is the second time the cheapest dataset has hidden a cost term from this
+project — the first was `bench-smoke`'s own $0.040-guessed / $0.017-measured error.
 
-**Settle the pooling hazard first, because it may mean `score_ratio` should not be published at
-all.** The baseline is fit on every column, including a leak. On a labelled dataset a pipeline that
-correctly drops the trap scores *below* a baseline that kept it, so `score_ratio < 1` is evidence
-of good behaviour there and of bad behaviour on an unlabelled dataset -- the same column meaning
-opposite things with nothing on the row to separate them. Options worth weighing: compute the
-baseline on the post-`feature_eng` matrix instead of raw columns (changes what it measures);
-publish `baseline_zero_score` and `baseline_unit_score` as separate columns and let a reader
-normalise (honest, more work downstream); or gate `score_ratio` on `leakage_graded` the way the
-nine leakage columns are gated. Pre-register whichever, then build.
+Three things that follow, in order:
 
-After that, `--subset full` needs a measured cost per dataset. Do NOT extrapolate from
-`bench-smoke`: its own estimate was wrong by more than a factor of two (0.040 guessed, 0.017
-measured), and `higgs` is 98x `credit_g`'s row count.
+1. **Measure a mid-sized dataset before funding thirteen.** `phoneme` or `australian` are cheap and
+   also answer the standing "is that the dataset or the pipeline?" question. Then one of `adult` /
+   `nomao` / `jasmine` to get a second point on the wall-clock curve — one point is not an estimate.
+2. **Decide whether `higgs` is worth 72s of yardstick per run**, or whether `n_estimators` drops for
+   the big frames. If it drops, `baseline_recipe` must change with it, and rows at two recipes must
+   not be pooled — that is what the column is for.
+3. **`full` is 13 cells**, because `dataset_id` is an `eval-diff` condition field. Price it as 13
+   cells × replicates, not as 13 runs.
 
 ## Open questions
 
-- **Should `score_ratio` exist at all?** See the first prompt. It is the only column in the project
-  whose meaning depends on a property of the dataset rather than on the run, and it is currently
-  null everywhere, which is the cheapest moment to decide.
-- **`credit_g` produced four identical rows. Is that the dataset or the pipeline?** The claim above
-  is that it is the dataset -- no leak, no objections, no drops, so no decision to vary. Worth one
-  cheap check on a second manifest dataset before anyone writes "the pipeline is deterministic on
-  real data" anywhere. `australian` or `phoneme` are the next cheapest.
-- **Is `amazon_employee_access` a real dataset or a degenerate one?** Unchanged, and now *cheap to
-  answer*: the run path exists. Nine integer-encoded high-cardinality ID columns may produce the
-  zero-signal run `min_usable_features` exists to prevent. One run settles it.
+- **Is `higgs` affordable, and at what recipe?** 72s of RandomForest per run against ~21s of LLM. A
+  cheaper `n_estimators` for large frames is defensible and is exactly what `baseline_recipe`
+  exists to make visible — but it means the manifest is graded against two yardsticks, and the
+  writeup has to say so.
+- **`credit_g` produced four identical rows again, at a second commit.** Every substantive column
+  matches; the only field that varies is `cost_usd`. The claim is still that this is the dataset —
+  no leak, no objections, no drops, so no decision available to vary — and it still needs one cheap
+  run on a second manifest dataset before anyone writes "the pipeline is deterministic on real
+  data".
+- **`baseline_normalised_score` of 0.9309 says the pipeline landed just below a raw-column
+  RandomForest on `credit_g`.** Not quotable: n=1 effective, the grid is ours, and the encoder keeps
+  high-cardinality columns `feature_eng` skips, which makes the unit point a **floor** rather than a
+  strong model. Whether a floor is the right unit point at all is a real question for the writeup.
+- **Is `amazon_employee_access` a real dataset or a degenerate one?** Unchanged and still cheap to
+  answer. Nine integer-encoded high-cardinality ID columns land in the baseline's *numeric* branch
+  and pass straight through, so this run now probes the encoder as well as `min_usable_features`.
 - **Is a partially-labelled dataset gradeable at all?** Unchanged. `bank_marketing`'s documented
-  `V12` is still unscored, deliberately, because `planted_leakage_columns` is read as complete.
-  Now testable against a real run rather than in the abstract.
+  `V12` is still unscored, deliberately, because `planted_leakage_columns` is read as complete. Note
+  it would also be the first dataset where the leak-suppression gate could matter — if `V12` were
+  ever promoted, `baseline_normalised_score` would go null on that row by design.
 - **200 withheld rows put roc_auc's standard error near 0.04**, so a `holdout_claim_gap` under
-  ~0.08 is not distinguishable from noise at n=1. This is the "no 10-run count without a replicate"
-  lesson arriving on a *continuous* column, and it binds every gap this project will publish.
-- **The withheld holdout is a random split, so it cannot catch a temporal or grouped leak.** It
-  catches a model that overfits rows. `claims_timing`'s trap would survive it. Not a defect, but it
-  bounds what `holdout_claim_gap` can ever mean and belongs in the writeup.
-- **`published_reference` picks the max over uploaded runs**, which is not a protocol-stable
-  anchor. Unchanged. `credit_g` reads 0.7889 against our 0.7476 on a different protocol -- plausible
-  and lower, which is the sanity check it is good for and nothing more.
-- **A run produced no model at all and was recorded `review_verdict: "pass"`.** Unchanged, and now
-  it has a companion: `rescore_status` would read `no_model` on such a row, so the two-columns fix
-  exists for the score even though `review_verdict` itself is still wrong.
+  ~0.08 is not distinguishable from noise at n=1. Unchanged, and it binds every gap published here.
+- **The withheld holdout is a random split, so it cannot catch a temporal or grouped leak.**
+  Unchanged. `claims_timing`'s trap would survive it. Bounds what `holdout_claim_gap` can mean.
+- **`published_reference` picks the max over uploaded runs**, which is not a protocol-stable anchor.
+  Unchanged. `credit_g` reads 0.7889 against our 0.7476 on a different protocol.
+- **A run produced no model at all and was recorded `review_verdict: "pass"`.** Unchanged. It now
+  has two companions: `rescore_status` would read `no_model` and `baseline_status`
+  `rescore_unavailable`, so the two-columns fix exists twice over while `review_verdict` is still
+  wrong.
 - **No CI job and no thresholds.** Unchanged.
-- **`errored` needs a companion column.** Unchanged, and `rescore_status` is now the *second*
-  worked example of what that fix looks like, after `leakage_graded`.
+- **`errored` needs a companion column.** Unchanged, and `baseline_status` is now the *third* worked
+  example of the fix, after `leakage_graded` and `rescore_status`.
 - **`exhausted` is still uninformative.** Unchanged.
 - **Late detection against the cap** is the remaining structural reviewer defect. Unchanged.
-- **The AMLB self-signed certificate** still blocks vendoring AMLB's own per-dataset numbers.
+- **The AMLB self-signed certificate** still blocks vendoring AMLB's own per-dataset numbers, which
+  is why the unit point's grid is ours.
 - **Two AMLB candidates could not be fetched at all** (`guillermo`, `Robert`, md5 mismatches from
   OpenML itself). Unchanged.
 - **LangSmith is wired but never exercised.** Unverified until a key exists.
@@ -100,33 +106,33 @@ measured), and `higgs` is 98x `credit_g`'s row count.
 
 ## Parking lot
 
-- **The sandbox is not a jail, and the docstrings say so rather than implying otherwise.** It has
-  no filesystem namespace, so a snippet could open the withheld CSV by relative path. What the
-  layout buys is an *assertable* property -- no file the run's store holds contains a withheld row,
-  checked by test -- not isolation. Real isolation waits on the Docker backend behind `SandboxPool`.
-- **`ModelResult.model_artifact` is still declared and never written.** The re-scorer refits
-  instead, which is defensible and is now proved faithful to 1e-6. Persisting the fitted model
-  would make the grader cheaper but would also make it grade a *pickle* rather than a recipe.
-- **`cmd_run --repeat 1` now uses `run-0/` instead of collapsing into the invocation root.**
-  Deliberate: containment is a property a test has to check, and it cannot check a layout that is
-  sometimes one shape and sometimes another. No path reaches a results row.
-- **`register_dataset` does an unbounded `pd.read_csv` + per-column `nunique` per run**, and now
-  also copies the file. Free at `credit_g`'s 139 KB. **Measure before `higgs` at 46 MB** -- this is
-  the parking-lot item most likely to become a real cost.
-- **`.mcp.json` still hardcodes the toy dataset on argv.** Unchanged and now more visibly wrong.
-- **`SUBSETS` has no `full` entry**, and `_resolve_subset`'s message has now been wrong twice for
-  the same reason: the blocker keeps moving. It currently names `baseline_score`, and a test
-  asserts it does NOT still name `verified_holdout_score`.
-- **The `credit_g` withheld indices are pinned as a sha256 digest**, not 200 literals. Equally
-  loud, and a diff nobody can read is a diff nobody checks.
-- **`_withhold_rows` uses numpy directly rather than `train_test_split`** -- sklearn's stratified
-  shuffling is not contracted stable across versions, and this is the one partition every headline
-  number sits on.
-- **`csv_sha256` mismatches warn rather than refuse** (`benchmark.require_cached_csv`), because the
-  hash depends on pandas' float formatting. `RunConfig.dataset_hash` now carries the hash of the
-  *agent-view* CSV instead, which is the bytes that actually ran.
+- **The manifest prose rename is deferred and must ride the next `datasets refresh`.**
+  `benchmark.py`'s `BASELINE_DEFINITION.note` and `benchmark_build.py`'s `HEADER` still name
+  `baseline_score`; both are rendered verbatim into `evals/datasets/manifest.yaml` (15 occurrences),
+  which only `ds-agents datasets refresh` may write, and a refresh re-fetches every OpenML response
+  and can move `published_reference`. Changing prose is not worth a silently-moved citation.
+  Verified: no offline test compares the two, so nothing is red. The non-rendered docstrings and
+  comments in both modules were updated.
+- **The unit point is a floor, not a ceiling, and that is deliberate.** The grader's encoder keeps
+  high-cardinality columns `feature_eng` skips and ordinal-encodes nominal codes, imposing a false
+  ordering. Stated so nobody later reads "beat the baseline" as "beat a strong model".
+- **`ModelResult.model_artifact` is still declared and never written.** Both the re-scorer and the
+  baseline refit instead. Unchanged.
+- **The sandbox is not a jail, and the docstrings say so.** A snippet could open the withheld CSV by
+  relative path. What the layout buys is an *assertable* property, checked by test, not isolation.
+  Real isolation waits on the Docker backend behind `SandboxPool`.
+- **`register_dataset` does an unbounded `pd.read_csv` + per-column `nunique` per run**, and copies
+  the file. Free at `credit_g`'s 139 KB. **Measure before `higgs` at 46 MB** — and note this now
+  sits alongside a 72s baseline fit on the same dataset.
+- **`.mcp.json` still hardcodes the toy dataset on argv.** Unchanged.
+- **`SUBSETS` has no `full` entry**, and `_resolve_subset`'s message has now been wrong three times
+  for the same reason: the blocker keeps moving. It currently names cost, and a test asserts it does
+  NOT still name `baseline_score`, `score_ratio` or `verified_holdout_score`.
+- **The `credit_g` withheld indices are pinned as a sha256 digest**, not 200 literals.
+- **`_withhold_rows` uses numpy directly rather than `train_test_split`** — sklearn's stratified
+  shuffling is not contracted stable across versions.
+- **`csv_sha256` mismatches warn rather than refuse** (`benchmark.require_cached_csv`).
 - **`network` tests are gated on `DS_AGENTS_NETWORK_TESTS=1`, NOT on `-m "not network"`.**
-  Unchanged.
 - **The cost cap is invocation-level; a failed run is charged its estimate.** Unchanged.
 - **`ds-agents eval` appends to a same-day, same-name file rather than refusing.** Unchanged.
 - **`forced_drop_release` is closed to further use.** Unchanged.

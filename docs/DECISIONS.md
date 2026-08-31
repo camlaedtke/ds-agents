@@ -1572,3 +1572,32 @@ and are left alone on purpose: both are rendered into `evals/datasets/manifest.y
 `published_reference`, which takes the max over uploaded runs. Changing prose is not worth a
 silently-moved citation. The rename rides the next planned refresh; no offline test compares the two,
 so nothing is red in the meantime.
+
+**Outcome, appended after the runs.** Everything above was written and committed before the runner
+was called, on a clean tree, at `2ad4a37`. All four pre-registered endpoints passed:
+`baseline_status` is `ok` on 4 of 4, `baseline_zero_score` is **exactly 0.5** on every row,
+`baseline_recipe` is `rf-v1` on 4 of 4, and spend was $0.0161/run against a measured $0.0168 --
+marginally *cheaper*, confirming the two extra fits cost no tokens.
+`evals/results/2026-08-31_baseline-smoke.jsonl`, 4 rows, $0.0645 against a $0.10 cap. The
+characterisation, which is explicitly not an endpoint: unit point 0.7660, verified 0.7476,
+normalised 0.9309. `credit_g`'s four rows are identical in every substantive column again, at a
+second commit -- the only field that varies is `cost_usd` -- so the previous session's "four samples
+of one deterministic outcome" reproduces, and the open question of whether that is the dataset or
+the pipeline still needs a second manifest dataset.
+
+**One thing the pre-registration did not anticipate, and it changes what `--subset full` costs.**
+The baseline's wall cost is invisible at `credit_g` and dominant at `higgs`. Run-to-run LLM latency
+spread is about 4 seconds, which swamps a 0.20s fit, so the unit point was timed directly at three
+shapes: 0.20s at `credit_g` (1000x20), 9.85s at `adult` (48842x14), **72.09s at `higgs`
+(98050x28)** -- against an LLM portion of roughly 21 seconds per run. So on the largest dataset in
+the manifest the yardstick would roughly quadruple wall time, and none of that is visible from the
+cheapest one. This is the same lesson `bench-smoke`'s factor-of-two cost error taught, arriving on
+wall clock rather than dollars, and it is now a concrete input to the per-dataset estimate that is
+`full`'s only remaining blocker. `BASELINE_TIMEOUT_S = 900` is comfortable against 72s. If wall time
+becomes the binding constraint, `n_estimators` is the lever and `baseline_recipe` is what makes
+pulling it visible in the data rather than only in git.
+
+**`eval-diff` refused to compare the two `credit_g` files, which is the rule working.** Both cells
+are `dataset_id=credit_g` at byte-identical conditions and they still separated, on `commit` alone.
+Each side reported "only in before / only in after -- not compared". That is the pre-registered
+reason no smoke in this project is a comparand, demonstrated rather than asserted.

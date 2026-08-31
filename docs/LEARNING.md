@@ -751,3 +751,23 @@ Priority: **load-bearing** means the thesis breaks if this is wrong and you cann
   metric. The general shape: "normalise by the baseline" and "normalise from the baseline" sound
   alike and only the second one survives a metric whose floor is not zero.
   Related: [[normalisation-is-not-a-ratio]], [[eval-baselines]], [[reference-system-independence]].
+
+### cost-hides-in-the-cheapest-case — the smoke test is the one shape that cannot show you the bill
+- Priority: load-bearing
+- Came up: 2026-08-31, measuring what the baseline costs before `--subset full` is funded
+- Status: flagged
+- Why it matters here: this project now has the same lesson twice from two different quantities.
+  `bench-smoke`'s cost estimate was guessed at $0.040 and measured at $0.017 — wrong by more than a
+  factor of two, on the cheapest dataset in the manifest. Then the baseline shipped, and its wall
+  cost on that same dataset is **0.20 seconds**, which is invisible against a ~4s run-to-run spread
+  in LLM latency; on `higgs` the identical code takes **72 seconds**, roughly quadrupling a run. In
+  both cases the smoke test was green, correct, and completely uninformative about the thing it
+  was about to authorise spending on — not because the measurement was sloppy but because the
+  cheapest case is chosen precisely for having the least of whatever scales. A smoke test answers
+  "does the path work", and it is worth running for that. It cannot answer "what will this cost",
+  and the tell is that the cost term is *superlinear or absent* at the small size: a RandomForest is
+  roughly `n log n` in rows and linear in trees, so a 100x row count is not a 100x anything you can
+  read off the small run. The general shape: measure the cost term at the size that will actually be
+  paid, or at two sizes so you can see the slope — one point on a curve is not an estimate, it is a
+  number. Related: [[instrument-contaminates-measurement]], [[eval-baselines]],
+  [[failure-domain-separation]], [[reference-system-independence]].

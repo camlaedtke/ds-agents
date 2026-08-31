@@ -896,3 +896,97 @@ by more than a factor of two, and wrong in the cheap direction.
 
 **`score_ratio` is null on every row** because `baseline_score` is not implemented. That is
 deliberate and pre-registered, not an oversight — see DECISIONS 2026-08-31 (third entry).
+
+## 2026-08-31 (second run of the day) — the baseline's first live rows, `credit_g`, n=4. NOT A CELL.
+
+`2026-08-31_baseline-smoke.jsonl`, **4 rows**, $0.0645 against a $0.10 cap, ~84 seconds. Live Haiku
+over MCP, `loop_cap=3`, `random_seed=20260822`, 2 replicates x n=2, 0 rows refused, 0 runs failed,
+`stopped_early: no`, `charged_estimate_usd: $0.00`. Commit `2ad4a37`. Pre-registered in DECISIONS.md
+2026-08-31 (fourth entry), committed on a clean tree before the runner was called.
+
+```
+uv run ds-agents eval --subset bench-smoke --name baseline-smoke \
+    --replicates 2 --n 2 --max-cost-usd 0.10 --dry-run
+uv run ds-agents eval --subset bench-smoke --name baseline-smoke \
+    --replicates 2 --n 2 --max-cost-usd 0.10
+uv run ds-agents eval-diff evals/results/2026-08-31_credit-g-smoke.jsonl \
+                           evals/results/2026-08-31_baseline-smoke.jsonl
+```
+
+| endpoint | pre-registered | measured |
+|---|---|---|
+| `baseline_status` | `ok` on 4 of 4 | **4/4 `ok`** |
+| `baseline_zero_score` | exactly 0.5 on every row | **0.5 on 4/4, exactly** |
+| `baseline_recipe` | `rf-v1` on 4 of 4 | **4/4 `rf-v1`** |
+| spend | near the measured $0.0168/run | **$0.0161/run**, slightly cheaper |
+
+Characterisation, explicitly not an endpoint: `baseline_unit_score` 0.7660, `verified_holdout_score`
+0.7476, `claimed_holdout_score` 0.7520, `baseline_normalised_score` **0.9309**, `n_withheld_rows`
+200, `n_final_features` 20, `holdout_claim_gap` +0.0044.
+
+**All four pre-registered endpoints passed, and the one that matters is the zero point.** A constant
+class-prior predictor scores exactly 0.5 roc_auc by construction — every pair is a tie — so 0.5 is
+not a measurement with a tolerance, it is an assertion that the grader resolved the positive class,
+applied the scorer sign, and scored the rows it meant to. It came back exactly 0.5 on all four rows,
+which validates that chain on live data rather than only in a test. Any other value would have been
+a bug, not a finding.
+
+**The baseline costs no tokens, and the measured spend confirms it.** $0.0161/run against the
+previous session's $0.0168 — the two extra fits are pure sandbox compute, so adding them made the
+runs marginally *cheaper* rather than dearer, which is run-to-run token variation and not an effect.
+
+**`credit_g`'s rows are identical again, and this time the claim is checked field by field.** Every
+substantive column matches across all four rows; the *only* field that varies is `cost_usd`
+($0.0158–$0.0165), which is token-count noise. So the previous session's "four samples of one
+deterministic outcome" reproduces at a second commit, and it is a fact about `credit_g` — no planted
+leak, zero objections, nothing dropped, therefore no decision available to be made differently — and
+still not evidence about the pipeline. The open question "is that the dataset or the pipeline?"
+remains open and still needs a second manifest dataset.
+
+**`baseline_normalised_score` is 0.9309, and it is a characterisation and not a result.** It says
+the pipeline landed roughly 93% of the way from a constant predictor to a RandomForest on the raw
+columns — i.e. slightly below the baseline. Three reasons it must not be quoted as a finding: n=1
+effective, on a dataset already known to produce identical rows; the unit point's grid is ours and
+labelled so; and the encoder keeps high-cardinality columns `feature_eng` skips and imposes a false
+ordering on nominal codes, which makes the unit point a floor rather than a strong model.
+
+**`eval-diff` refused to compare this file to `credit-g-smoke`, which is the correct behaviour.**
+Both cells are `dataset_id=credit_g` at identical conditions, and they still separate — on `commit`
+(`bb93cf3` vs `2ad4a37`), each reported "only in before / only in after -- not compared". That is
+the rule working rather than a limitation: a new arm is a new commit, so both arms of any comparison
+must run in one invocation.
+
+### The number this run was actually for, and it is not in the table
+
+`--subset full`'s only remaining blocker is a measured cost per dataset, and **the baseline's wall
+cost is invisible at `credit_g`'s size and dominant at `higgs`'s**. Run-to-run LLM latency spread is
+~4s, which swamps it here, so the unit point was timed directly at three shapes (200 trees,
+`n_jobs=1`, same encoder, on synthetic frames of matching size):
+
+| shape | rows x cols | unit-point fit + score |
+|---|---|---|
+| `credit_g` | 1000 x 20 | **0.20s** |
+| `adult` (largest `medium`) | 48842 x 14 | **9.85s** |
+| `higgs` | 98050 x 28 | **72.09s** |
+
+A run's LLM portion is ~21s. So on `higgs` the baseline alone would roughly quadruple wall time,
+and **none of that is visible from the cheapest dataset in the manifest** — which is the same lesson
+`bench-smoke`'s factor-of-two cost error taught, arriving on wall clock instead of dollars.
+`BASELINE_TIMEOUT_S = 900` is comfortable against 72s. If wall time later becomes the binding
+constraint, `n_estimators` is the lever and `baseline_recipe` is what makes pulling it visible in
+the data.
+
+**Not a comparand.** Same rule and same reason as every smoke before it: `commit` is an `eval-diff`
+condition field. This file is a write-path proof and a first characterisation. What it is good for
+is the four endpoints above and the timing table.
+
+### Two columns retired at this commit
+
+`baseline_score` and `score_ratio` no longer exist on `results_row()`. Every row in every file dated
+on or before 2026-08-31 carries both as `null` — checked across all 149 rows and pinned by
+`tests/test_evaldiff.py::test_no_committed_row_ever_carried_a_retired_score` — so **no measurement
+was lost and no committed file was edited**. They are replaced by `baseline_zero_score`,
+`baseline_unit_score`, `baseline_normalised_score`, `baseline_status`, `baseline_detail` and
+`baseline_recipe`. Recorded here because a future reader who concatenates this directory will get a
+`score_ratio` column that is null for a reason nothing on the row explains, and this is the row that
+explains it. See DECISIONS.md 2026-08-31 (fourth entry).

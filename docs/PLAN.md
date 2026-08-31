@@ -228,6 +228,17 @@ retrofitting that onto a harness built without it would have meant rewriting it.
 the zero-objection `block` fix NEXT.md named as the first code change, and three new results-row
 columns (`errors`, `commit`, `default_model`) the harness needed in order to be worth running.
 
+Scope note (2026-08-31, third): the phase's last box is closed and `--subset full` now waits on
+money rather than on code. The decision it needed turned out to be a *retirement*: `score_ratio`
+computed `verified / baseline` where AMLB's convention is `(x - zero) / (unit - zero)`, so both it
+and `baseline_score` are gone, replaced by two raw points and one derived column. The pooling hazard
+that motivated the deferral is closed by a gate on `planted_leakage_columns` -- written now even
+though it cannot fire today, because fixtures withhold nothing and the contradiction only becomes
+reachable the day the carve widens. One thing the plan did not anticipate and it re-prices the rest
+of the phase: the unit point costs 0.20s on `credit_g` and **72s on `higgs`**, so the yardstick is
+invisible at the cheapest dataset and dominant at the largest, and the per-dataset cost estimate
+`full` still needs has to be measured at two sizes rather than extrapolated from one.
+
 Scope note (2026-08-31, second): the re-scorer landed and `--subset full` is one blocker lighter,
 not zero. The run path exists and is exercised by `--subset bench-smoke`; what remains is
 `baseline_score` and a measured cost for the other twelve datasets. `bench-smoke`'s own estimate
