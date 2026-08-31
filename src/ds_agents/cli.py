@@ -407,9 +407,18 @@ def _run_once(
         # `mcp` it disconnects the session and the server subprocess, and its worker, exit with it.
         tools.close()
 
+    # Grading is two independent measurements, in two sandboxes, in this order. The re-scorer
+    # produces the number; the baseline produces the scale it is read against, and is given the
+    # re-scorer's outcome because there is no scale to place a number on when there is no number.
+    # A baseline failure never reaches the score -- see `rescore.BaselineStatus`.
     if isinstance(inputs, rescore.RescoreOutcome):
-        return rescore.apply(state, inputs)
-    return rescore.apply(state, rescore.rescore(state, prepared, inputs, root=root / "rescore"))
+        # No feature code or no split. Neither the re-scorer nor the baseline can run, and neither
+        # touches a sandbox to establish it; the call shape stays uniform so `baseline_status` is
+        # written on every row rather than only on the rows that got that far.
+        return rescore.apply(state, inputs, rescore.baseline_precondition(prepared, inputs))
+    outcome = rescore.rescore(state, prepared, inputs, root=root / "rescore")
+    scale = rescore.baseline(state, prepared, inputs, outcome, root=root / "baseline")
+    return rescore.apply(state, outcome, scale)
 
 
 def _append_results_row(

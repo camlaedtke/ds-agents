@@ -672,7 +672,7 @@ Priority: **load-bearing** means the thesis breaks if this is wrong and you cann
 ### normalisation-is-not-a-ratio — why `baseline_score` was deferred rather than guessed
 - Priority: load-bearing
 - Came up: 2026-08-31, deciding not to ship `baseline_score`
-- Status: flagged
+- Status: flagged (resolved 2026-08-31 — two raw points ship, the ratio does not; see [[reference-system-independence]])
 - Why it matters here: AMLB's convention is a *normalisation* — score a system as
   `(it − zero) / (unit − zero)`, where zero is a constant class-prior predictor and unit is a tuned
   RandomForest. `PipelineState.score_ratio` is a *ratio*: `verified / baseline`. Those are not the
@@ -687,3 +687,67 @@ Priority: **load-bearing** means the thesis breaks if this is wrong and you cann
   before computing a normalised score, ask what the reference system was allowed to see, and
   whether the thing being measured was allowed to see the same. Related: [[published-vs-baseline]],
   [[eval-baselines]], [[complete-list-or-nothing]], [[two-splits]].
+
+### reference-system-independence — a yardstick that inherits what it measures is not a yardstick
+- Priority: load-bearing
+- Came up: 2026-08-31, deciding what `baseline_unit_score` is allowed to see
+- Status: flagged
+- Why it matters here: the baseline could have been fit on the agents' post-`feature_eng` matrix.
+  It would have been cheaper, reused machinery that already exists, and produced a perfectly
+  reasonable-looking number. It would also have answered a different question. A RandomForest on
+  the agents' own columns asks "was the promoted model the right choice", which is a *modeler*
+  question; a RandomForest on the raw frame asks "did this team beat a reference system", which is
+  the thesis. The independence is what makes the second question askable at all, and independence
+  is expensive in exactly one way: the reference system now sees a column the agents were supposed
+  to drop, so on a dataset with a planted trap the baseline **should** beat a pipeline that behaved
+  correctly. That is not a bug to be tuned away, it is the price of the property, and it is paid by
+  suppressing the normalised column on such datasets rather than by weakening the baseline. The
+  general shape: when you build a comparand, the first question is not "is it strong enough" but
+  "what was it allowed to see, and was the thing being measured allowed to see the same". A
+  comparand that saw *less* is unfair; one that saw *more* is unfair in the other direction and
+  much harder to notice, because it makes your own system look worse and nobody audits a
+  disappointing number. Related: [[normalisation-is-not-a-ratio]], [[published-vs-computed-baseline]],
+  [[measurement-independence]], [[eval-baselines]], [[two-splits]].
+
+### failure-domain-separation — the instrument may fail without taking the measurement with it
+- Priority: load-bearing
+- Came up: 2026-08-31, deciding whether the baseline extends the re-scorer's snippet
+- Status: flagged
+- Why it matters here: the obvious build was to add the two baseline fits to the end of
+  `RESCORE_SNIPPET` — same process, same sandbox call, one JSON line out. It works, and it has one
+  property that disqualifies it: a RandomForest that runs out of memory on a 98k-row frame and a
+  refit that fails are then **the same process exit code**. `verified_holdout_score` is the number
+  this half of the project exists to produce, and it would be destroyed by a failure in the
+  optional thing measured beside it. So the baseline got its own process, its own timeout, and its
+  own status enum, and `unit_point_failed` is a real value that keeps `baseline_zero_score`
+  alongside it. The reasoning generalises past sandboxes: whenever two computations of different
+  importance share a failure domain — one process, one transaction, one request, one try block —
+  the less important one can take the more important one down, and no amount of care inside the
+  code changes that, because the sharing is what does it. The tell that you have this problem is
+  having to *reconstruct* which half failed from tagged output; if you are parsing your own logs to
+  recover a distinction, the distinction should have been structural. There is a second, quieter
+  reason here too: one timeout budget covering two fits makes the same code return `ok` on a fast
+  machine and `snippet_failed` on a slow one, which is a reproducibility bug with no wrong line in
+  it. Related: [[instrument-contaminates-measurement]], [[reference-system-independence]],
+  [[complete-list-or-nothing]].
+
+### a-metric-floor-is-not-zero — the bottom of a scale is measured, not assumed
+- Priority: useful
+- Came up: 2026-08-31, replacing `score_ratio` with `baseline_normalised_score`
+- Status: flagged
+- Why it matters here: the retired `score_ratio` divided by a baseline and carried a guard whose
+  comment said "the predict-the-mean baseline for r2 is exactly 0.0". It is not. A
+  `DummyRegressor(strategy="mean")` predicts the **train** mean, while r2's denominator is the
+  holdout's variance about the **holdout** mean, so a constant predictor scores slightly *negative*
+  on held-out rows. The number was small enough that nothing would have crashed and wrong enough
+  that a ratio built on it would have been quietly meaningless. Measured rather than recalled, the
+  floors are: roc_auc exactly 0.5 (every pair is a tie, so this doubles as a correctness assertion
+  on the whole grading chain — positive class, scorer sign, row selection); f1 exactly 0.0 when
+  positive is the minority, which is an artifact of never predicting positive rather than a floor;
+  accuracy the majority-class rate; log_loss, rmse and mae all non-zero and dataset-dependent. Only
+  one of those is a constant. The fix is not a better guard, it is a better *function*: subtracting
+  a measured zero point, `(v − z) / (u − z)`, needs no assumption about where the floor is, and it
+  is direction-invariant for free because both differences flip sign together on a lower-is-better
+  metric. The general shape: "normalise by the baseline" and "normalise from the baseline" sound
+  alike and only the second one survives a metric whose floor is not zero.
+  Related: [[normalisation-is-not-a-ratio]], [[eval-baselines]], [[reference-system-independence]].

@@ -81,8 +81,9 @@ TaskType = Literal["binary", "multiclass", "regression"]
 
 Metric = Literal["roc_auc", "accuracy", "f1", "log_loss", "rmse", "mae", "r2"]
 
-# Which direction counts as better. `score_ratio` is meaningless without this: the same ratio
-# means "good" for roc_auc and "bad" for rmse.
+# Which direction counts as better. `holdout_claim_gap` and `baseline_normalised_score` are both
+# meaningless without it: the same raw difference means "the agents overstated themselves" for
+# roc_auc and "they understated themselves" for rmse.
 GREATER_IS_BETTER: dict[str, bool] = {
     "roc_auc": True,
     "accuracy": True,
@@ -227,7 +228,49 @@ Nothing here ever appends a `PipelineError`. `errored` means the RUN went wrong;
 with "the grader went wrong" is the defect NEXT.md already records against it.
 """
 
+BaselineStatus = Literal[
+    "not_attempted",
+    "no_withheld_holdout",
+    "rescore_unavailable",
+    "empty_source_matrix",
+    "single_class_train",
+    "zero_point_failed",
+    "unit_point_failed",
+    "snippet_failed",
+    "sandbox_error",
+    "ok",
+]
+"""Why `baseline_zero_score` and `baseline_unit_score` are or are not on this row.
+
+Its own enum rather than a widening of `RescoreStatus`, and this is the whole reason the baseline
+runs in its own process: the yardstick can fail without the measurement failing. A RandomForest
+that dies on a wide frame must not take `verified_holdout_score` with it, and if the two shared a
+status column there would be no way to say so. `unit_point_failed` is the value that exists for
+that case -- `baseline_zero_score` is KEPT on such a row, because the zero point was measured and
+throwing it away would hide the fact that the scale has a floor but no ceiling.
+
+`rescore_unavailable` is the coupling that does exist and is stated rather than hidden: the
+baseline is fit on the agents' `split["train"]` and scored on the same withheld rows, so almost
+every reason the re-scorer could not run is also a reason this could not. `baseline_detail` carries
+which `rescore_status` it was.
+
+Two things are deliberately NOT statuses. A degenerate scale -- the unit point level with or below
+the zero point -- stays `ok`, because both points really were measured and that is a finding about
+the dataset rather than a failure to measure; `baseline_normalised_score` returns `None` and the
+two raw columns show why. And a planted leak leaves both raw scores on the row untouched: only the
+normalised column is suppressed, by the gate in `baseline_normalised_score`.
+"""
+
 DEFAULT_RANDOM_SEED = 20260822
+
+BASELINE_MIN_SEPARATION = 1e-9
+"""The smallest `unit - zero` that `baseline_normalised_score` will divide by.
+
+A divide-by-zero guard and nothing more. It is deliberately NOT a power criterion: deciding whether
+a separation is large enough to be meaningful needs `n_withheld_rows` and belongs in `evaldiff`,
+and a computed field that silently withholds numbers on a statistical test is worse than one that
+publishes an unstable number next to the two inputs a reader can check it against.
+"""
 
 
 class RunConfig(Contract):
@@ -587,7 +630,6 @@ class PipelineState(Contract):
         description="Scored by the harness on a holdout the agents never see. The gap against "
         "chosen_model.claimed_holdout_score is itself a finding.",
     )
-    baseline_score: float | None = None
     rescore_status: RescoreStatus = Field(
         default="not_attempted",
         description="Why verified_holdout_score is or is not present. Never an error on the run.",
@@ -608,6 +650,36 @@ class PipelineState(Contract):
         default=None,
         description="How many rows verified_holdout_score was measured on. Without it a gap of "
         "0.05 on 200 rows is indistinguishable from one on 20000.",
+    )
+    baseline_zero_score: float | None = Field(
+        default=None,
+        description="AMLB's zero point -- a constant class-prior predictor, fit on the agents' "
+        "train split and scored on the same withheld rows as the run. For roc_auc this is exactly "
+        "0.5 by construction, which makes it a correctness assertion on the grader as well as a "
+        "column.",
+    )
+    baseline_unit_score: float | None = Field(
+        default=None,
+        description="AMLB's unit point in convention only: a RandomForest on the raw columns, "
+        "fit and scored on the same rows as the zero point. The recipe is OURS -- see "
+        "rescore.BASELINE_SPECS and baseline_recipe -- because AMLB's own grid cannot be "
+        "re-fetched from this repo.",
+    )
+    baseline_status: BaselineStatus = Field(
+        default="not_attempted",
+        description="Why the two baseline points are or are not present. Independent of "
+        "rescore_status on purpose: the yardstick can fail without the measurement failing.",
+    )
+    baseline_detail: str = Field(
+        default="",
+        description="Free text for the statuses that have something to say -- a snippet's last "
+        "lines, or which rescore_status blocked the baseline. Never parsed.",
+    )
+    baseline_recipe: str = Field(
+        default="",
+        description="Version string for the unit point's recipe, on the ROW so that a change to "
+        "it is visible in the data and not only in git. Two rows carrying different values must "
+        "never be pooled into one normalised distribution.",
     )
 
     # bookkeeping
@@ -634,27 +706,50 @@ class PipelineState(Contract):
 
     @computed_field
     @property
-    def score_ratio(self) -> float | None:
-        """Direction-aware, so classification and regression rows mean the same thing.
+    def baseline_normalised_score(self) -> float | None:
+        """Where this run sits on the scale from a constant predictor to a RandomForest.
 
-        `None` on a zero denominator rather than an exception. A computed field that raises takes
-        `model_dump_json()` and `results_row()` down with it, and ARCHITECTURE.md requires a row
-        for every dataset even on hard failure -- losing the row for the worst outcomes biases
-        every table upward. Two zeros are reachable, not hypothetical: rmse 0.0 is what a perfect
-        leaked copy scores, and the predict-the-mean baseline for r2 is exactly 0.0.
+        `(verified - zero) / (unit - zero)`. 0.0 means the run did no better than predicting the
+        class prior; 1.0 means it matched the RandomForest; above 1.0 means it beat it. This is
+        AMLB's normalisation and NOT a ratio -- `verified / baseline` disagrees with it about what
+        1.0 means, and on a metric whose floor is not zero it is meaningless. r2 is the example
+        that settles it: a predict-the-train-mean baseline scores slightly NEGATIVE on a holdout,
+        not 0.0, because the r2 denominator is the holdout's variance about its own mean.
 
-        The r2 case is a real gap, not just a guard: a ratio against a 0.0 baseline has no
-        meaning, so those rows need a difference column instead. See docs/NEXT.md.
+        Written as a difference the formula is already direction-invariant -- for a lower-is-better
+        metric both differences flip sign together and the quotient is unchanged -- so the explicit
+        branch below buys only the sign guard, and `tests/test_state.py` pins that the two forms
+        agree so a future simplification cannot reintroduce the bug the ratio had.
+
+        Never raises, for the reason the retired `score_ratio` gave: a computed field that raises
+        takes `model_dump_json()` and `results_row()` down with it, and ARCHITECTURE.md requires a
+        row for every dataset even on hard failure.
         """
         if self.verified_holdout_score is None or self.spec is None:
             return None
-        if self.baseline_score is None or self.baseline_score == 0.0:
+        if self.baseline_zero_score is None or self.baseline_unit_score is None:
             return None
-        if self.spec.greater_is_better:
-            return self.verified_holdout_score / self.baseline_score
-        if self.verified_holdout_score == 0.0:
+        # SUPPRESSED ON A PLANTED LEAK, and this is the pooling hazard's whole resolution. The
+        # baseline is fit on every raw column, including the trap the pipeline was supposed to
+        # drop. On a labelled dataset a pipeline that correctly drops it therefore scores BELOW a
+        # baseline that kept it -- so a value under 1 would be evidence of GOOD behaviour there and
+        # of BAD behaviour on an unlabelled dataset, the same number meaning opposite things with
+        # nothing on the row to separate them. Gated exactly as the nine leakage columns are gated
+        # on `graded_for_leakage`, for the mirror-image reason. Both raw points STAY on the row:
+        # they are honest measurements, and a reader who knows about the trap can use them.
+        if self.planted_leakage_columns:
             return None
-        return self.baseline_score / self.verified_holdout_score
+        raw = self.baseline_unit_score - self.baseline_zero_score
+        separation = raw if self.spec.greater_is_better else -raw
+        # `<=`, not `abs(...) < eps`. A NEGATIVE separation means the RandomForest did worse than
+        # the class prior, which inverts the scale: a run that beat the prior would come out
+        # negative and a reader would take that for "worse than the prior". Reachable rather than
+        # hypothetical -- f1 with a minority positive class has a zero point of exactly 0.0, and a
+        # dataset with no signal at all separates the two points by noise in either direction.
+        if separation <= BASELINE_MIN_SEPARATION:
+            return None
+        numerator = self.verified_holdout_score - self.baseline_zero_score
+        return (numerator if self.spec.greater_is_better else -numerator) / separation
 
     def objected_columns(
         self,
@@ -837,8 +932,6 @@ class PipelineState(Contract):
             "claimed_holdout_score": claimed,
             "verified_holdout_score": self.verified_holdout_score,
             "holdout_claim_gap": gap,
-            "baseline_score": self.baseline_score,
-            "score_ratio": self.score_ratio,
             "metric": self.spec.metric if self.spec else None,
             # Why the two columns above do or do not carry a number, and what the number was
             # measured on. `rescore_status` is to the score what `leakage_graded` is to the nine
@@ -847,6 +940,18 @@ class PipelineState(Contract):
             "rescore_detail": self.rescore_detail[:ERROR_MESSAGE_LIMIT],
             "refit_claim_gap": self.refit_claim_gap,
             "n_withheld_rows": self.n_withheld_rows,
+            # The scale `verified_holdout_score` is read against: a constant class-prior
+            # predictor at 0 and a RandomForest at 1, both fit on the agents' train split and
+            # scored on the same withheld rows. Published as two raw points plus the
+            # normalisation, rather than as one `baseline_score`, because a single number cannot
+            # say which end of the scale it is -- and because the normalised column is suppressed
+            # on a dataset with a planted leak while the two raw points are not.
+            "baseline_zero_score": self.baseline_zero_score,
+            "baseline_unit_score": self.baseline_unit_score,
+            "baseline_normalised_score": self.baseline_normalised_score,
+            "baseline_status": self.baseline_status,
+            "baseline_detail": self.baseline_detail[:ERROR_MESSAGE_LIMIT],
+            "baseline_recipe": self.baseline_recipe,
             # leakage, as a set comparison against ground truth
             #
             # Stated outright rather than left to be inferred from nine separate `None`s. This is

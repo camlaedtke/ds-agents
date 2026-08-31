@@ -1453,3 +1453,122 @@ path reaches a results row, so nothing published moves.
 more than a factor of two and wrong in the cheap direction. That is the argument for measuring the
 other twelve before `full` runs rather than extrapolating from this one — a factor-of-two error on
 `credit_g` at 1000 rows says nothing useful about `higgs` at 98k.
+
+## 2026-08-31 (fourth entry): the baseline is two points and not one number, and `score_ratio` is
+## retired because a single column cannot say which end of a scale it is
+
+Written before the eval invocation below, and before any cell was funded. The re-scorer's own
+pre-registration deferred `baseline_score` for two named reasons and this entry settles both.
+
+**`score_ratio` is retired, and so is `baseline_score`.** `PipelineState.score_ratio` computed
+`verified / baseline`. AMLB's convention is an affine normalisation, `(x - zero) / (unit - zero)`,
+and those are different functions that disagree about what `1.0` means. What ships instead is
+`baseline_zero_score`, `baseline_unit_score`, `baseline_status`, `baseline_detail`,
+`baseline_recipe`, and one computed `baseline_normalised_score` built from the two points. The
+alternative -- keep `baseline_score` as the unit point and gate `score_ratio` on `leakage_graded` --
+was the smaller change and was rejected: it preserves a singular `baseline_score` whose meaning a
+reader cannot recover from the row, which is the exact defect the whole exercise is about. Retiring
+a published column is only free if nothing was published in it, and that is checked rather than
+claimed: **all 149 committed rows across nine results files carry both as `null`**, now pinned by
+`tests/test_evaldiff.py::test_no_committed_row_ever_carried_a_retired_score`. No committed file was
+edited. Both retired names stay in the AST ban list in `tests/test_benchmark_manifest.py`, because a
+resurrection would be a regression rather than a feature.
+
+**The pooling hazard is closed by a gate, and the gate protects a case that is not yet reachable.**
+`baseline_normalised_score` returns `None` whenever `planted_leakage_columns` is non-empty. The
+baseline is fit on every raw column including the trap, so on a labelled dataset a pipeline that
+correctly drops it scores *below* a baseline that kept it -- the same number meaning opposite things
+on labelled and unlabelled rows. Worth stating plainly: **that contradiction cannot fire today.**
+Fixtures have `withheld_fraction = 0.0`, so no fixture row is graded at all and every row that can
+carry a baseline is a benchmark row with an empty planted list. The gate is written now because it
+costs one `if` now, and because DECISIONS already parks "widening the carve to fixtures" as a future
+cell -- at which point the contradiction would fire silently, on rows nobody re-read. The two raw
+points are NOT gated: they are honest measurements, and a reader who knows about the trap can use
+them. This is `graded_for_leakage` applied for the mirror-image reason.
+
+**The unit point's recipe is ours, and it is versioned on the row.** AMLB publishes the convention
+and not a grid this repo can re-fetch -- `openml1.win.tue.nl` presents a self-signed certificate --
+so `rescore.BASELINE_SPECS` is a RandomForest at `n_estimators=200, max_features="sqrt",
+min_samples_leaf=1, n_jobs=1`, chosen here and labelled as ours everywhere it is described. Fixed
+rather than tuned: a tuned baseline needs a search space and a validation protocol, and each is
+another invented number nobody can cite. `n_estimators=200` rather than 500 is a cost decision, not
+a statistical one -- thirteen datasets up to 98k rows, and the unit point is a yardstick rather than
+a competitor. `baseline_recipe` ("rf-v1") goes on every row that attempted the fit, because two runs
+graded against different yardsticks must not be pooled and a reader holding a results file cannot
+see a commit.
+
+**The baseline sees the raw columns, through the grader's own encoder.** Not the agents'
+`feature_code_artifact`. A yardstick that inherits the decisions it is measuring cannot say whether
+those decisions helped -- it would answer "was the promoted model the right one", a modeler
+question, rather than "did the team beat a reference system". The encoder is mechanical and
+deliberately dumb: median-impute numerics, ordinal-encode categoricals with `unknown_value=-1` so a
+level present in the withheld rows and absent from train has somewhere to go. It imposes a false
+ordering on nominal codes and keeps high-cardinality columns `feature_eng` skips, which makes the
+unit point a **floor rather than a ceiling** -- stated here so nobody later reads a run beating it
+as beating a strong model. Both points are fit on the agents' own `split["train"]`, not on every
+non-withheld row: giving the baseline more data than the model got would bias the comparison against
+the agents.
+
+**The baseline runs in its own process, with its own timeout and its own enum, and that is the
+design.** A RandomForest that dies on a wide frame must not take `verified_holdout_score` with it.
+In one process those two failures are the same exit code and telling them apart means reconstructing
+from tagged stdout a distinction the OS just erased. `BaselineStatus` is a ten-value enum whose
+load-bearing member is `unit_point_failed`, which **keeps `baseline_zero_score`** -- discarding it
+would hide that the scale has a floor and no ceiling. `rescore_unavailable` is the coupling that
+does exist, named rather than hidden: the baseline shares the split and the withheld rows, so nearly
+every reason the re-scorer could not run binds it too, and the detail says which. Two things are
+deliberately not statuses. A degenerate scale -- the unit point level with or below the zero point --
+stays `ok`, because both points really were measured and that is a finding about the dataset rather
+than a failure to measure; only the quotient is withheld. And a planted leak leaves both raw scores
+untouched.
+
+**One docstring was wrong and the difference form is why it stopped mattering.** The retired
+`score_ratio` claimed "the predict-the-mean baseline for r2 is exactly 0.0" and needed a guard for
+it. Measured: it is slightly **negative**, because a `DummyRegressor(strategy="mean")` predicts the
+*train* mean while r2's denominator is the holdout's variance about its own mean. `(v-z)/(u-z)`
+handles that with no special case. The guard that replaced it is a different one and is not
+cosmetic: `separation <= eps`, not `abs(separation) < eps`, because a **negative** separation means
+the RandomForest did worse than the class prior and inverts the axis -- a run that beat the prior
+would read negative and a reader would take that for "worse than the prior".
+
+**Sensitivity is proved by construction, as it was for the re-scorer.** `_write_split_leak` cannot
+separate the baseline from the pipeline: under `StubModel` nothing is nominated and `feature_eng`
+drops nothing, so both see the same columns and a grader that reported the pipeline's number twice
+would pass. The separating mechanism is `MAX_ONE_HOT_LEVELS = 20`.
+`tests/test_rescore.py::_write_high_cardinality_signal` builds a 60-level *string* column whose
+level index is the target: `feature_eng` skips it as un-one-hot-encodable, so the pipeline is fit on
+noise alone, while the grader's `OrdinalEncoder` keeps it and the forest finds the threshold. The
+mirror image is tested too, on `_write_split_leak`, where the baseline is fooled by the leak exactly
+as the pipeline is -- so the instrument is not "the RandomForest always wins".
+
+**What was checked before anything was spent, and what that costs this pre-registration.** One
+`ds-agents run --dataset credit_g` was made first, deliberately, to protect the cap against a
+baseline that could not run on a real dataset at all. It returned `baseline_status: ok`,
+`baseline_zero_score` **exactly 0.5**, `baseline_unit_score` 0.7660, `verified_holdout_score` 0.7476
+(identical to the previous session's), `baseline_normalised_score` 0.9309, at $0.0168. So the zero
+point identity is stated here as an assertion already confirmed offline and once live, **not** as a
+prediction this entry gets credit for, and the cell below is not allowed to claim it as one.
+
+**What the cell IS allowed to claim, and the endpoints fixed in advance.** One `--subset
+bench-smoke` invocation, `--max-cost-usd 0.10`, 2 replicates x n=2. It is a **write-path proof and a
+first characterisation, not a comparand** -- `commit` is an `eval-diff` condition field, so both
+arms of any comparison must run in one invocation. Endpoints: (1) `baseline_status` is `ok` on 4 of
+4 rows; (2) `baseline_zero_score` is exactly 0.5 on every row, which is a correctness assertion on
+positive-class resolution, scorer sign and row selection all at once, and any other value is a bug
+rather than a measurement; (3) `baseline_recipe` is `rf-v1` on 4 of 4; (4) spend lands near the
+measured $0.0168/run, because **the baseline costs no tokens** -- it is pure sandbox compute -- so a
+material overrun would mean the forest is being charged somewhere nobody expected. The wall time of
+the two extra fits is recorded as the first data point for the per-dataset cost estimate that is now
+the ONLY remaining `--subset full` blocker. **A fifth number is explicitly not an endpoint**: whether
+`baseline_normalised_score` lands above or below 1.0 is a fact about `credit_g` and this recipe, at
+n=1 effective, on a dataset already known to produce numerically identical rows. It is a
+characterisation and will not be quoted as a result.
+
+**What is deliberately not here.** `--subset full` still refuses, and its message was rewritten for
+the third time -- the blocker is now only a measured cost per dataset. `benchmark.py`'s
+`BASELINE_DEFINITION.note` and `benchmark_build.py`'s `HEADER` still name `baseline_score` in prose,
+and are left alone on purpose: both are rendered into `evals/datasets/manifest.yaml`, which only
+`ds-agents datasets refresh` may write, and a refresh re-fetches every OpenML response and can move
+`published_reference`, which takes the max over uploaded runs. Changing prose is not worth a
+silently-moved citation. The rename rides the next planned refresh; no offline test compares the two,
+so nothing is red in the meantime.

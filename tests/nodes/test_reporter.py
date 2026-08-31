@@ -2,7 +2,7 @@
 
 The tests that matter here are the two properties CLAUDE.md and the node design call out
 explicitly: the reporter must never raise, even from a bare state where nothing upstream ran, and
-it must never render `planted_leakage_columns` / `verified_holdout_score` / `baseline_score` --
+it must never render `planted_leakage_columns` / `verified_holdout_score` / the baseline --
 those are harness-written answer keys that happen to be in scope because the node receives the
 whole state, and writing them into an artifact would leak the answer key into a file a Phase 5
 generalist arm might read through the artifact store.
@@ -153,7 +153,8 @@ def test_the_report_names_the_chosen_model_and_the_claimed_score():
 def test_the_report_does_not_contain_the_answer_key():
     """The test that keeps the artifact store clean for the Phase 5 generalist arm.
 
-    `planted_leakage_columns`, `verified_holdout_score`, and `baseline_score` are harness-written
+    `planted_leakage_columns`, `verified_holdout_score`, and the two baseline points are
+    harness-written
     ground truth that happens to be in scope because the node receives the whole state. None of
     them may reach the rendered artifact.
     """
@@ -161,7 +162,8 @@ def test_the_report_does_not_contain_the_answer_key():
         update={
             "planted_leakage_columns": ["secret_col"],
             "verified_holdout_score": 0.4242,
-            "baseline_score": 0.5151,
+            "baseline_zero_score": 0.5151,
+            "baseline_unit_score": 0.6262,
         }
     )
     tools = FakeTools()
@@ -172,6 +174,7 @@ def test_the_report_does_not_contain_the_answer_key():
     assert "secret_col" not in content
     assert "0.4242" not in content
     assert "0.5151" not in content
+    assert "0.6262" not in content
 
 
 def test_the_report_survives_a_state_where_everything_upstream_failed():

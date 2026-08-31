@@ -300,12 +300,26 @@ box, and it is what `--subset full` now waits on.
       every benchmark row. Deferred rather than rushed -- the unit point's recipe would be ours and
       not AMLB's, and the baseline sees every column including a leak, so `score_ratio` inverts its
       meaning between labelled and unlabelled datasets. See DECISIONS.md 2026-08-31 (third entry).
-- [ ] **`baseline_score`, and the pooling hazard it carries.** AMLB's two points -- a constant
-      class-prior predictor (0.5 roc_auc by construction; usable today as a correctness assertion)
-      and a tuned RandomForest whose grid must be invented here and labelled as ours. Both fit on
-      the agents' train split and scored on the same withheld holdout as the run. Needs its own
-      pre-registration, and needs an answer to whether `score_ratio` can be published at all when
-      it means opposite things on labelled and unlabelled datasets.
+- [x] **The baseline, and the pooling hazard it carried. `score_ratio` is retired.** The answer to
+      "can `score_ratio` be published at all" was no: it computed `verified / baseline`, which is
+      not AMLB's normalisation and disagrees with it about what 1.0 means. What ships instead is
+      two raw points plus one derived column -- `baseline_zero_score` (a constant class-prior
+      predictor, exactly 0.5 for roc_auc by construction and therefore a correctness assertion on
+      positive class, scorer sign and row selection at once), `baseline_unit_score` (a RandomForest
+      whose grid is OURS and is versioned on the row as `baseline_recipe`), and
+      `baseline_normalised_score = (verified - zero) / (unit - zero)`, which returns `None` on any
+      dataset with a planted leak because the baseline is fit on every raw column including the
+      trap. Both points fit on the agents' `split["train"]` and scored on the same withheld holdout
+      as the run, in their OWN sandbox process with their own timeout and their own ten-value
+      `BaselineStatus` -- a RandomForest that dies must not take `verified_holdout_score` with it,
+      and `unit_point_failed` keeps the zero point. Retiring two published columns was free and
+      that is checked rather than claimed: all 149 committed rows carry both as `null`, pinned by
+      test, and no committed results file was edited. Sensitivity is proved by construction, as it
+      was for the re-scorer: `tests/test_rescore.py` builds a 60-level string column `feature_eng`
+      skips and the grader's encoder keeps, so the pipeline scores the class prior and the baseline
+      scores near 1.0 -- a grader reporting the pipeline's number twice would fail it. Live on
+      `credit_g`: `baseline_status` ok, zero exactly 0.5, unit 0.7660 against a verified 0.7476,
+      normalised 0.9309. See DECISIONS.md 2026-08-31 (fourth entry).
 
 ## Phase 5: Ablations and writeup (3 to 4 sessions)
 - [~] reviewer on/off, Haiku/Sonnet reviewer, single agent vs team, loop cap 1/3. Two of these ran

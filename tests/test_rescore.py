@@ -60,6 +60,33 @@ def _write_split_leak(path: Path, n: int = 400, seed: int = 7) -> None:
     pd.DataFrame({"leak": leak, "noise": rng.normal(size=n), "y": y}).to_csv(path, index=False)
 
 
+def _write_high_cardinality_signal(
+    path: Path, n: int = 400, n_levels: int = 60, seed: int = 11
+) -> None:
+    """A dataset the agents structurally cannot use and the baseline can.
+
+    `group` is a 60-level STRING column and the target is `level < 30` -- one ordinal threshold.
+    `feature_eng` decides encodable columns by dtype and cardinality on the train rows, and skips a
+    string column above MAX_ONE_HOT_LEVELS (20), so `group` never reaches `SOURCE_COLUMNS` and the
+    pipeline is fit on `noise` alone. The grader's own encoder keeps it, so the RandomForest finds
+    the threshold the agents were never shown.
+
+    This is the ONLY mechanism in this file that separates the baseline from the pipeline.
+    `_write_split_leak` cannot: under `StubModel` nothing is nominated and `feature_eng` drops
+    nothing, so both would see the same columns and a grader that simply reported the pipeline's
+    number twice would pass. The gap this fixture forces is what says it does not.
+    """
+    rng = np.random.default_rng(seed)
+    level = rng.integers(0, n_levels, size=n)
+    pd.DataFrame(
+        {
+            "group": [f"g{v:02d}" for v in level],
+            "noise": rng.normal(size=n),
+            "y": (level < n_levels // 2).astype("int64"),
+        }
+    ).to_csv(path, index=False)
+
+
 def _pipeline_run(tmp_path: Path, csv_path: Path) -> PipelineState:
     dataset = _runnable(csv_path)
     prepared = prepare(
@@ -77,7 +104,9 @@ def _pipeline_run(tmp_path: Path, csv_path: Path) -> PipelineState:
     finally:
         tools.close()
     assert isinstance(inputs, RescoreInputs), f"could not read the run's artifacts: {inputs}"
-    return rescore.apply(state, rescore.rescore(state, prepared, inputs, root=tmp_path / "rescore"))
+    outcome = rescore.rescore(state, prepared, inputs, root=tmp_path / "rescore")
+    scale = rescore.baseline(state, prepared, inputs, outcome, root=tmp_path / "baseline")
+    return rescore.apply(state, outcome, scale)
 
 
 class TestTheInstrumentDetectsAnOverclaim:
@@ -177,37 +206,41 @@ class TestTheRefitRecipeHasOneSource:
                 assert SEED_SENTINEL not in merged.values()
 
 
+def _state(**update) -> PipelineState:
+    """A minimal state that clears every re-scorer precondition, so a test can fail exactly one."""
+    base = dict(
+        dataset_id="d",
+        task_description="x",
+        spec=TaskSpec(
+            target="y", task_type="binary", metric="roc_auc", split_strategy="stratified"
+        ),
+        final_features=["a"],
+        chosen_model=ModelResult(name="logistic_l2", claimed_holdout_score=0.9),
+    )
+    base.update(update)
+    return PipelineState(**base)
+
+
+def _prepared(tmp_path, *, withheld: bool = True):
+    csv_path = tmp_path / "d.csv"
+    rows = "a,y\n" + "".join(f"{i},{i % 2}\n" for i in range(60))
+    csv_path.write_text(rows)
+    dataset = _runnable(csv_path).model_copy(update={"withheld_fraction": 0.2 if withheld else 0.0})
+    return prepare(
+        dataset,
+        "descriptive",
+        into=tmp_path / "i",
+        withheld_into=tmp_path / "w",
+        seed=DEFAULT_RANDOM_SEED,
+    )
+
+
 @pytest.mark.fast
 class TestEveryStatusHasItsOwnReason:
     """One test per non-`ok` status. A catch-all here would defeat the point of the enum."""
 
-    def _state(self, **update) -> PipelineState:
-        base = dict(
-            dataset_id="d",
-            task_description="x",
-            spec=TaskSpec(
-                target="y", task_type="binary", metric="roc_auc", split_strategy="stratified"
-            ),
-            final_features=["a"],
-            chosen_model=ModelResult(name="logistic_l2", claimed_holdout_score=0.9),
-        )
-        base.update(update)
-        return PipelineState(**base)
-
-    def _prepared(self, tmp_path, *, withheld: bool = True):
-        csv_path = tmp_path / "d.csv"
-        rows = "a,y\n" + "".join(f"{i},{i % 2}\n" for i in range(60))
-        csv_path.write_text(rows)
-        dataset = _runnable(csv_path).model_copy(
-            update={"withheld_fraction": 0.2 if withheld else 0.0}
-        )
-        return prepare(
-            dataset,
-            "descriptive",
-            into=tmp_path / "i",
-            withheld_into=tmp_path / "w",
-            seed=DEFAULT_RANDOM_SEED,
-        )
+    _state = staticmethod(_state)
+    _prepared = staticmethod(_prepared)
 
     def _run(self, tmp_path, state, *, withheld=True) -> RescoreOutcome:
         return rescore.rescore(
@@ -338,3 +371,228 @@ class TestTheCarveIsNotInTheCache:
         )
         assert prepared.agent_csv != dataset.csv_path
         assert dataset.csv_path.read_bytes() == before
+
+
+class TestTheBaselineAndThePipelineCanDisagree:
+    """The question `TestTheInstrumentDetectsAnOverclaim` asks, asked of the yardstick.
+
+    Not "does it produce a number" but "would it produce a DIFFERENT number from the pipeline's".
+    A baseline that merely tracked the run would put every row at 1.0 and say nothing, and
+    `baseline_normalised_score` would be an expensive way of writing a constant.
+    """
+
+    def test_the_random_forest_finds_what_the_agents_were_never_shown(self, tmp_path):
+        csv_path = tmp_path / "high_card.csv"
+        _write_high_cardinality_signal(csv_path)
+        state = _pipeline_run(tmp_path, csv_path)
+
+        assert state.rescore_status == "ok", state.rescore_detail
+        assert state.baseline_status == "ok", state.baseline_detail
+        verified = state.verified_holdout_score
+        unit = state.baseline_unit_score
+        assert verified is not None and unit is not None
+        assert verified < 0.65, (
+            f"the pipeline should have had only noise to fit on; verified {verified}"
+        )
+        assert unit > 0.9, f"the baseline should have found the ordinal threshold; unit {unit}"
+        assert unit - verified > 0.3, (
+            "the baseline is tracking the pipeline rather than measuring the data"
+        )
+
+    def test_a_run_that_lost_the_signal_reads_near_the_floor_of_the_scale(self, tmp_path):
+        """0.0 is the constant-prior predictor and 1.0 is the RandomForest. A run that saw none of
+        the signal belongs at the bottom of that scale, and the number says so without anyone
+        having to compare two columns by eye."""
+        csv_path = tmp_path / "high_card.csv"
+        _write_high_cardinality_signal(csv_path)
+        state = _pipeline_run(tmp_path, csv_path)
+
+        normalised = state.results_row()["baseline_normalised_score"]
+        assert normalised is not None
+        assert normalised < 0.2, f"expected a run near the floor, got {normalised}"
+
+    def test_the_recipe_is_stamped_on_the_row(self, tmp_path):
+        """Two rows graded against different yardsticks must not be pooled, and a reader holding a
+        results file cannot see a commit."""
+        csv_path = tmp_path / "high_card.csv"
+        _write_high_cardinality_signal(csv_path)
+        row = _pipeline_run(tmp_path, csv_path).results_row()
+        assert row["baseline_recipe"] == rescore.BASELINE_RECIPE
+
+
+class TestTheZeroPointIsACorrectnessAssertion:
+    def test_a_constant_class_prior_predictor_scores_exactly_one_half(self, tmp_path):
+        """roc_auc of a constant score is 0.5 by construction -- every pair is a tie. So this is
+        not a measurement with a tolerance, it is an assertion that the grader resolved the
+        positive class, applied the scorer sign, and scored the rows it meant to. Anything but 0.5
+        means one of those is wrong, and would be invisible in `verified_holdout_score` alone.
+
+        Conditional on the metric, and checked rather than assumed: `metric` is chosen by intake,
+        which is a model, and `Runnable` deliberately does not carry one.
+        """
+        csv_path = tmp_path / "high_card.csv"
+        _write_high_cardinality_signal(csv_path)
+        state = _pipeline_run(tmp_path, csv_path)
+
+        assert state.spec is not None
+        if state.spec.metric != "roc_auc":
+            pytest.skip(f"intake chose {state.spec.metric!r}; the 0.5 identity is roc_auc's")
+        assert state.baseline_zero_score == pytest.approx(0.5, abs=1e-12)
+
+
+class TestTheBaselineCanAlsoFail:
+    """The mirror image, and the reason the two raw points are published rather than the ratio
+    alone: the baseline is not a system that always wins."""
+
+    def test_a_leak_fools_the_baseline_exactly_as_it_fools_the_pipeline(self, tmp_path):
+        """`_write_split_leak`'s `leak` column equals the target on the train rows and is a coin
+        flip on the withheld rows. The baseline keeps every raw column, so it fits on `leak` too
+        and collapses on the same rows the pipeline collapses on."""
+        csv_path = tmp_path / "split_leak.csv"
+        _write_split_leak(csv_path)
+        state = _pipeline_run(tmp_path, csv_path)
+
+        assert state.baseline_status == "ok", state.baseline_detail
+        assert state.baseline_unit_score is not None
+        assert state.baseline_unit_score < 0.7, (
+            f"the baseline is not 'the RandomForest always wins'; unit {state.baseline_unit_score}"
+        )
+
+    def test_a_scale_with_no_length_withholds_the_ratio_and_keeps_the_points(self, tmp_path):
+        """The separation guard firing on a REAL run rather than on a hand-written state. Both
+        points were measured correctly, so the status stays `ok` and both numbers stay on the row;
+        only the quotient is withheld, because there is no scale to place anything on."""
+        csv_path = tmp_path / "split_leak.csv"
+        _write_split_leak(csv_path)
+        row = _pipeline_run(tmp_path, csv_path).results_row()
+
+        assert row["baseline_status"] == "ok"
+        assert row["baseline_zero_score"] is not None
+        assert row["baseline_unit_score"] is not None
+        separation = row["baseline_unit_score"] - row["baseline_zero_score"]
+        if separation > 1e-9:
+            pytest.skip(f"the two points separated by {separation}; nothing to guard here")
+        assert row["baseline_normalised_score"] is None
+
+
+class TestEveryBaselineStatusHasItsOwnReason:
+    """One test per value. A catch-all here would defeat the point of the enum, which is that
+    "no dataset was withheld", "there was no score to place on a scale" and "the RandomForest
+    died" are three facts with different consequences for a table.
+    """
+
+    @staticmethod
+    def _outcome(**update) -> RescoreOutcome:
+        base = {"status": "ok", "verified_holdout_score": 0.8}
+        return RescoreOutcome(**{**base, **update})
+
+    def test_a_fixture_withholds_nothing_and_says_so(self, tmp_path):
+        prepared = _prepared(tmp_path, withheld=False)
+        result = rescore.baseline_precondition(prepared, self._outcome())
+        assert result.status == "no_withheld_holdout"
+
+    def test_no_score_means_no_scale_and_carries_which_rescore_status_it_was(self, tmp_path):
+        """The coupling that genuinely exists, named on the row so a reader never has to join two
+        columns to find out why this one is null."""
+        prepared = _prepared(tmp_path, withheld=True)
+        result = rescore.baseline_precondition(
+            prepared, self._outcome(status="no_model", verified_holdout_score=None)
+        )
+        assert result.status == "rescore_unavailable"
+        assert "no_model" in result.detail
+
+    def test_an_unparseable_snippet_is_reported_not_raised(self, tmp_path):
+        """A split manifest with no `train` key. The snippet raises inside the sandbox, and the
+        grader records that rather than taking the run down with it."""
+        prepared = _prepared(tmp_path, withheld=True)
+        state = _state()
+        inputs = RescoreInputs(feature_code="", split_json="{}")
+        result = rescore.baseline(
+            state, prepared, inputs, self._outcome(), root=tmp_path / "baseline"
+        )
+        assert result.status == "snippet_failed"
+        assert result.detail
+
+    def test_an_empty_source_matrix_has_its_own_name(self):
+        assert (
+            rescore._baseline_outcome({"status": "empty_source_matrix", "detail": "no columns"})
+        ).status == "empty_source_matrix"
+
+    def test_a_single_class_train_split_has_its_own_name(self):
+        assert (
+            rescore._baseline_outcome({"status": "single_class_train"})
+        ).status == "single_class_train"
+
+    def test_a_failed_zero_point_keeps_the_unit_point(self):
+        result = rescore._baseline_outcome(
+            {"status": "zero_point_failed", "zero_score": None, "unit_score": 0.81}
+        )
+        assert result.status == "zero_point_failed"
+        assert result.unit_score == 0.81
+
+    def test_a_failed_unit_point_keeps_the_zero_point(self):
+        """The single most important assertion here, because it is the reason the baseline runs in
+        its own process at all. The RandomForest is the thing most likely to die on a wide frame,
+        and when it does the zero point is still a measurement -- discarding it would hide that
+        the scale has a floor and no ceiling.
+        """
+        result = rescore._baseline_outcome(
+            {
+                "status": "unit_point_failed",
+                "zero_score": 0.5,
+                "unit_score": None,
+                "detail": "MemoryError",
+            }
+        )
+        assert result.status == "unit_point_failed"
+        assert result.zero_score == 0.5
+        assert result.unit_score is None
+        assert result.recipe == rescore.BASELINE_RECIPE, (
+            "the unit point was attempted, so the row must say which recipe failed"
+        )
+
+    def test_a_sandbox_that_will_not_start_is_reported_not_raised(self, tmp_path, monkeypatch):
+        prepared = _prepared(tmp_path, withheld=True)
+
+        def _boom(*args, **kwargs):
+            raise RuntimeError("no worker")
+
+        monkeypatch.setattr("ds_agents.tools.local.LocalTools.run_python", _boom)
+        result = rescore.baseline(
+            _state(),
+            prepared,
+            RescoreInputs(feature_code="", split_json='{"train": [0], "holdout": [1]}'),
+            self._outcome(),
+            root=tmp_path / "baseline",
+        )
+        assert result.status == "sandbox_error"
+        assert "RuntimeError" in result.detail
+
+    def test_a_status_the_snippet_never_names_falls_back_to_snippet_failed(self):
+        """A payload with no `status` is a contract violation, not an `ok`."""
+        assert rescore._baseline_outcome({}).status == "snippet_failed"
+
+    def test_only_an_attempted_unit_point_stamps_a_recipe(self):
+        """A row that never reached the RandomForest must not claim to have been graded against
+        it. An empty `baseline_recipe` is what says the yardstick was never built."""
+        assert rescore._baseline_outcome({"status": "single_class_train"}).recipe == ""
+        assert rescore._baseline_outcome({"status": "ok", "unit_score": 0.7}).recipe == (
+            rescore.BASELINE_RECIPE
+        )
+
+
+class TestABaselineFailureIsNotARunFailure:
+    def test_a_missing_scale_never_appends_a_pipeline_error(self):
+        """Same rule as `rescore_status`: `errored` means the RUN went wrong. Overloading it with
+        "the yardstick went wrong" is the defect NEXT.md already records against it."""
+        graded = rescore.apply(
+            _state(),
+            RescoreOutcome(status="ok", verified_holdout_score=0.8),
+            rescore.BaselineOutcome(status="unit_point_failed", zero_score=0.5),
+        )
+        assert graded.errors == []
+        row = graded.results_row()
+        assert row["errored"] is False
+        assert row["baseline_status"] == "unit_point_failed"
+        assert row["baseline_zero_score"] == 0.5
+        assert row["baseline_normalised_score"] is None

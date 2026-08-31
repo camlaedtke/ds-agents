@@ -154,12 +154,16 @@ def _resolve_subset(subset: str) -> tuple[Cell, ...]:
     """`SUBSETS[subset]`, or a `ValueError` that says why the name did not resolve.
 
     `full` gets its own message because it is not a typo -- it is real Phase 4 scope that has not
-    finished. The blocker has MOVED AGAIN, and the message says where to. The manifest exists, and
-    so does the run path: a `Cell` can name a manifest dataset, a holdout is withheld before the
-    graph starts and `verified_holdout_score` is measured on it. `bench-smoke` proves that on
-    `credit_g`. What is missing is `baseline_score`, which means `score_ratio` is null on every
-    benchmark row, and per-dataset cost estimates for the other twelve -- `SUBSETS` numbers are
-    measured, and nobody has measured a 98k-row run.
+    finished. The blocker has MOVED AGAIN, and the message says where to. Everything about the
+    GRADING is now built: the manifest exists, a `Cell` can name a manifest dataset, a holdout is
+    withheld before the graph starts, `verified_holdout_score` is measured on it, and the scale it
+    is read against -- a constant class-prior predictor and a RandomForest, both on the same rows
+    -- is measured beside it. `bench-smoke` proves all of that on `credit_g`.
+
+    What is left is money. Every `est_cost_usd` in `SUBSETS` is a measurement, nobody has measured
+    a 98k-row run, and `bench-smoke`'s own guess was wrong by more than a factor of two in the
+    cheap direction -- which is the argument for measuring the other twelve rather than
+    extrapolating from the cheapest one.
 
     Any other unknown name is more likely a typo, so it gets the shorter message -- but both list
     what IS runnable, because that is what the caller needs next either way.
@@ -169,12 +173,13 @@ def _resolve_subset(subset: str) -> tuple[Cell, ...]:
     available = ", ".join(sorted(SUBSETS))
     if subset == "full":
         raise ValueError(
-            "subset 'full' is not runnable yet, but the run path now IS: a manifest dataset "
-            "can be run and scored on a withheld holdout -- see `--subset bench-smoke`, which "
-            "does exactly that on credit_g. What is missing for all 13 is baseline_score (so "
-            "score_ratio would be null on every row) and a measured cost per dataset; these are "
-            "real datasets up to 98k rows and the estimates in SUBSETS are measurements, not "
-            "guesses. Also note dataset_id is an eval-diff condition field, so 13 datasets is 13 "
+            "subset 'full' is not runnable yet, and what is missing is now only a measured cost "
+            "per dataset. The grading is done: a manifest dataset can be run, scored on a "
+            "withheld holdout, and placed on a measured scale -- see `--subset bench-smoke`, "
+            "which does exactly that on credit_g. But these are real datasets up to 98k rows, "
+            "every estimate in SUBSETS is a measurement rather than a guess, and bench-smoke's "
+            "own pre-run guess was out by more than a factor of two. Measure the other twelve "
+            "first. Also note dataset_id is an eval-diff condition field, so 13 datasets is 13 "
             "cells. See docs/PLAN.md Phase 4 and docs/NEXT.md. "
             f"Available subsets: {available}."
         )

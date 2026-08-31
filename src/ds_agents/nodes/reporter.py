@@ -1,9 +1,10 @@
 """reporter: render one human-readable markdown report for the run and cite it as an artifact.
 
 Reads everything on `PipelineState` except `planted_leakage_columns`, `verified_holdout_score`,
-and `baseline_score`. Writes `report_artifact` (plus `node_trace`, and `errors` on the one failure
-path). Tools: `write_artifact` only -- the report cites artifact IDs (`feature_code_artifact`,
-`importance_artifact`) rather than inlining their contents. No model call in Phase 1.
+and the two baseline points. Writes `report_artifact` (plus `node_trace`, and `errors` on the one
+failure path). Tools: `write_artifact` only -- the report cites artifact IDs
+(`feature_code_artifact`, `importance_artifact`) rather than inlining their contents. No model call
+in Phase 1.
 
 Two properties matter more than the prettiness of the markdown:
 
@@ -13,7 +14,8 @@ Two properties matter more than the prettiness of the markdown:
    from the results and every published table biases upward. Every section below guards on
    `None` rather than assuming an upstream node ran.
 2. This node must never render ground truth. `planted_leakage_columns`, `verified_holdout_score`,
-   and `baseline_score` are harness-written answer keys that happen to be in scope because the
+   and the baseline columns are harness-written answer keys that happen to be in scope because
+   the
    node receives the whole state. In the real pipeline they are still `None` here (the harness
    fills them in after the graph ends), but nothing below reads them regardless -- writing them
    into an artifact would leak the answer key into a file a Phase 5 single-generalist arm might

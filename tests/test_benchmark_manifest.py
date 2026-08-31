@@ -5,7 +5,7 @@ the provenance fields and the internal consistency the registry promises, withou
 network. `tests/test_benchmark_provenance.py` is the online half, which checks the same file
 against the APIs it came from.
 
-The two tests worth reading before the rest are `test_no_manifest_field_can_reach_baseline_score`
+The two tests worth reading before the rest are `test_no_manifest_field_can_reach_a_measured_score`
 and `test_nothing_in_nodes_imports_a_dataset_registry`. Both encode rules that are otherwise only
 prose in a docstring, and both describe failures that would produce a plausible-looking number
 rather than an error.
@@ -234,13 +234,31 @@ class TestBoundaries:
                 elif isinstance(node, ast.Constant) and isinstance(node.value, str):
                     assert node.value not in banned, f"{path.name} names {node.value} as a string"
 
-    def test_no_manifest_field_can_reach_baseline_score(self) -> None:
+    _BANNED_SCORE_FIELDS = {
+        # Live.
+        "verified_holdout_score",
+        "baseline_zero_score",
+        "baseline_unit_score",
+        "baseline_normalised_score",
+        "baseline_status",
+        "baseline_recipe",
+        # Retired 2026-08-31, kept banned. See the docstring below.
+        "baseline_score",
+        "score_ratio",
+    }
+
+    def test_no_manifest_field_can_reach_a_measured_score(self) -> None:
         """The measurement-independence guarantee, as an executable invariant.
 
         A published score came from OpenML's 10-fold CV run by another flow;
-        `verified_holdout_score` will come from this repo's withheld holdout. Wiring one to the
-        other would attribute a difference between protocols to a difference between systems --
-        and would do it silently, producing a `score_ratio` that looks entirely reasonable.
+        `verified_holdout_score` comes from this repo's withheld holdout, and the two baseline
+        points come from fits on that same holdout. Wiring a manifest number to any of them would
+        attribute a difference between protocols to a difference between systems -- and would do it
+        silently, producing a normalised score that looks entirely reasonable.
+
+        The two RETIRED names stay in the banned sets. They named real fields once, the prose in
+        both modules still discusses them, and a resurrection would be a regression rather than a
+        new feature.
         """
         for name in ("benchmark.py", "benchmark_build.py"):
             source = (SRC / name).read_text()
@@ -249,28 +267,16 @@ class TestBoundaries:
             tree = ast.parse(source)
             for node in ast.walk(tree):
                 if isinstance(node, ast.Attribute):
-                    assert node.attr not in {
-                        "baseline_score",
-                        "verified_holdout_score",
-                    }, f"{name} touches {node.attr}"
+                    assert node.attr not in self._BANNED_SCORE_FIELDS, f"{name} touches {node.attr}"
                 if isinstance(node, ast.keyword):
-                    assert node.arg not in {
-                        "baseline_score",
-                        "verified_holdout_score",
-                    }, f"{name} passes {node.arg}"
+                    assert node.arg not in self._BANNED_SCORE_FIELDS, f"{name} passes {node.arg}"
                 if isinstance(node, ast.Name):
-                    assert node.id not in {
-                        "baseline_score",
-                        "verified_holdout_score",
-                        "score_ratio",
-                    }, f"{name} binds {node.id}"
+                    assert node.id not in self._BANNED_SCORE_FIELDS, f"{name} binds {node.id}"
                 # String-keyed access -- `row["baseline_score"] = x`, or `setattr(s, "...", x)` --
                 # reaches the same field without ever appearing as an attribute or a name. The
                 # docstrings above DO discuss these fields, so only `ast.Constant` string nodes
                 # are checked, never the raw file text.
                 if isinstance(node, ast.Constant) and isinstance(node.value, str):
-                    assert node.value not in {
-                        "baseline_score",
-                        "verified_holdout_score",
-                        "score_ratio",
-                    }, f"{name} uses {node.value!r} as a string literal"
+                    assert node.value not in self._BANNED_SCORE_FIELDS, (
+                        f"{name} uses {node.value!r} as a string literal"
+                    )

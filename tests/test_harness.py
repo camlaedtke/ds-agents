@@ -158,25 +158,29 @@ class TestForcedDropReleaseIsAClosedAxis:
 
 
 class TestTheFullSubsetIsNotYetRunnable:
-    """`full` no longer waits on the re-scorer either -- it waits on `baseline_score`.
+    """`full` no longer waits on anything that has to be built. It waits on money.
 
-    This message has now been wrong twice, both times because the blocker moved rather than
-    because anyone mistyped it. First it named a missing manifest that had landed; then it named a
-    missing run path that now exists and is exercised by `bench-smoke`. So the assertion is on the
-    CURRENT blocker: if someone ships `baseline_score` without updating this message, this fails.
+    This message has now been wrong THREE times, every time because the blocker moved rather than
+    because anyone mistyped it: first it named a missing manifest that had landed, then a missing
+    run path that `bench-smoke` exercises, then a missing `baseline_score` that now ships as
+    `baseline_zero_score` / `baseline_unit_score`. Each of those assertions was written to fail the
+    moment the thing it named arrived, which is the only reason the message was ever corrected. So
+    the pattern continues: the positive assertion is on the CURRENT blocker, and the negative ones
+    keep every retired blocker out, because a message that still names a shipped feature as missing
+    is not stale, it is false.
     """
 
-    def test_full_raises_pointing_at_the_missing_baseline(self):
+    def test_full_raises_pointing_at_the_only_remaining_blocker(self):
         with pytest.raises(ValueError) as excinfo:
             run_eval(subset="full", name="probe", dry_run=True)
 
         message = str(excinfo.value)
-        assert "baseline_score" in message
-        assert "score_ratio" in message
+        assert "cost" in message, "the remaining blocker is a measured cost per dataset"
         assert "bench-smoke" in message, "the message must point at what DOES work"
-        assert "verified_holdout_score" not in message, (
-            "the re-scorer shipped; a message still naming it as missing is false"
-        )
+        for shipped in ("baseline_score", "score_ratio", "verified_holdout_score"):
+            assert shipped not in message, (
+                f"{shipped} shipped or was retired; a message still naming it as missing is false"
+            )
         assert "toy" in message
         assert "ci" in message
 

@@ -25,7 +25,7 @@ project has learned. Do not quote any 10-run count as an effect without a replic
 | `toy` | `toy-default` only | ~$0.015 | every session, sanity |
 | `ci` | 3 cells, one per fixture | ~$0.025/run measured | regression gate |
 | `bench-smoke` | `credit_g`, one cell | ~$0.016/run measured | the benchmark path |
-| `full` | errors today | -- | blocked on `baseline_score` |
+| `full` | errors today | -- | blocked on per-dataset measured cost |
 
 `bench-smoke` is the only subset naming a dataset nobody in this repo wrote. One cell on purpose:
 `dataset_id` is an `eval-diff` condition field, so each dataset added is a whole cell's worth of
@@ -41,10 +41,11 @@ withheld before the graph started, beside `rescore_status` saying why it is or i
 **Never pool the two.** `holdout_claim_gap` is the benchmark column, `leakage_remediated` is the
 fixture column, and neither exists on the other kind of row.
 
-`full` is not implemented, and its blocker has now moved twice. The manifest landed 2026-08-31 and
-so did the run path -- what is missing is `baseline_score`, so `score_ratio` is null on every
-benchmark row, and a measured cost per dataset for the other twelve. The command tells you this
-rather than running something else.
+`full` is not implemented, and its blocker has now moved three times. The manifest landed
+2026-08-31, so did the run path, and so did the baseline the score is read against -- what is left
+is a measured cost per dataset for the other twelve, and `bench-smoke`'s own pre-run guess was out
+by more than a factor of two, so do not extrapolate. The command tells you this rather than running
+something else.
 
 Never run anything beyond `toy` without confirming the config and the cost cap with the user first.
 

@@ -74,7 +74,8 @@ forced to mislabel it.
 | router | reviewer_claim, reviewer_dispositions, review_iterations, config.loop_cap, config.reviewer_enabled, open objections | review_iterations, review_verdict, review_passes | none | feature_eng / modeler / reporter |
 | reporter | everything except the ground-truth fields below | report_artifact | write_artifact | END |
 
-No node writes `planted_leakage_columns`, `verified_holdout_score`, or `baseline_score`. Those are
+No node writes `planted_leakage_columns`, `verified_holdout_score`, or the `baseline_*` columns.
+Those are
 harness-written ground truth; a node that could see them could game them. The reporter additionally
 must not *render* them: it receives the whole state, and writing the answer key into a report
 artifact would leak it into the store that the Phase 5 single-generalist arm reads.
@@ -278,10 +279,11 @@ answer key — and that rule is now enforced by an AST test rather than by three
 
 **A published number is not a baseline.** Each manifest entry carries a `published_reference`: the
 best AUC uploaded to that OpenML task, with its run id. It was produced on OpenML's 10-fold CV by
-another flow, so it is informational and must never reach `baseline_score`, which is measured on
+another flow, so it is informational and must never reach a measured score column, which is on
 this repo's own withheld holdout alongside the run it grades. Dividing across the two protocols
-would produce a `score_ratio` that looks reasonable and means nothing. No code path from the
-manifest to `baseline_score` exists, and an AST test keeps it that way.
+would produce a normalised score that looks reasonable and means nothing. No code path from the
+manifest to any measured score column exists, and an AST test keeps it that way -- including for
+the two retired names, `baseline_score` and `score_ratio`, so a resurrection is a regression.
 
 ## Eval outcomes per dataset
 
@@ -297,8 +299,11 @@ the `*_recall` columns already followed. `evaldiff` excludes `None` metrics from
 so an unlabelled dataset drops out of a rate instead of dragging it down. What was flagged and
 nominated is still recorded; not-graded is not not-observed.
 
-Scores: `claimed_holdout_score`, `verified_holdout_score`, `holdout_claim_gap`, `baseline_score`,
-`score_ratio` (direction-aware — a ratio means the opposite thing for RMSE and AUC), `metric`.
+Scores: `claimed_holdout_score`, `verified_holdout_score`, `holdout_claim_gap`, `metric`, and the
+scale they are read against — `baseline_zero_score` (a constant class-prior predictor),
+`baseline_unit_score` (our RandomForest on the raw columns), `baseline_normalised_score`
+(`(verified − zero) / (unit − zero)`, direction-aware, and `None` on a dataset with a planted leak
+because the baseline kept the trap), plus `baseline_status` / `baseline_detail` / `baseline_recipe`.
 
 Leakage, as a set comparison against ground truth rather than two booleans: `leakage_planted`,
 `leakage_flagged`, `leakage_caught`, `leakage_remediated`, `leakage_recall`, `leakage_precision`,

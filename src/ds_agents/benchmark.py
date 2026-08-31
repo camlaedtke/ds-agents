@@ -18,13 +18,14 @@ Two rules this module exists to keep, both pinned by test in `tests/test_benchma
 
   1. Nothing in `nodes/` imports it. Same reason as `fixtures.py` -- a node that can read a
      registry can read the answer key.
-  2. Nothing in it can reach `PipelineState.baseline_score`. A published score was produced on
-     OpenML's own 10-fold CV by somebody else's flow; `verified_holdout_score` will be produced by
-     this pipeline on a holdout this repo withholds. Dividing one by the other and calling it
-     `score_ratio` would attribute the difference between two PROTOCOLS to the difference between
-     two SYSTEMS. `published_reference` is therefore informational and deliberately has no path
-     into the results row. `baseline_score` must be computed alongside the run it is compared
-     against, from the baseline DEFINITION recorded in the manifest.
+  2. Nothing in it can reach a measured score column. A published score was produced on OpenML's
+     own 10-fold CV by somebody else's flow; `verified_holdout_score` is produced by this pipeline
+     on a holdout this repo withholds. Dividing one by the other and calling it a normalised score
+     would attribute the difference between two PROTOCOLS to the difference between two SYSTEMS.
+     `published_reference` is therefore informational and deliberately has no path into the results
+     row. `baseline_zero_score` and `baseline_unit_score` are computed alongside the run they are
+     compared against, from the baseline DEFINITION recorded in the manifest -- see
+     `rescore.baseline`.
 
 This module is deliberately dumb in the way `fixtures.py` is: it resolves paths, validates shape,
 and hands back a typed object. It does no network I/O and imports neither sklearn nor urllib --
@@ -78,9 +79,9 @@ class SelectionRule(BaseModel):
 
 SELECTION_RULE = SelectionRule(
     rule_version=1,
-    # One task type and one metric across the whole set. `score_ratio` is direction-aware, and a
-    # mixed set would also drag in the r2-baseline-of-exactly-0.0 hole that `score_ratio`'s own
-    # docstring already flags as a real gap.
+    # One task type and one metric across the whole set, so that every row's normalised score is
+    # measured from the same floor. A mixed set would also mean a mixed set of zero points: r2's is
+    # slightly negative and f1's is exactly 0.0, and neither is comparable to roc_auc's 0.5.
     task_types=["binary"],
     metric="roc_auc",
     # Wall time. `reissued_ids` already averages 86s a run at 2,000 rows.
@@ -165,8 +166,11 @@ CITATION = SourceBlock(
 class BaselineDefinition(BaseModel):
     """AMLB's calibration convention, recorded as a DEFINITION rather than as numbers.
 
-    This is the field that says what `PipelineState.baseline_score` must be computed from. It
-    carries no number on purpose: see the note, and the module docstring's rule 2.
+    This is the field that says what `baseline_zero_score` and `baseline_unit_score` must be
+    computed from. It carries no number on purpose: see the note, and the module docstring's rule
+    2. The `note` text is rendered verbatim into the generated manifest and still names the retired
+    `baseline_score`; it rides the next `datasets refresh` rather than a prose-only commit, because
+    a refresh re-fetches every OpenML response and can move `published_reference`.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -260,7 +264,7 @@ class PublishedReference(BaseModel):
     """A real, citable score somebody else published on this OpenML task.
 
     Informational. `protocol` is a required field rather than a comment because it is the reason
-    this cannot be `baseline_score`, and a reader who skips the module docstring should still hit
+    this cannot be a baseline point, and a reader who skips the module docstring should still hit
     the caveat on the value itself.
     """
 

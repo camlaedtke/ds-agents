@@ -286,6 +286,28 @@ class TestTheCommittedResultsFilesStillParseAndGroup:
                 key = cell_key(row)
                 assert len(key) == len(CONDITION_FIELDS)
 
+    def test_no_committed_row_ever_carried_a_retired_score(self):
+        """`baseline_score` and `score_ratio` were retired on 2026-08-31 and replaced by
+        `baseline_zero_score` / `baseline_unit_score` / `baseline_normalised_score`.
+
+        Retiring a published column is only free if nothing was ever published in it, and this is
+        the check that says so rather than the claim that says so. Every committed row carries both
+        as `null`, so no measurement is lost and no committed file needs editing -- which matters
+        because this repo does not edit committed results files, and a schema change that REQUIRED
+        one would have to be designed differently.
+
+        It stays true forever, because nothing writes either name any more. If it ever fails,
+        someone resurrected a retired column and the two names now mean two different things in one
+        corpus.
+        """
+        for path in sorted(RESULTS_DIR.glob("*.jsonl")):
+            for i, row in enumerate(load_rows(path)):
+                for retired in ("baseline_score", "score_ratio"):
+                    assert row.get(retired) is None, (
+                        f"{path.name} row {i} carries a value in the retired column {retired!r}; "
+                        "retiring it would lose a measurement"
+                    )
+
     def test_load_rows_never_writes_to_the_file_it_reads(self):
         path = sorted(RESULTS_DIR.glob("*.jsonl"))[0]
         before = path.read_bytes()

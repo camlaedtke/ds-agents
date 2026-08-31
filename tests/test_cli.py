@@ -437,7 +437,7 @@ class TestTheEvalCommands:
         args = self.parse("eval", "--subset", "full", "--name", "x")
 
         assert cmd_eval(args) == 2
-        assert "baseline_score" in capsys.readouterr().err
+        assert "cost" in capsys.readouterr().err
 
     def test_a_dry_run_exits_0_without_writing(self, tmp_path):
         """Zero rows is only an error when something was supposed to run. A dry run writing no

@@ -100,7 +100,10 @@ def populated_state() -> PipelineState:
         report_artifact="art-report-1",
         planted_leakage_columns=["account_status_code"],
         verified_holdout_score=0.74,
-        baseline_score=0.70,
+        baseline_zero_score=0.50,
+        baseline_unit_score=0.72,
+        baseline_status="ok",
+        baseline_recipe="rf-v1",
         errors=[
             PipelineError(
                 node="profiler",
@@ -120,7 +123,12 @@ class TestRoundTrip:
     def test_computed_fields_survive_into_the_dump(self):
         """The harness reads these out of the JSONL; a plain @property would vanish silently."""
         dumped = json.loads(populated_state().model_dump_json())
-        for key in ("total_cost_usd", "loop_exhausted", "wall_seconds", "score_ratio"):
+        for key in (
+            "total_cost_usd",
+            "loop_exhausted",
+            "wall_seconds",
+            "baseline_normalised_score",
+        ):
             assert key in dumped
         assert dumped["spec"]["greater_is_better"] is True
         assert dumped["node_trace"][0]["wall_seconds"] is None
@@ -754,24 +762,6 @@ class TestObjectionRouting:
 
 
 class TestDerivedNumbers:
-    def test_score_ratio_is_direction_aware(self):
-        higher = PipelineState(
-            dataset_id="d",
-            task_description="x",
-            spec=TaskSpec(target="y", task_type="binary", metric="roc_auc"),
-            verified_holdout_score=0.8,
-            baseline_score=0.7,
-        )
-        lower = PipelineState(
-            dataset_id="d",
-            task_description="x",
-            spec=TaskSpec(target="y", task_type="regression", metric="rmse"),
-            verified_holdout_score=0.7,
-            baseline_score=0.8,
-        )
-        assert higher.score_ratio > 1
-        assert lower.score_ratio > 1, "beating an RMSE baseline means a LOWER score"
-
     def test_cv_mean_is_none_without_scores(self):
         assert ModelResult(name="empty").cv_mean is None
         assert ModelResult(name="m", cv_scores=[0.5, 0.7]).cv_mean == pytest.approx(0.6)
@@ -793,30 +783,124 @@ class TestDerivedNumbers:
         """Naive datetimes make committed JSONL inconsistent across machines."""
         assert PipelineState(dataset_id="t", task_description="x").started_at.tzinfo is not None
 
-    def test_zero_baseline_r2_gives_none_ratio_without_raising(self):
-        """The predict-the-mean baseline for r2 is exactly 0.0. A ratio against it is meaningless,
-        not an exception."""
-        state = PipelineState(
-            dataset_id="toy",
-            task_description="x",
-            spec=TaskSpec(target="y", task_type="regression", metric="r2"),
-            verified_holdout_score=0.4,
-            baseline_score=0.0,
-        )
-        assert state.score_ratio is None
-        assert state.results_row()["score_ratio"] is None
 
-    def test_zero_verified_rmse_gives_none_ratio_without_raising(self):
-        """rmse 0.0 is what a perfect leaked copy scores. Dividing by it must not raise."""
-        state = PipelineState(
-            dataset_id="toy",
-            task_description="x",
+class TestTheBaselineScale:
+    """`baseline_normalised_score` is `(verified - zero) / (unit - zero)`, and the things it
+    refuses to compute are as load-bearing as the arithmetic."""
+
+    @staticmethod
+    def _state(**update):
+        base = {
+            "dataset_id": "d",
+            "task_description": "x",
+            "spec": TaskSpec(target="y", task_type="binary", metric="roc_auc"),
+            "verified_holdout_score": 0.80,
+            "baseline_zero_score": 0.50,
+            "baseline_unit_score": 0.75,
+            "baseline_status": "ok",
+            "baseline_recipe": "rf-v1",
+        }
+        return PipelineState(**{**base, **update})
+
+    def test_the_scale_runs_from_the_zero_point_to_the_unit_point(self):
+        assert self._state(verified_holdout_score=0.50).baseline_normalised_score == 0.0
+        assert self._state(verified_holdout_score=0.75).baseline_normalised_score == 1.0
+        assert self._state().baseline_normalised_score == pytest.approx(1.2)
+
+    def test_beating_the_random_forest_reads_above_one(self):
+        assert self._state(verified_holdout_score=0.90).baseline_normalised_score > 1
+
+    def test_it_is_direction_aware(self):
+        """A lower rmse is a better rmse, and both directions must mean the same thing."""
+        higher = self._state()
+        lower = self._state(
             spec=TaskSpec(target="y", task_type="regression", metric="rmse"),
-            verified_holdout_score=0.0,
-            baseline_score=1.2,
+            verified_holdout_score=1.0,
+            baseline_zero_score=2.0,
+            baseline_unit_score=1.5,
         )
-        assert state.score_ratio is None
-        assert state.results_row()["score_ratio"] is None
+        assert higher.baseline_normalised_score > 1
+        assert lower.baseline_normalised_score > 1, "beating an RMSE unit point means a LOWER score"
+
+    def test_the_unbranched_difference_form_agrees_with_the_branched_one(self):
+        """Written as a difference the formula is ALREADY direction-invariant: for a lower-is-
+        better metric both differences flip sign together and the quotient is unchanged. The
+        explicit branch buys only the sign guard. Pinned so a future simplification that drops the
+        branch cannot quietly reintroduce the bug the retired `score_ratio` had, where the ratio
+        form needed the branch to mean anything at all."""
+        for state in (
+            self._state(),
+            self._state(
+                spec=TaskSpec(target="y", task_type="regression", metric="rmse"),
+                verified_holdout_score=1.0,
+                baseline_zero_score=2.0,
+                baseline_unit_score=1.5,
+            ),
+        ):
+            unbranched = (state.verified_holdout_score - state.baseline_zero_score) / (
+                state.baseline_unit_score - state.baseline_zero_score
+            )
+            assert state.baseline_normalised_score == pytest.approx(unbranched)
+
+    def test_a_planted_leak_suppresses_the_ratio_and_keeps_both_raw_points(self):
+        """THE POOLING HAZARD, closed. The baseline is fit on every raw column including the trap,
+        so on a labelled dataset a pipeline that correctly drops it scores BELOW a baseline that
+        kept it -- and a value under 1 would then mean good behaviour here and bad behaviour on an
+        unlabelled dataset, with nothing on the row to separate them. Only the normalised column is
+        suppressed: the two measured points are honest and stay."""
+        clean = self._state()
+        trapped = self._state(planted_leakage_columns=["leak"])
+        assert clean.baseline_normalised_score is not None
+        assert trapped.baseline_normalised_score is None
+        assert trapped.results_row()["baseline_normalised_score"] is None
+        for state in (clean, trapped):
+            row = state.results_row()
+            assert row["baseline_zero_score"] == 0.50
+            assert row["baseline_unit_score"] == 0.75
+            assert row["baseline_status"] == "ok"
+
+    def test_a_metric_floor_of_zero_is_no_longer_a_special_case(self):
+        """The retired `score_ratio` needed a guard for a 0.0 baseline. The difference form does
+        not: an f1 zero point of exactly 0.0, which is what a prior predictor scores when positive
+        is the minority class, is a perfectly good origin to measure from."""
+        state = self._state(
+            spec=TaskSpec(target="y", task_type="binary", metric="f1"),
+            verified_holdout_score=0.30,
+            baseline_zero_score=0.0,
+            baseline_unit_score=0.60,
+        )
+        assert state.baseline_normalised_score == pytest.approx(0.5)
+
+    def test_a_unit_point_level_with_the_zero_point_gives_none_without_raising(self):
+        """A scale with no length. Both points were measured correctly, so the STATUS stays `ok`
+        and the two raw columns stay on the row -- it is a finding about the dataset, not a failure
+        to measure. Only the quotient is withheld."""
+        state = self._state(baseline_unit_score=0.50)
+        assert state.baseline_status == "ok"
+        assert state.baseline_normalised_score is None
+        assert state.results_row()["baseline_normalised_score"] is None
+        assert state.results_row()["baseline_unit_score"] == 0.50
+
+    def test_a_unit_point_worse_than_the_prior_gives_none_rather_than_an_inverted_scale(self):
+        """The guard is `separation <= eps`, not `abs(separation) < eps`, and this is why. A
+        negative separation inverts the axis: a run that comfortably beat the prior would come out
+        NEGATIVE, and a reader would take that for 'worse than the prior'. Reachable on any dataset
+        with no signal, where the two points separate by noise in either direction."""
+        state = self._state(baseline_unit_score=0.45)
+        assert state.verified_holdout_score > state.baseline_zero_score
+        assert state.baseline_normalised_score is None
+
+    def test_a_missing_point_gives_none_rather_than_raising(self):
+        """`unit_point_failed` is a real status that keeps the zero point. The row must still
+        dump."""
+        state = self._state(baseline_unit_score=None, baseline_status="unit_point_failed")
+        assert state.baseline_normalised_score is None
+        row = state.results_row()
+        assert row["baseline_zero_score"] == 0.50
+        assert row["baseline_status"] == "unit_point_failed"
+
+    def test_no_verified_score_gives_none(self):
+        assert self._state(verified_holdout_score=None).baseline_normalised_score is None
 
 
 class TestResultsRow:
