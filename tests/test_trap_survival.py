@@ -28,11 +28,12 @@ from typing import NamedTuple
 
 import pytest
 
-from ds_agents.cli import _fixture_state
+from ds_agents.cli import _run_state
 from ds_agents.fixtures import load_fixture
 from ds_agents.graph import run_pipeline
 from ds_agents.naming import NAMINGS, materialize
 from ds_agents.naming import apply as apply_rename
+from ds_agents.runnable import Runnable
 from ds_agents.state import PipelineState
 from ds_agents.tools.llm import StubModel
 from ds_agents.tools.local import LocalTools
@@ -64,11 +65,12 @@ def runs(tmp_path_factory) -> dict[tuple[str, str], Run]:
     for name, naming in CASES:
         fixture = load_fixture(name)
         case = Path(root / f"{name}-{naming}")
-        dataset_path, rename = materialize(fixture, naming, case / "input")
+        runnable_dataset = Runnable.from_fixture(fixture)
+        dataset_path, rename = materialize(runnable_dataset, naming, case / "input")
         tools = LocalTools(case / "run", dataset_path=dataset_path, dataset_id=fixture.dataset_id)
         try:
             state = run_pipeline(
-                _fixture_state(fixture, naming=naming),
+                _run_state(runnable_dataset, naming=naming),
                 tools=tools,
                 model=StubModel(),
             )

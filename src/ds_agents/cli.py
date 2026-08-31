@@ -20,11 +20,14 @@ from typing import Any
 
 from dotenv import load_dotenv
 
-from ds_agents.fixtures import Fixture, available, load_fixture
+from ds_agents import rescore
+from ds_agents.fixtures import load_fixture
 from ds_agents.graph import run_pipeline
-from ds_agents.naming import NAMINGS, Naming, materialize, rename_map
+from ds_agents.holdout import PreparedDataset, prepare
+from ds_agents.naming import NAMINGS, Naming, rename_map
 from ds_agents.naming import apply as apply_rename
 from ds_agents.provenance import git_commit
+from ds_agents.runnable import Runnable, available, resolve
 from ds_agents.state import (
     FORCED_DROP_RELEASES,
     OBJECTION_CLOSURES,
@@ -46,9 +49,10 @@ from ds_agents.tools.protocol import Tools
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
-def _fixture_state(
-    fixture: Fixture,
+def _run_state(
+    runnable: Runnable,
     *,
+    prepared: PreparedDataset | None = None,
     model_name: str = "haiku",
     reviewer_model_name: str | None = None,
     naming: Naming = "descriptive",
@@ -59,9 +63,16 @@ def _fixture_state(
     forced_drop_release: ForcedDropRelease = "withdrawn_only",
     commit: str | None = None,
 ) -> PipelineState:
-    """The starting state for one run of `fixture` under one naming condition.
+    """The starting state for one run of `runnable` under one naming condition.
 
-    Everything after `fixture` is keyword-only. Every parameter here is a run condition, they are
+    Takes a `Runnable` rather than a `Fixture` so a manifest dataset can reach a run at all,
+    and takes it as one object rather than as loose fields for the reason the star below
+    exists: `planted_columns` travelling separately from the dataset it describes is how a
+    run gets graded against the wrong answer key. The empty list a benchmark dataset carries
+    is not special-cased here -- `results_row()` reads the emptiness and returns `None` from
+    every leakage rate rather than scoring one.
+
+    Everything after `runnable` is keyword-only. Every parameter here is a run condition, they are
     mostly strings, and `_run_once` passed all of them positionally: one transposition would have
     published a run under the wrong arm's label with nothing to catch it, because every value is
     individually valid and `RunConfig` is frozen at construction. The parking lot carried this as
@@ -76,7 +87,15 @@ def _fixture_state(
     `rename_map` is pure and reads one line of the CSV, and its determinism is pinned by test, so
     deriving it twice costs nothing and cannot disagree with what `materialize` wrote.
     """
-    rename = rename_map(fixture, naming)
+    rename = rename_map(runnable, naming)
+    # Derived from the SAME object the agents were mounted on, not recomputed from `runnable`.
+    # A config claiming a 20% carve while the mounted CSV was the whole file is exactly the shape
+    # of silent mislabelling the star above exists to prevent, one level further down.
+    if prepared is not None and prepared.rename != rename:
+        raise ValueError(
+            f"{runnable.dataset_id}: the prepared file was written under a different rename than "
+            f"{naming!r} produces, so the ground truth would name columns the agents never saw"
+        )
     return PipelineState(
         config=RunConfig(
             reviewer_enabled=True,
@@ -118,24 +137,37 @@ def _fixture_state(
             # rows apart when the difference between them is a bug fix rather than a flag -- which
             # is every unconditional change this project has made, the block-retry included.
             commit=commit,
+            # What the agents were actually shown: how much was held back, which registry it came
+            # from, and the hash of the exact bytes. Without the first, a benchmark row and a
+            # fixture row look like the same kind of measurement; without the third, two rows
+            # under one `dataset_id` that saw different files are indistinguishable.
+            holdout_fraction=prepared.withheld_fraction if prepared else 0.0,
+            dataset_source=runnable.source,
+            dataset_hash=prepared.agent_sha256 if prepared else None,
         ),
-        dataset_id=fixture.dataset_id,
+        dataset_id=runnable.dataset_id,
         # No `spec`: naming the target is intake's job, and pre-filling it here would skip the
         # node under test. The description is what a person would actually say.
-        task_description=fixture.task_description,
+        task_description=runnable.task_description,
         # Ground truth, written at construction so a bare run can grade itself. Nodes never set
         # this; the reviewer must find the leak without being told where it is. Renamed to match
         # what the agents were actually shown -- without the map applied here, `results_row()`
         # would compare objections against names that do not exist in the opaque arm's data and
         # every opaque run would score a silent zero.
-        planted_leakage_columns=apply_rename(fixture.manifest.planted_columns, rename),
+        planted_leakage_columns=apply_rename(runnable.planted_columns, rename),
+        # Recorded at construction so a run that never reaches the grader still says how many rows
+        # were held back from it. `rescore.apply` overwrites it with what was actually scored,
+        # which is smaller wherever a withheld row had no label.
+        n_withheld_rows=prepared.n_withheld_rows if prepared else None,
     )
 
 
 def _toy_state(model_name: str = "haiku", reviewer_model_name: str | None = None) -> PipelineState:
     """The toy fixture's state, by name. Kept as its own function because tests call it."""
-    return _fixture_state(
-        load_fixture("toy"), model_name=model_name, reviewer_model_name=reviewer_model_name
+    return _run_state(
+        Runnable.from_fixture(load_fixture("toy")),
+        model_name=model_name,
+        reviewer_model_name=reviewer_model_name,
     )
 
 
@@ -221,7 +253,7 @@ def _select_tools(transport: str, root: Path, dataset: Path, dataset_id: str) ->
 
 def cmd_run(args: argparse.Namespace) -> int:
     try:
-        fixture = load_fixture(args.dataset)
+        dataset = resolve(args.dataset)
     except SystemExit as exc:
         print(str(exc), file=sys.stderr)
         return 2
@@ -237,11 +269,25 @@ def cmd_run(args: argparse.Namespace) -> int:
         return 2
 
     root = Path(args.artifacts_dir) if args.artifacts_dir else Path(tempfile.mkdtemp())
-    # Materialised once per invocation, not once per repetition: every run in an arm must see the
-    # same bytes, and rewriting the file ten times is ten chances for them not to.
-    dataset_path, rename = materialize(fixture, args.naming, root / "input")
-    if rename:
-        print(f"naming: {args.naming} -- {dataset_path}", file=sys.stderr)
+    # Prepared once per invocation, not once per repetition: every run in an arm must see the
+    # same bytes AND be graded on the same withheld rows, and doing it per run is N chances for
+    # them not to be. `withheld` sits beside `input`, outside every run root -- see `holdout.py`.
+    prepared = prepare(
+        dataset,
+        args.naming,
+        into=root / "input",
+        withheld_into=root / "withheld",
+        seed=RunConfig().random_seed,
+    )
+    if prepared.rename:
+        print(f"naming: {args.naming} -- {prepared.agent_csv}", file=sys.stderr)
+    if prepared.withheld_csv is not None:
+        print(
+            f"withheld {prepared.n_withheld_rows} of "
+            f"{prepared.n_withheld_rows + prepared.n_agent_rows} rows before the graph starts; "
+            f"the agents see {prepared.n_agent_rows}",
+            file=sys.stderr,
+        )
 
     exit_code = 0
     width = len(str(args.repeat - 1))
@@ -253,13 +299,16 @@ def cmd_run(args: argparse.Namespace) -> int:
         # One artifact store per run, because the store is per-run: a shared root would let run 2
         # read run 1's artifact ids, which is the one way these repetitions could stop being
         # independent.
-        run_root = root if args.repeat == 1 else root / f"run-{index:0{width}d}"
+        # Always its own directory, even at `--repeat 1`. The grader writes under the run root
+        # too, and a run root that is sometimes the invocation root is a second layout for the
+        # containment test to have to know about.
+        run_root = root / f"run-{index:0{width}d}"
         if args.repeat > 1:
             print(f"\n=== run {index + 1} of {args.repeat} ===", file=sys.stderr)
         state = _run_once(
-            fixture,
+            dataset,
             root=run_root,
-            dataset_path=dataset_path,
+            prepared=prepared,
             commit=commit,
             transport=args.tools,
             no_live=args.no_live,
@@ -285,10 +334,10 @@ def cmd_run(args: argparse.Namespace) -> int:
 
 
 def _run_once(
-    fixture: Fixture,
+    runnable: Runnable,
     *,
     root: Path,
-    dataset_path: Path,
+    prepared: PreparedDataset,
     commit: str | None,
     transport: str = "mcp",
     no_live: bool = False,
@@ -296,12 +345,18 @@ def _run_once(
 ) -> PipelineState:
     """One pipeline run, start to finish. Extracted so `--repeat` is a loop and not a second path.
 
-    `dataset_path` rather than `fixture.csv_path`: under `--naming opaque` the agents see a
-    materialised copy with a rewritten header. Nothing below this line knows that -- the rename is
-    entirely above the tools boundary, which is why no node, tool or MCP change was needed for it.
+    `prepared` rather than `runnable.csv_path`: the agents see a materialised copy with a
+    rewritten header under `--naming opaque`, and on a benchmark dataset they see a copy with 20%
+    of the rows removed as well. Nothing below this line knows either -- both happen above the
+    tools boundary, which is why no node, tool or MCP change was needed for either of them.
+
+    The grader runs here rather than in the caller, after `run_pipeline` returns and before the
+    run's tools close, because `read_inputs` needs the run's own store and nothing else does. Its
+    result is written onto the state with `rescore.apply`, which never appends a `PipelineError`:
+    `errored` means the run went wrong, and a grader that could not grade is a different fact.
 
     Takes keywords rather than the `argparse.Namespace` it used to, so the harness can call it
-    without inventing a fake namespace. `conditions` is forwarded straight to `_fixture_state`,
+    without inventing a fake namespace. `conditions` is forwarded straight to `_run_state`,
     whose parameters are keyword-only -- the transposition guard that star exists for survives the
     hop, and the two callers cannot drift into two different ideas of what a run condition is.
 
@@ -315,8 +370,8 @@ def _run_once(
     once-per-invocation rule `_live_run` already follows for `materialize`. `None` stays a
     legitimate value (git missing, not a checkout), which is why there is no sentinel default.
     """
-    tools = _select_tools(transport, root, dataset_path, fixture.dataset_id)
-    state = _fixture_state(fixture, commit=commit, **conditions)
+    tools = _select_tools(transport, root, prepared.agent_csv, runnable.dataset_id)
+    state = _run_state(runnable, prepared=prepared, commit=commit, **conditions)
     # Said out loud for the same reason the StubModel warning is: this arm reproduces a known
     # defect, and a run that produced numbers under it without anyone noticing would be worse than
     # no run. A stderr line reads nothing any node reads, so the condition still has exactly one
@@ -343,12 +398,18 @@ def _run_once(
             print(f"reviewer running live against {reviewer_model.name}", file=sys.stderr)
 
     try:
-        return run_pipeline(state, tools=tools, model=model, reviewer_model=reviewer_model)
+        state = run_pipeline(state, tools=tools, model=model, reviewer_model=reviewer_model)
+        # Read while the run's store is still open; there is nothing to read it from afterwards.
+        inputs = rescore.read_inputs(state, tools)
     finally:
         # Releases this run's claim on the tools. Under `local` that leaves the shared sandbox
         # worker running, which is the point of sharing it -- it exits with this process. Under
         # `mcp` it disconnects the session and the server subprocess, and its worker, exit with it.
         tools.close()
+
+    if isinstance(inputs, rescore.RescoreOutcome):
+        return rescore.apply(state, inputs)
+    return rescore.apply(state, rescore.rescore(state, prepared, inputs, root=root / "rescore"))
 
 
 def _append_results_row(
@@ -543,7 +604,12 @@ def _build_parser() -> argparse.ArgumentParser:
     run.add_argument(
         "--dataset",
         default="toy",
-        help=f"fixture to run (default: toy). Available: {', '.join(available()) or '(none)'}",
+        help=(
+            "dataset to run (default: toy). Fixtures carry a planted answer key; benchmark\n"
+            "datasets from evals/datasets/manifest.yaml do not, and get a withheld holdout\n"
+            "instead. Available: "
+            + (", ".join(f"{n} ({s})" for n, s in available().items()) or "(none)")
+        ),
     )
     run.add_argument(
         "--artifacts-dir", default=None, help="where the run's artifacts land (default: a tempdir)"

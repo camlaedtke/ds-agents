@@ -35,7 +35,7 @@ from datetime import date
 from pathlib import Path
 from typing import Any
 
-from ds_agents.fixtures import Fixture
+from ds_agents.holdout import PreparedDataset
 from ds_agents.naming import Naming
 from ds_agents.state import ObjectionClosure, ObjectionRouting, PipelineState, ReviewerPrompt
 
@@ -139,6 +139,12 @@ SUBSETS: dict[str, tuple[Cell, ...]] = {
             est_cost_usd=0.029,
         ),
     ),
+    # The first subset that names a dataset nobody here wrote. One cell, one dataset, on purpose:
+    # `credit_g` is the cheapest thing in the manifest at 1000 rows, and the point is to prove the
+    # run-and-grade path end to end before thirteen of them are paid for. `est_cost_usd` is a
+    # GUESS here, unlike every number above it -- those were measured on 2026-08-31 and this one
+    # cannot be until this subset has run once.
+    "bench-smoke": (Cell(name="credit-g-default", dataset="credit_g", est_cost_usd=0.040),),
     # "full" is deliberately absent. See `_resolve_subset`.
 }
 
@@ -147,11 +153,12 @@ def _resolve_subset(subset: str) -> tuple[Cell, ...]:
     """`SUBSETS[subset]`, or a `ValueError` that says why the name did not resolve.
 
     `full` gets its own message because it is not a typo -- it is real Phase 4 scope that has not
-    finished. The blocker has MOVED: `evals/datasets/manifest.yaml` now exists, and the session-0
-    question it waited on (which OpenML suite has citable published baselines) is answered -- AMLB,
-    OpenML suite 271. What is missing is the run path. Nothing withholds a holdout, nothing
-    computes `verified_holdout_score` or `baseline_score`, and no `Cell` can name a manifest
-    dataset. Running `full` today would emit a row per dataset whose headline column is null.
+    finished. The blocker has MOVED AGAIN, and the message says where to. The manifest exists, and
+    so does the run path: a `Cell` can name a manifest dataset, a holdout is withheld before the
+    graph starts and `verified_holdout_score` is measured on it. `bench-smoke` proves that on
+    `credit_g`. What is missing is `baseline_score`, which means `score_ratio` is null on every
+    benchmark row, and per-dataset cost estimates for the other twelve -- `SUBSETS` numbers are
+    measured, and nobody has measured a 98k-row run.
 
     Any other unknown name is more likely a typo, so it gets the shorter message -- but both list
     what IS runnable, because that is what the caller needs next either way.
@@ -161,11 +168,13 @@ def _resolve_subset(subset: str) -> tuple[Cell, ...]:
     available = ", ".join(sorted(SUBSETS))
     if subset == "full":
         raise ValueError(
-            "subset 'full' is not runnable yet. evals/datasets/manifest.yaml now EXISTS (see "
-            "`ds-agents datasets list`) -- what is missing is the run path for its datasets: "
-            "nothing withholds a holdout, nothing computes verified_holdout_score or "
-            "baseline_score, and no Cell can name a manifest dataset, so every row would carry a "
-            "null score_ratio. See docs/PLAN.md Phase 4 and docs/NEXT.md. "
+            "subset 'full' is not runnable yet, but the run path now IS: a manifest dataset "
+            "can be run and scored on a withheld holdout -- see `--subset bench-smoke`, which "
+            "does exactly that on credit_g. What is missing for all 13 is baseline_score (so "
+            "score_ratio would be null on every row) and a measured cost per dataset; these are "
+            "real datasets up to 98k rows and the estimates in SUBSETS are measurements, not "
+            "guesses. Also note dataset_id is an eval-diff condition field, so 13 datasets is 13 "
+            "cells. See docs/PLAN.md Phase 4 and docs/NEXT.md. "
             f"Available subsets: {available}."
         )
     raise ValueError(f"unknown eval subset {subset!r}. Available subsets: {available}.")
@@ -262,27 +271,38 @@ def _live_run(artifacts_root: Path, *, transport: str, no_live: bool) -> Runner:
     """
     # Deferred import: see the module docstring for why this cannot be a top-level import.
     from ds_agents import cli
-    from ds_agents.fixtures import load_fixture
-    from ds_agents.naming import materialize
+    from ds_agents.holdout import prepare
     from ds_agents.provenance import git_commit
+    from ds_agents.runnable import Runnable, resolve
+    from ds_agents.state import RunConfig
 
     commit = git_commit()
 
-    fixtures: dict[str, Fixture] = {}
-    materialized: dict[tuple[str, str], tuple[Path, dict[str, str]]] = {}
+    runnables: dict[str, Runnable] = {}
+    prepared_by_key: dict[tuple[str, str], PreparedDataset] = {}
 
     def runner(planned_run: PlannedRun, root: Path) -> PipelineState:
         cell = planned_run.cell
-        fixture = fixtures.setdefault(cell.dataset, load_fixture(cell.dataset))
+        # `resolve` rather than `load_fixture`: a Cell's dataset may now name a manifest dataset,
+        # and the two registries share one namespace.
+        dataset = runnables.setdefault(cell.dataset, resolve(cell.dataset))
         key = (cell.dataset, cell.naming)
-        if key not in materialized:
-            dest = artifacts_root / "input" / f"{cell.dataset}-{cell.naming}"
-            materialized[key] = materialize(fixture, cell.naming, dest)
-        dataset_path, _rename = materialized[key]
+        if key not in prepared_by_key:
+            # Once per (dataset, naming) per invocation, for the reason `materialize` already was
+            # and one more: every replicate in a cell must be graded against the SAME withheld
+            # rows, or the runs in it are not measuring the same question and the cell cannot be
+            # pooled. `withheld` is a sibling of `input`, so it is outside every run root.
+            prepared_by_key[key] = prepare(
+                dataset,
+                cell.naming,
+                into=artifacts_root / "input" / f"{cell.dataset}-{cell.naming}",
+                withheld_into=artifacts_root / "withheld" / f"{cell.dataset}-{cell.naming}",
+                seed=RunConfig().random_seed,
+            )
         return cli._run_once(
-            fixture,
+            dataset,
             root=root,
-            dataset_path=dataset_path,
+            prepared=prepared_by_key[key],
             commit=commit,
             transport=transport,
             no_live=no_live,

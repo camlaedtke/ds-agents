@@ -18,7 +18,7 @@ import pytest
 from ds_agents.cli import (
     _append_results_row,
     _build_parser,
-    _fixture_state,
+    _run_state,
     _select_model,
     _select_reviewer_model,
     cmd_eval,
@@ -29,6 +29,7 @@ from ds_agents.fixtures import load_fixture
 from ds_agents.naming import NAMINGS, header_of, materialize
 from ds_agents.state import NodeEvent, PipelineState, RunConfig, utc_now
 from ds_agents.tools.llm import AnthropicModel, StubModel
+from tests.conftest import runnable
 
 pytestmark = pytest.mark.fast
 
@@ -86,14 +87,14 @@ class TestGroundTruthFollowsTheRename:
 
     def test_descriptive_keeps_the_manifest_names(self):
         fixture = load_fixture("claims_timing")
-        state = _fixture_state(fixture)
+        state = _run_state(runnable("claims_timing"))
         assert state.planted_leakage_columns == fixture.manifest.planted_columns
         assert state.config.naming == "descriptive"
 
     def test_opaque_carries_the_renamed_columns(self, tmp_path):
         fixture = load_fixture("claims_timing")
-        _, rename = materialize(fixture, "opaque", tmp_path)
-        state = _fixture_state(fixture, naming="opaque")
+        _, rename = materialize(runnable("claims_timing"), "opaque", tmp_path)
+        state = _run_state(runnable("claims_timing"), naming="opaque")
 
         assert state.config.naming == "opaque"
         assert state.planted_leakage_columns == [
@@ -103,18 +104,16 @@ class TestGroundTruthFollowsTheRename:
 
     def test_the_planted_columns_exist_in_the_data_the_agents_see(self, tmp_path):
         """The whole point of the previous test, stated against the file rather than the map."""
-        fixture = load_fixture("claims_timing")
-        path, _ = materialize(fixture, "opaque", tmp_path)
-        state = _fixture_state(fixture, naming="opaque")
+        path, _ = materialize(runnable("claims_timing"), "opaque", tmp_path)
+        state = _run_state(runnable("claims_timing"), naming="opaque")
         assert set(state.planted_leakage_columns) <= set(header_of(path))
 
     def test_the_task_description_is_unaffected(self):
         """It names only the target, and the target is never renamed -- intake still has to infer
         it from prose, which is the node's actual job."""
-        fixture = load_fixture("claims_timing")
         assert (
-            _fixture_state(fixture, naming="opaque").task_description
-            == _fixture_state(fixture).task_description
+            _run_state(runnable("claims_timing"), naming="opaque").task_description
+            == _run_state(runnable("claims_timing")).task_description
         )
 
     def test_the_arm_cannot_be_claimed_without_the_rename_being_applied(self):
@@ -128,7 +127,7 @@ class TestGroundTruthFollowsTheRename:
         """
         fixture = load_fixture("claims_timing")
         for naming in NAMINGS:
-            state = _fixture_state(fixture, naming=naming)
+            state = _run_state(runnable("claims_timing"), naming=naming)
             renamed = state.planted_leakage_columns != fixture.manifest.planted_columns
             assert renamed == (naming == "opaque")
 
@@ -199,9 +198,8 @@ class TestTheLoopCapIsRecorded:
     rows run under a different cap."""
 
     def test_fixture_state_records_the_cap(self):
-        fixture = load_fixture("claims_timing")
-        assert _fixture_state(fixture).config.loop_cap == 3
-        assert _fixture_state(fixture, loop_cap=5).config.loop_cap == 5
+        assert _run_state(runnable("claims_timing")).config.loop_cap == 3
+        assert _run_state(runnable("claims_timing"), loop_cap=5).config.loop_cap == 5
 
     def test_a_negative_cap_exits_two_rather_than_raising(self):
         """`RunConfig` would refuse this with `ge=0`, but as a Pydantic traceback. This is the
@@ -215,9 +213,8 @@ class TestThePromptConditionIsRecorded:
     or the arms are indistinguishable in the results file."""
 
     def test_fixture_state_records_the_variant(self):
-        fixture = load_fixture("claims_timing")
-        assert _fixture_state(fixture).config.reviewer_prompt == "base"
-        state = _fixture_state(fixture, reviewer_prompt="which_column")
+        assert _run_state(runnable("claims_timing")).config.reviewer_prompt == "base"
+        state = _run_state(runnable("claims_timing"), reviewer_prompt="which_column")
         assert state.config.reviewer_prompt == "which_column"
 
 
@@ -232,12 +229,10 @@ class TestTheRoutingConditionIsRecorded:
         arm that reproduces them byte for byte."""
         args = _build_parser().parse_args(["run"])
         assert args.objection_routing == "as_addressed"
-        assert _fixture_state(load_fixture("claims_timing")).config.objection_routing == (
-            "as_addressed"
-        )
+        assert _run_state(runnable("claims_timing")).config.objection_routing == ("as_addressed")
 
     def test_fixture_state_records_the_variant(self):
-        state = _fixture_state(load_fixture("claims_timing"), objection_routing="by_category")
+        state = _run_state(runnable("claims_timing"), objection_routing="by_category")
         assert state.config.objection_routing == "by_category"
         assert state.results_row()["objection_routing"] == "by_category"
 
@@ -256,18 +251,18 @@ class TestTheClosureConditionIsRecorded:
         default and must leave the reviewer prompt byte-identical."""
         args = _build_parser().parse_args(["run"])
         assert args.objection_closure == "off"
-        assert _fixture_state(load_fixture("claims_timing")).config.objection_closure == "off"
+        assert _run_state(runnable("claims_timing")).config.objection_closure == "off"
 
     def test_fixture_state_records_the_variant(self):
-        state = _fixture_state(load_fixture("claims_timing"), objection_closure="on")
+        state = _run_state(runnable("claims_timing"), objection_closure="on")
         assert state.config.objection_closure == "on"
         assert state.results_row()["objection_closure"] == "on"
 
     def test_it_is_orthogonal_to_the_prompt_condition(self):
         """The reason it is not a third `reviewer_prompt` value: both conditions must be settable
         independently, or the closure effect can never be separated from the which_column one."""
-        state = _fixture_state(
-            load_fixture("claims_timing"), reviewer_prompt="base", objection_closure="on"
+        state = _run_state(
+            runnable("claims_timing"), reviewer_prompt="base", objection_closure="on"
         )
         assert state.config.reviewer_prompt == "base"
         assert state.config.objection_closure == "on"
@@ -291,22 +286,17 @@ class TestTheForcedDropReleaseConditionIsRecorded:
     def test_the_default_is_the_fixed_behaviour_and_not_the_old_one(self):
         args = _build_parser().parse_args(["run"])
         assert args.forced_drop_release == "withdrawn_only"
-        assert (
-            _fixture_state(load_fixture("claims_timing")).config.forced_drop_release
-            == "withdrawn_only"
-        )
+        assert _run_state(runnable("claims_timing")).config.forced_drop_release == "withdrawn_only"
 
     def test_fixture_state_records_the_variant(self):
-        state = _fixture_state(
-            load_fixture("claims_timing"), forced_drop_release="resolved_or_withdrawn"
-        )
+        state = _run_state(runnable("claims_timing"), forced_drop_release="resolved_or_withdrawn")
         assert state.config.forced_drop_release == "resolved_or_withdrawn"
         assert state.results_row()["forced_drop_release"] == "resolved_or_withdrawn"
 
     def test_it_is_orthogonal_to_the_routing_and_closure_conditions(self):
         """The cell crosses this with `by_category`, so a coupling here would confound it."""
-        state = _fixture_state(
-            load_fixture("claims_timing"),
+        state = _run_state(
+            runnable("claims_timing"),
             objection_routing="by_category",
             objection_closure="off",
             forced_drop_release="resolved_or_withdrawn",
@@ -447,7 +437,7 @@ class TestTheEvalCommands:
         args = self.parse("eval", "--subset", "full", "--name", "x")
 
         assert cmd_eval(args) == 2
-        assert "manifest.yaml" in capsys.readouterr().err
+        assert "baseline_score" in capsys.readouterr().err
 
     def test_a_dry_run_exits_0_without_writing(self, tmp_path):
         """Zero rows is only an error when something was supposed to run. A dry run writing no

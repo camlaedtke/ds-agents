@@ -22,13 +22,29 @@ project has learned. Do not quote any 10-run count as an effect without a replic
 
 | subset | what runs | cost | when |
 |---|---|---|---|
-| `toy` | `toy-default` only | ~$0.01 | every session, sanity |
-| `ci` | 3 cells, one per fixture | ~$0.03/run | regression gate |
-| `full` | errors today | -- | blocked on `evals/datasets/manifest.yaml` |
+| `toy` | `toy-default` only | ~$0.015 | every session, sanity |
+| `ci` | 3 cells, one per fixture | ~$0.025/run measured | regression gate |
+| `bench-smoke` | `credit_g`, one cell | ~$0.016/run measured | the benchmark path |
+| `full` | errors today | -- | blocked on `baseline_score` |
 
-`full` is not implemented: it needs the manifest from PLAN.md Phase 4's first checkbox, which is
-blocked on the open question of which OpenML suite has citable published baselines. The command
-tells you this rather than running something else.
+`bench-smoke` is the only subset naming a dataset nobody in this repo wrote. One cell on purpose:
+`dataset_id` is an `eval-diff` condition field, so each dataset added is a whole cell's worth of
+replicates, and these are real datasets up to 98k rows.
+
+**A benchmark row is graded differently from a fixture row, and the columns say so.** A fixture
+carries a complete planted answer key, so its leakage columns mean something, and its
+`verified_holdout_score` is null with `rescore_status: no_withheld_holdout` -- fixtures withhold
+nothing, by decision, because a random holdout still contains a planted leak column and so has
+nothing to catch. A manifest dataset carries no answer key, so `leakage_graded` is `false` and all
+nine leakage rates are null; what it carries instead is `verified_holdout_score`, measured on rows
+withheld before the graph started, beside `rescore_status` saying why it is or is not there.
+**Never pool the two.** `holdout_claim_gap` is the benchmark column, `leakage_remediated` is the
+fixture column, and neither exists on the other kind of row.
+
+`full` is not implemented, and its blocker has now moved twice. The manifest landed 2026-08-31 and
+so did the run path -- what is missing is `baseline_score`, so `score_ratio` is null on every
+benchmark row, and a measured cost per dataset for the other twelve. The command tells you this
+rather than running something else.
 
 Never run anything beyond `toy` without confirming the config and the cost cap with the user first.
 

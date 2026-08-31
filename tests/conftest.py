@@ -11,6 +11,8 @@ from typing import Any
 import pytest
 from pydantic import BaseModel
 
+from ds_agents.fixtures import load_fixture
+from ds_agents.runnable import Runnable
 from ds_agents.state import ArtifactId
 from ds_agents.tools.llm import Completion, StubModel, _payload
 from ds_agents.tools.protocol import ArtifactMeta, ArtifactPayload, RunResult, ToolError
@@ -142,6 +144,16 @@ class QueuedModel:
         return Completion(
             value=value, model=self.name, input_tokens=11, output_tokens=7, cost_usd=0.0001
         )
+
+
+def runnable(name: str) -> Runnable:
+    """A fixture by name, as the `Runnable` that `_run_state` and the naming functions take.
+
+    Tests used to pass `load_fixture(name)` straight in. They cannot any more, and that is the
+    point: `Runnable.from_fixture` is one of the two doors into a run, and the other one writes an
+    empty answer key on purpose.
+    """
+    return Runnable.from_fixture(load_fixture(name))
 
 
 @pytest.fixture

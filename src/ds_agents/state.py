@@ -186,6 +186,50 @@ class Contract(BaseModel):
         return cls.model_validate(_strip_computed(cls, data))
 
 
+# The one data seed in the project. Named rather than inlined because two things now read it and
+# they must agree: `RunConfig.random_seed`, which every node's snippet is handed, and
+# `holdout.prepare`, which carves the withheld rows before any node runs. A carve at one seed and a
+# split at another would not be wrong, but it would be two numbers where the file claims one.
+DatasetSource = Literal["fixture", "benchmark"]
+"""Which registry a run's dataset came from.
+
+Declared here rather than in `runnable.py` because it is a field on the frozen `RunConfig`, and
+this module must not import a dataset registry -- every node imports this module, and a node that
+could reach a registry could read the answer key.
+"""
+
+RescoreStatus = Literal[
+    "not_attempted",
+    "no_withheld_holdout",
+    "no_spec",
+    "no_split",
+    "no_feature_code",
+    "empty_matrix",
+    "no_model",
+    "unknown_model_spec",
+    "single_class_holdout",
+    "snippet_failed",
+    "sandbox_error",
+    "refit_mismatch",
+    "ok",
+]
+"""Why `verified_holdout_score` is or is not on this row.
+
+An enum rather than a bool, and a column rather than a bare null, for the reason `leakage_graded`
+exists: nine leakage columns used to read `None` for two unrelated reasons and a reader had to
+guess which. A null score can mean the dataset had no withheld holdout at all (every fixture row),
+that the graph produced no model to refit, or that the grader's sandbox died -- three facts with
+completely different consequences for a table. `refit_mismatch` is the one value that carries a
+score anyway: the number is kept because deleting it would hide the finding, and flagged because
+pooling it would launder a bug into a result.
+
+Nothing here ever appends a `PipelineError`. `errored` means the RUN went wrong; overloading it
+with "the grader went wrong" is the defect NEXT.md already records against it.
+"""
+
+DEFAULT_RANDOM_SEED = 20260822
+
+
 class RunConfig(Contract):
     """What this run IS. Frozen at construction, so no node can rewrite its own conditions.
 
@@ -253,8 +297,31 @@ class RunConfig(Contract):
         "in the project has a same-commit control, it is not a general ablation lever, and no "
         "other arm may use it.",
     )
-    random_seed: int = 20260822
-    dataset_hash: str | None = None
+    holdout_fraction: float = Field(
+        default=0.0,
+        ge=0.0,
+        lt=0.5,
+        description="How much of the dataset was withheld from the agents before the graph "
+        "started. "
+        "0.0 for every fixture, by decision rather than omission -- carving rows out of a 200-row "
+        "toy would change what the agents see and make all 145 committed rows incomparable, for no "
+        "gain, because planted leakage is a column and a random holdout still contains it.",
+    )
+    dataset_source: DatasetSource = Field(
+        default="fixture",
+        description="Which registry the dataset came from. A fixture has a complete planted answer "
+        "key; a benchmark dataset has none and is graded on a withheld holdout instead. The two "
+        "are graded by different columns, so a row that did not say which it was would invite "
+        "pooling a leakage rate with a score gap.",
+    )
+    random_seed: int = DEFAULT_RANDOM_SEED
+    dataset_hash: str | None = Field(
+        default=None,
+        description="sha256 of the CSV the agents were actually mounted -- the materialised, "
+        "post-carve file, not the source on disk. Two rows under the same `dataset_id` and "
+        "`naming` that disagree here saw different bytes, which is the one difference no other "
+        "field on this config can express.",
+    )
     commit: str | None = Field(
         default=None,
         description="Short git hash of the tree that produced this run, `-dirty` suffixed when the "
@@ -521,6 +588,27 @@ class PipelineState(Contract):
         "chosen_model.claimed_holdout_score is itself a finding.",
     )
     baseline_score: float | None = None
+    rescore_status: RescoreStatus = Field(
+        default="not_attempted",
+        description="Why verified_holdout_score is or is not present. Never an error on the run.",
+    )
+    rescore_detail: str = Field(
+        default="",
+        description="Free text for the statuses that have something to say -- a snippet's last "
+        "lines, or the two numbers behind a refit_mismatch. Never parsed.",
+    )
+    refit_claim_gap: float | None = Field(
+        default=None,
+        description="The self-check that earns the withheld number: the harness refit scored on "
+        "the AGENTS' own holdout, minus what the modeler claimed on it. Anything but ~0 means the "
+        "refit is not the model that produced the claim, and the withheld score is measuring "
+        "something else.",
+    )
+    n_withheld_rows: int | None = Field(
+        default=None,
+        description="How many rows verified_holdout_score was measured on. Without it a gap of "
+        "0.05 on 200 rows is indistinguishable from one on 20000.",
+    )
 
     # bookkeeping
     errors: Annotated[list[PipelineError], operator.add] = Field(default_factory=list)
@@ -742,6 +830,9 @@ class PipelineState(Contract):
             "forced_drop_release": self.config.forced_drop_release,
             "random_seed": self.config.random_seed,
             "commit": self.config.commit,
+            "dataset_source": self.config.dataset_source,
+            "holdout_fraction": self.config.holdout_fraction,
+            "dataset_hash": self.config.dataset_hash,
             # scores. `claimed` is what the agent said; `verified` is what we measured.
             "claimed_holdout_score": claimed,
             "verified_holdout_score": self.verified_holdout_score,
@@ -749,6 +840,13 @@ class PipelineState(Contract):
             "baseline_score": self.baseline_score,
             "score_ratio": self.score_ratio,
             "metric": self.spec.metric if self.spec else None,
+            # Why the two columns above do or do not carry a number, and what the number was
+            # measured on. `rescore_status` is to the score what `leakage_graded` is to the nine
+            # leakage columns: the reason a null is null, said outright instead of inferred.
+            "rescore_status": self.rescore_status,
+            "rescore_detail": self.rescore_detail[:ERROR_MESSAGE_LIMIT],
+            "refit_claim_gap": self.refit_claim_gap,
+            "n_withheld_rows": self.n_withheld_rows,
             # leakage, as a set comparison against ground truth
             #
             # Stated outright rather than left to be inferred from nine separate `None`s. This is

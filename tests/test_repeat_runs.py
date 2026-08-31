@@ -40,11 +40,20 @@ def test_two_repetitions_get_two_isolated_artifact_directories(tmp_path):
         assert (tmp_path / "artifacts" / name / "artifacts").is_dir()
 
 
-def test_a_single_run_still_uses_the_root_directly(tmp_path):
-    """--repeat 1 must be byte-for-byte the old behaviour, or every existing invocation moved."""
+def test_a_single_run_gets_its_own_directory_like_every_other_run(tmp_path):
+    """Changed deliberately with the re-scorer: `--repeat 1` used to collapse the run root into
+    the invocation root, so the layout had two shapes.
+
+    That was tolerable while the invocation root held only `input/`. It stopped being tolerable
+    when the carve put `withheld/` beside it and the grader put `rescore/` under the run root:
+    "the withheld rows are outside every run root" is a property a test has to be able to check,
+    and it cannot check it against a layout that is sometimes one thing and sometimes another.
+    Nothing that reads a results row is affected -- no path reaches a row.
+    """
     assert cmd_run(_args(tmp_path, repeat=1)) == 0
-    assert (tmp_path / "artifacts" / "artifacts").is_dir()
-    assert not (tmp_path / "artifacts" / "run-0").exists()
+    assert (tmp_path / "artifacts" / "run-0" / "artifacts").is_dir()
+    # No `input/`: under `descriptive` a fixture is mounted from its committed path and
+    # nothing is written, which is `materialize`'s control-arm-must-not-drift rule.
 
 
 def test_stub_repetitions_are_refused_a_results_row(tmp_path):
@@ -104,13 +113,13 @@ def test_every_repetition_records_the_same_commit(tmp_path, monkeypatch):
     monkeypatch.setattr("ds_agents.cli.git_commit", lambda *a, **k: next(answers))
 
     seen: list[str | None] = []
-    real_fixture_state = __import__("ds_agents.cli", fromlist=["_fixture_state"])._fixture_state
+    real_run_state = __import__("ds_agents.cli", fromlist=["_run_state"])._run_state
 
-    def capturing_fixture_state(fixture, **kwargs):
+    def capturing_fixture_state(runnable, **kwargs):
         seen.append(kwargs["commit"])
-        return real_fixture_state(fixture, **kwargs)
+        return real_run_state(runnable, **kwargs)
 
-    monkeypatch.setattr("ds_agents.cli._fixture_state", capturing_fixture_state)
+    monkeypatch.setattr("ds_agents.cli._run_state", capturing_fixture_state)
 
     assert cmd_run(_args(tmp_path, repeat=2)) == 0
     assert seen == ["feed1", "feed1"]

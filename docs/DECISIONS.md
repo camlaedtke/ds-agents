@@ -1322,3 +1322,96 @@ would emit 13 rows whose headline column is null, which is money spent for no fi
 declined rather than deferred: it needs credentials and per-competition licence acceptance, and a
 leaderboard score has no reproducible published protocol, which is the exact property AMLB was
 chosen for.
+
+## 2026-08-31 (third entry): the re-scorer is pre-registered, and the withheld holdout is carved
+## before the graph starts because no split a node decided can grade the node that decided it
+
+Written and committed before any of the code below exists. `verified_holdout_score` is the column
+the whole benchmark half of this project reports, and a grading protocol chosen after seeing the
+first number is not a protocol.
+
+**What is fixed in advance.** The withheld fraction is **0.2**, stratified by the target, seeded
+from `RunConfig.random_seed` (20260822). The carve happens **before the graph starts** and its rows
+never enter `split_artifact`, the run's artifact store, or the mounted `$DS_DATASET`. Stratification
+is numpy-only -- group positions by `str(label)`, permute each group with
+`np.random.default_rng(seed)`, take `max(1, floor(0.2 * n))` where the group has at least two rows.
+`train_test_split` is deliberately not used: a holdout whose membership depends on sklearn's
+internal shuffling can change identity on a version bump, and this is the one partition every
+headline number is measured on. The exact `credit_g` indices at that seed are pinned by test, so a
+change is loud rather than silent.
+
+**Fixtures do not get a withheld holdout, and that is a decision rather than an omission.**
+`Runnable.withheld_fraction` is 0.0 for every fixture and 0.2 for every manifest dataset. Carving
+20% out of a 200-row toy would change what the agents are shown, which changes what they do, which
+makes all 145 committed rows incomparable to everything written after it -- for no gain, because
+planted leakage is a *column* and a randomly withheld holdout still contains it. A leaky model's
+claimed score does not collapse on those rows, so there is nothing there to catch. Widening the
+carve to fixtures is a cell of its own if anyone ever wants it.
+
+**The refit is the claim, so the refit gets a self-check.** No fitted model is persisted anywhere
+-- `ModelResult.model_artifact` has been declared and never written since Phase 1 -- so scoring the
+withheld rows means refitting. The recipe comes from `modeler.CANDIDATE_SPECS` with the same
+`SEED_SENTINEL` substitution, **not** from `ModelResult.params`, which is a flat merge across every
+pipeline step and is lossy by construction: `logistic_l2`'s `StandardScaler` contributes an empty
+dict and is invisible in it. Before the withheld rows are touched at all, the same pipeline is fit
+on `split["train"]` and scored on `split["holdout"]` -- the *agents'* own holdout -- and compared to
+`claimed_holdout_score`. That single comparison validates the whole chain at once: transform
+re-application, seed, positive-class resolution, scorer sign, split parsing. A disagreement beyond
+`REFIT_TOLERANCE` (1e-6 absolute; same sandbox, same rows, pinned `random_state`, so a discrepancy
+is a bug and not float noise) sets `rescore_status="refit_mismatch"` and the score is **kept and
+flagged rather than deleted** -- deleting it would hide the finding, and the status column is what
+says "do not pool this". Without this check the re-scorer would be a number computed on some rows;
+with it, it is the modeler's model measured on rows it never saw.
+
+**The re-scorer runs in a sandbox, through its own `LocalTools`, never in-process.** CLAUDE.md
+forbids in-process `exec` and the 2026-08-26 entry gives the reason: it puts `PipelineState`,
+`planted_leakage_columns` included, inside the agent's reach. The grading risk is gone by re-score
+time, but the orchestrator still holds the API key, and `modeler.py` already execs the feature
+artifact inside a snippet. Independence points the same way rather than the opposite: the sandbox
+keeps no state between snippets and a second `LocalTools` gives the grader a store the run's store
+cannot see. Transport is `local` even when the run used `mcp` -- MCP exists so *agents* get the
+standard surface, and the grader is not an agent. One rule falls out of this: a `SandboxError`
+during re-scoring is **caught, not propagated**. In a node it propagates so a broken machine is not
+filed as an agent mistake; here the run has already produced everything it will, and losing the row
+would drop exactly the rows a table needs.
+
+**What "outside the run root" actually buys, stated honestly.** The sandbox has no filesystem
+namespace, so a snippet could in principle open the withheld CSV by relative path. What the layout
+gives is an *assertable* property -- no file the run's store holds contains a withheld row, checked
+by test -- and not isolation the code does not have. Real isolation waits on the Docker backend
+already parked behind `SandboxPool`.
+
+**A rescore failure is not a run failure.** `rescore_status` is a thirteen-value enum
+(`not_attempted`, `no_withheld_holdout`, `no_spec`, `no_split`, `no_feature_code`, `empty_matrix`,
+`no_model`, `unknown_model_spec`, `single_class_holdout`, `snippet_failed`, `sandbox_error`,
+`refit_mismatch`, `ok`) and nothing in it ever appends a `PipelineError`. `errored` means the *run*
+went wrong; the block-retry session already recorded what overloading a column costs. This is the
+`leakage_graded` fix applied to a score: an explicit "not graded, and here is which kind of not
+graded" beside the null, rather than a bare null a reader has to interpret. `publishable()` is
+unchanged, so a benchmark run with `rescore_status="no_model"` still writes its row -- ARCHITECTURE
+requires a row even on hard failure, because losing the rows for the worst outcomes biases every
+table upward.
+
+**`baseline_score` is deferred to the next session, and the reason is not time.** The zero point is
+not a design decision at all -- a constant class-prior predictor scores exactly 0.5 roc_auc by
+construction, which makes it a correctness assertion on the re-scorer rather than a column. The
+unit point is. AMLB publishes the *convention* (normalise from a constant predictor to a tuned
+RandomForest); it does not publish a grid this repo can re-fetch, because `openml1.win.tue.nl`
+presents a self-signed certificate. Any recipe written here is **ours**, untraceable in a way
+nothing else in the manifest is, and it deserves its own pre-registration rather than a paragraph
+at the end of a session that is already landing three modules. There is also a defect in the
+column it feeds, found while planning and recorded now so it is not discovered after the number
+exists: the baseline sees every column, **including a leak**. On a labelled dataset a pipeline that
+correctly drops the leak scores *below* the baseline, so `score_ratio < 1` is evidence of good
+behaviour there and of bad behaviour everywhere else. `score_ratio` cannot be pooled across
+labelled and unlabelled datasets without saying which is which, and that is a bigger reason to take
+another session over it than the cost is.
+
+**What the first live numbers are allowed to claim.** One `credit_g` run plus a 4-row
+`bench-smoke` invocation, capped at $0.25. That is a **write-path proof and a first
+characterisation, not a cell and not a comparand**: `commit` is an `eval-diff` condition field, so
+both arms of any comparison have to run in one invocation at one commit. A further limit is fixed
+here rather than discovered later -- 200 withheld rows at a 30% positive rate put the standard
+error of roc_auc near 0.04, so a `holdout_claim_gap` below roughly 0.08 is not distinguishable from
+noise at n=1. That is the "no 10-run count without a replicate" lesson arriving on a continuous
+column, and it applies to the first gap this project measures.

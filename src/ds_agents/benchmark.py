@@ -31,6 +31,8 @@ and hands back a typed object. It does no network I/O and imports neither sklear
 that is `benchmark_build.py`, which is the only thing that writes the manifest.
 """
 
+import hashlib
+import sys
 from pathlib import Path
 from typing import Literal
 
@@ -393,3 +395,35 @@ def load_dataset(dataset_id: str, path: Path = MANIFEST_PATH) -> DatasetEntry:
 def cached_csv_path(entry: DatasetEntry, root: Path = DATASET_CACHE) -> Path:
     """Where the fetched CSV for this dataset lands. Gitignored; may not exist."""
     return root / entry.dataset_id / f"{entry.dataset_id}.csv"
+
+
+def require_cached_csv(entry: DatasetEntry, root: Path = DATASET_CACHE) -> Path:
+    """The fetched CSV for `entry`, or `SystemExit` naming the command that produces it.
+
+    `cached_csv_path` answers "where would it be"; this answers "where is it", and the difference
+    matters at a run's entry point. Without it a fresh checkout fails deep inside
+    `ArtifactStore.register_dataset` with a `FileNotFoundError` on a path nobody typed, which reads
+    like a broken pipeline rather than a missing download.
+
+    A `csv_sha256` mismatch **warns and proceeds** rather than refusing. The hash is a function of
+    pandas' float formatting, so a pandas bump changes it with nothing wrong; refusing would make
+    every benchmark run in the repo unavailable on an upgrade. The warning still goes to stderr
+    because the other cause of a mismatch -- a hand-edited or half-written cache file -- is one
+    nobody should discover from a results table.
+    """
+    path = cached_csv_path(entry, root)
+    if not path.exists():
+        raise SystemExit(
+            f"benchmark dataset {entry.dataset_id!r} is in the manifest but its CSV is not at "
+            f"{path}. The cache is gitignored and rebuilt by fetching: "
+            f"run `uv run ds-agents datasets refresh`."
+        )
+    digest = hashlib.sha256(path.read_bytes()).hexdigest()
+    if digest != entry.csv_sha256:
+        print(
+            f"warning: {entry.dataset_id} csv_sha256 does not match the manifest "
+            f"(cache {digest[:12]}..., manifest {entry.csv_sha256[:12]}...). Proceeding. If you "
+            f"have not just upgraded pandas, re-run `ds-agents datasets refresh`.",
+            file=sys.stderr,
+        )
+    return path

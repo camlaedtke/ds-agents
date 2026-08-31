@@ -28,7 +28,7 @@ import io
 from pathlib import Path
 from typing import Literal
 
-from ds_agents.fixtures import Fixture
+from ds_agents.runnable import Runnable
 
 Naming = Literal["descriptive", "opaque"]
 NAMINGS: tuple[Naming, ...] = ("descriptive", "opaque")
@@ -44,7 +44,7 @@ def header_of(csv_path: Path) -> list[str]:
     raise ValueError(f"{csv_path} is empty, so it has no header to rename")
 
 
-def rename_map(fixture: Fixture, naming: Naming) -> dict[str, str]:
+def rename_map(runnable: Runnable, naming: Naming) -> dict[str, str]:
     """Old name -> new name. Empty under `descriptive`, which is the identity condition.
 
     Every column is renamed except the target. The target has to keep its name because intake is
@@ -60,11 +60,11 @@ def rename_map(fixture: Fixture, naming: Naming) -> dict[str, str]:
     """
     if naming == "descriptive":
         return {}
-    target = fixture.manifest.target
-    columns = header_of(fixture.csv_path)
+    target = runnable.target
+    columns = header_of(runnable.csv_path)
     if target not in columns:
         raise ValueError(
-            f"{fixture.name}: manifest target {target!r} is not a column in {fixture.csv_path.name}"
+            f"{runnable.dataset_id}: target {target!r} is not a column in {runnable.csv_path.name}"
         )
     renamed = [column for column in columns if column != target]
     return {column: f"{OPAQUE_PREFIX}_{index:02d}" for index, column in enumerate(renamed, start=1)}
@@ -75,10 +75,10 @@ def apply(names: list[str], mapping: dict[str, str]) -> list[str]:
     return [mapping.get(name, name) for name in names]
 
 
-def materialize(fixture: Fixture, naming: Naming, into: Path) -> tuple[Path, dict[str, str]]:
+def materialize(runnable: Runnable, naming: Naming, into: Path) -> tuple[Path, dict[str, str]]:
     """The CSV this run's agents should see, plus the map that produced it.
 
-    Under `descriptive` this returns the committed fixture path itself and writes nothing: a copy
+    Under `descriptive` this returns the source CSV's own path and writes nothing: a copy
     that could differ from the checked-in file is a way for the control arm to drift, and there is
     no reason to take it.
 
@@ -88,18 +88,18 @@ def materialize(fixture: Fixture, naming: Naming, into: Path) -> tuple[Path, dic
     rather than a fact about the file.
     """
     if naming == "descriptive":
-        return fixture.csv_path, {}
+        return runnable.csv_path, {}
 
-    mapping = rename_map(fixture, naming)
+    mapping = rename_map(runnable, naming)
     # `newline=""` on both sides disables universal-newline translation. Without it Python reads
     # \r\n as \n and writes \n back, which silently rewrites the line ending of every row in the
     # file -- the body would differ from the original in a way this module exists to prevent, and
     # the byte-comparison test would be comparing two already-normalised strings and pass anyway.
-    with fixture.csv_path.open("r", encoding="utf-8", newline="") as handle:
+    with runnable.csv_path.open("r", encoding="utf-8", newline="") as handle:
         raw = handle.read()
     header, newline, body = raw.partition("\n")
     if not newline:
-        raise ValueError(f"{fixture.csv_path} has no rows under its header")
+        raise ValueError(f"{runnable.csv_path} has no rows under its header")
 
     # Whatever line ending the file already uses, the rewritten header keeps it. Dropping a \r
     # here would leave line 1 terminated differently from every other line, which is a second way
@@ -113,7 +113,7 @@ def materialize(fixture: Fixture, naming: Naming, into: Path) -> tuple[Path, dic
     csv.writer(buffer, lineterminator="").writerow(apply(next(csv.reader([header])), mapping))
 
     into.mkdir(parents=True, exist_ok=True)
-    destination = into / fixture.csv_path.name
+    destination = into / runnable.csv_path.name
     with destination.open("w", encoding="utf-8", newline="") as handle:
         handle.write(buffer.getvalue() + carriage + newline + body)
     return destination, mapping

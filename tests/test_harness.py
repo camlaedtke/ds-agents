@@ -17,6 +17,7 @@ import pytest
 
 from ds_agents.fixtures import available
 from ds_agents.harness import SUBSETS, Cell, HarnessReport, PlannedRun, plan, run_eval
+from ds_agents.runnable import available as runnable_available
 from ds_agents.state import NodeEvent, PipelineState, utc_now
 
 pytestmark = pytest.mark.fast
@@ -92,18 +93,28 @@ class TestSubsetsPointAtRealFixtures:
     """A typo'd dataset name in a `Cell` must fail here, in a fast test, not $0.20 into a live
     run."""
 
-    def test_every_cell_in_every_subset_names_a_registered_fixture(self):
-        known = set(available())
+    def test_every_cell_in_every_subset_names_a_registered_dataset(self):
+        """Both registries now. `Cell.dataset` has one namespace and it spans them."""
+        known = set(runnable_available())
 
         for subset_name, cells in SUBSETS.items():
             for cell in cells:
                 assert cell.dataset in known, (
-                    f"SUBSETS[{subset_name!r}] cell {cell.name!r} names unregistered fixture "
+                    f"SUBSETS[{subset_name!r}] cell {cell.name!r} names unregistered dataset "
                     f"{cell.dataset!r}"
                 )
 
     def test_the_ci_subset_covers_all_three_fixtures(self):
         assert {cell.dataset for cell in SUBSETS["ci"]} == set(available())
+
+    def test_bench_smoke_is_one_benchmark_dataset_and_only_one(self):
+        """One cell on purpose. `dataset_id` is an eval-diff condition field, so each dataset
+        added here is a whole cell's worth of replicates, and these are real datasets."""
+        cells = SUBSETS["bench-smoke"]
+        assert [cell.dataset for cell in cells] == ["credit_g"]
+        assert cells[0].dataset not in available(), (
+            "bench-smoke must name a manifest dataset, not a fixture"
+        )
 
     def test_the_toy_subset_is_just_toy_default(self):
         assert [cell.name for cell in SUBSETS["toy"]] == ["toy-default"]
@@ -147,24 +158,25 @@ class TestForcedDropReleaseIsAClosedAxis:
 
 
 class TestTheFullSubsetIsNotYetRunnable:
-    """`full` no longer waits on the manifest -- it waits on the re-scorer.
+    """`full` no longer waits on the re-scorer either -- it waits on `baseline_score`.
 
-    The manifest landed 2026-08-31 and the session-0 question behind it is answered, so the old
-    message (which named the missing file and the open OpenML question) is now false on both
-    counts. What blocks `full` is that nothing withholds a holdout or computes
-    `verified_holdout_score` / `baseline_score`, so every row would carry a null `score_ratio`.
-    The assertion below deliberately checks the message names the SCORE fields: if someone wires
-    up `Cell` for manifest datasets without the re-scorer, this is what should still fail.
+    This message has now been wrong twice, both times because the blocker moved rather than
+    because anyone mistyped it. First it named a missing manifest that had landed; then it named a
+    missing run path that now exists and is exercised by `bench-smoke`. So the assertion is on the
+    CURRENT blocker: if someone ships `baseline_score` without updating this message, this fails.
     """
 
-    def test_full_raises_pointing_at_the_missing_re_scorer(self):
+    def test_full_raises_pointing_at_the_missing_baseline(self):
         with pytest.raises(ValueError) as excinfo:
             run_eval(subset="full", name="probe", dry_run=True)
 
         message = str(excinfo.value)
-        assert "manifest.yaml" in message
-        assert "verified_holdout_score" in message
         assert "baseline_score" in message
+        assert "score_ratio" in message
+        assert "bench-smoke" in message, "the message must point at what DOES work"
+        assert "verified_holdout_score" not in message, (
+            "the re-scorer shipped; a message still naming it as missing is false"
+        )
         assert "toy" in message
         assert "ci" in message
 
@@ -463,30 +475,31 @@ def test_planned_run_and_harness_report_are_the_documented_shape():
     assert report.stopped_early is None
 
 
-class TestTheLiveRunnerMaterializesOncePerDatasetAndNaming:
+class TestTheLiveRunnerPreparesOncePerDatasetAndNaming:
     """`_live_run` is the one part of the harness a fake `runner` never exercises, so a bug in it
     would only ever surface on a paid run.
 
-    What it must guarantee is the rule `cmd_run --repeat` already follows: every run in an arm sees
-    the same bytes. Rewriting the CSV once per run is N chances for them not to, and under `--naming
-    opaque` the file is a rewritten copy rather than the committed fixture, so "the same bytes" is
-    not automatic.
+    What it must guarantee is the rule `cmd_run --repeat` already follows, and now one more. Every
+    run in an arm must see the same bytes: rewriting the CSV once per run is N chances for them not
+    to, and under `--naming opaque` the file is a rewritten copy rather than the committed fixture.
+    And every run in a cell must be graded against the SAME withheld rows, or the runs in it are
+    not answering the same question and the cell cannot be pooled at all. `prepare` does both, so
+    calling it once per (dataset, naming) is what both properties rest on.
     """
 
-    def test_the_same_dataset_and_naming_is_materialized_once_across_runs(
-        self, tmp_path, monkeypatch
-    ):
+    def test_the_same_dataset_and_naming_is_prepared_once_across_runs(self, tmp_path, monkeypatch):
         from ds_agents import cli, harness
-        from ds_agents.naming import materialize as real_materialize
+        from ds_agents.holdout import prepare as real_prepare
 
         calls: list[tuple[str, str]] = []
 
-        def counting_materialize(fixture, naming, dest):
-            calls.append((fixture.name, naming))
-            return real_materialize(fixture, naming, dest)
+        def counting_prepare(runnable, naming, **kwargs):
+            calls.append((runnable.dataset_id, naming))
+            return real_prepare(runnable, naming, **kwargs)
 
-        monkeypatch.setattr("ds_agents.naming.materialize", counting_materialize)
-        monkeypatch.setattr(cli, "_run_once", lambda fixture, **kwargs: _state(cost=0.001))
+        # Patched where `_live_run` looks it up, which is `holdout`, not where it is called from.
+        monkeypatch.setattr("ds_agents.holdout.prepare", counting_prepare)
+        monkeypatch.setattr(cli, "_run_once", lambda runnable, **kwargs: _state(cost=0.001))
 
         runner = harness._live_run(tmp_path, transport="local", no_live=True)
         cells = (
@@ -499,6 +512,33 @@ class TestTheLiveRunnerMaterializesOncePerDatasetAndNaming:
 
         # Six runs over two distinct (dataset, naming) pairs: descriptive and opaque, once each.
         assert calls == [("toy", "descriptive"), ("toy", "opaque")]
+
+    def test_a_benchmark_cell_is_prepared_with_a_withheld_set_outside_every_run_root(
+        self, tmp_path, monkeypatch
+    ):
+        """The containment property, at the layer that decides the layout.
+
+        `_live_run` roots each run at `<artifacts_root>/<cell>/seq-NNNN`, so the withheld rows go
+        in a sibling of `input/` and are outside every one of them. Asserted here rather than
+        trusted, because the whole value of `verified_holdout_score` rests on it.
+        """
+        from ds_agents import cli, harness
+
+        seen: list = []
+        monkeypatch.setattr(
+            cli, "_run_once", lambda runnable, **kwargs: seen.append(kwargs["prepared"]) or _state()
+        )
+
+        runner = harness._live_run(tmp_path, transport="local", no_live=True)
+        cell = Cell(name="credit-g-default", dataset="credit_g")
+        run_root = tmp_path / "credit-g-default" / "seq-0000"
+        runner(PlannedRun(cell=cell, replicate=1, index=0, seq=0), run_root)
+
+        prepared = seen[0]
+        assert prepared.withheld_csv is not None
+        assert prepared.n_withheld_rows == 200
+        assert run_root not in prepared.withheld_csv.parents
+        assert prepared.agent_csv.parent != prepared.withheld_csv.parent
 
 
 class TestProvenanceIsReadOncePerInvocation:

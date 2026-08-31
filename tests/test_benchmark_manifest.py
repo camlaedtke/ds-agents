@@ -214,6 +214,12 @@ class TestBoundaries:
             "ds_agents.benchmark_build",
             "ds_agents.fixtures",
             "ds_agents.naming",
+            # Added with the re-scorer. `runnable` reaches BOTH registries, so a node importing it
+            # could read the answer key by name; `holdout` knows which rows the agents were never
+            # shown; `rescore` holds the number the agents' claim is graded against.
+            "ds_agents.runnable",
+            "ds_agents.holdout",
+            "ds_agents.rescore",
         }
         for path in sorted((SRC / "nodes").glob("*.py")):
             tree = ast.parse(path.read_text())

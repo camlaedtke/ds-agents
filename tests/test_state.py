@@ -1442,22 +1442,61 @@ class TestTheLeakageGate:
         "reviewer_false_alarm",
     )
 
-    def test_no_committed_results_row_has_an_empty_planted_list(self):
+    # Every results file that existed when the gate landed on 2026-08-31. THIS LIST IS CLOSED --
+    # nothing may be added to it. Its whole purpose is to name the rows that were published
+    # BEFORE the gate, so the claim "no published number moved" stays checkable forever. A new
+    # file goes through the second test below instead.
+    PRE_GATE_FILES = frozenset(
+        {
+            "2026-08-27_naming-ablation.jsonl",
+            "2026-08-28_forced-drop-release.jsonl",
+            "2026-08-28_loop-cap-sweep.jsonl",
+            "2026-08-28_objection-closure.jsonl",
+            "2026-08-28_objection-routing.jsonl",
+            "2026-08-28_reviewer-ablation.jsonl",
+            "2026-08-29_harness-smoke.jsonl",
+            "2026-08-31_ci-baseline.jsonl",
+        }
+    )
+
+    def _rows(self, path: Path):
+        for line in path.read_text().splitlines():
+            if line.strip():
+                yield json.loads(line)
+
+    def test_no_pre_gate_results_row_has_an_empty_planted_list(self):
         """The precondition for the gate, proved rather than assumed.
 
-        If this ever fails, the gate silently changed a published number and the change should be
-        reverted rather than the test relaxed.
+        If this ever fails, the gate silently changed an already-published number and the change
+        should be reverted rather than the test relaxed. Scoped to the closed list above because
+        the claim it protects is about rows that existed before the gate; benchmark rows written
+        after it legitimately have no planted list, which is the whole reason the gate exists.
         """
         results = Path(__file__).resolve().parents[1] / "evals" / "results"
+        found = {path.name for path in results.glob("*.jsonl")}
+        assert found >= self.PRE_GATE_FILES, (
+            f"a pre-gate results file went missing: {sorted(self.PRE_GATE_FILES - found)}"
+        )
         rows = 0
-        for path in sorted(results.glob("*.jsonl")):
-            for line in path.read_text().splitlines():
-                if not line.strip():
-                    continue
-                row = json.loads(line)
+        for name in sorted(self.PRE_GATE_FILES):
+            for row in self._rows(results / name):
                 rows += 1
-                assert row["leakage_planted"], f"{path.name}: a row has no planted columns"
+                assert row["leakage_planted"], f"{name}: a row has no planted columns"
         assert rows > 100, "expected the committed corpus, did it move?"
+
+    def test_every_committed_row_either_has_an_answer_key_or_says_it_does_not(self):
+        """The invariant that replaces it going forward, over ALL files including new ones.
+
+        A row with no planted columns is fine -- external benchmark datasets have no answer key.
+        A row with no planted columns that still claims to be graded for leakage is not: every
+        leakage rate on it would be scored against a list that is not an answer key.
+        """
+        results = Path(__file__).resolve().parents[1] / "evals" / "results"
+        for path in sorted(results.glob("*.jsonl")):
+            for row in self._rows(path):
+                assert row["leakage_planted"] or row.get("leakage_graded") is False, (
+                    f"{path.name}: a row has no planted columns but does not say it is ungraded"
+                )
 
     def _reviewed(self, planted: list[str]) -> PipelineState:
         """A state where the profiler AND the reviewer both ran and both named column `a`.

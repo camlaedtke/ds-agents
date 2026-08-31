@@ -19,6 +19,7 @@ import pytest
 
 from ds_agents import naming
 from ds_agents.fixtures import available, load_fixture
+from ds_agents.runnable import Runnable
 
 pytestmark = pytest.mark.fast
 
@@ -27,7 +28,12 @@ FIXTURES = available()
 
 @pytest.fixture(params=FIXTURES)
 def fixture(request):
-    return load_fixture(request.param)
+    """Every registered fixture, as the `Runnable` the naming functions now take.
+
+    Parametrized over the registry rather than pinned to `toy`, so a fixture added later is
+    covered by every assertion in this file without anyone remembering to add it.
+    """
+    return Runnable.from_fixture(load_fixture(request.param))
 
 
 class TestDescriptiveIsTheIdentity:
@@ -48,7 +54,7 @@ class TestTheOpaqueMap:
     def test_it_covers_every_column_except_the_target(self, fixture):
         mapping = naming.rename_map(fixture, "opaque")
         columns = naming.header_of(fixture.csv_path)
-        target = fixture.manifest.target
+        target = fixture.target
         assert set(mapping) == set(columns) - {target}
         assert target not in mapping
 
@@ -59,14 +65,14 @@ class TestTheOpaqueMap:
 
     def test_no_new_name_collides_with_the_target(self, fixture):
         mapping = naming.rename_map(fixture, "opaque")
-        assert fixture.manifest.target not in set(mapping.values())
+        assert fixture.target not in set(mapping.values())
 
     def test_the_names_carry_no_signal(self, fixture):
         """Dense numbering in column order. A gap would say which position was skipped."""
         mapping = naming.rename_map(fixture, "opaque")
         expected = [f"var_{i:02d}" for i in range(1, len(mapping) + 1)]
         columns = naming.header_of(fixture.csv_path)
-        assert [mapping[c] for c in columns if c != fixture.manifest.target] == expected
+        assert [mapping[c] for c in columns if c != fixture.target] == expected
 
     def test_it_is_deterministic(self, fixture):
         assert naming.rename_map(fixture, "opaque") == naming.rename_map(fixture, "opaque")
@@ -75,7 +81,7 @@ class TestTheOpaqueMap:
         """The manifest's ground truth has to still name something that exists in the data."""
         mapping = naming.rename_map(fixture, "opaque")
         header = set(naming.header_of(fixture.csv_path))
-        manifest = fixture.manifest
+        manifest = load_fixture(fixture.dataset_id).manifest
         declared = (
             manifest.planted_columns
             + manifest.legit_strong_features
@@ -108,7 +114,7 @@ class TestTheMaterialisedFile:
         path, _ = naming.materialize(fixture, "opaque", tmp_path)
         original = naming.header_of(fixture.csv_path)
         opaque = naming.header_of(path)
-        target = fixture.manifest.target
+        target = fixture.target
         assert len(opaque) == len(original)
         assert opaque.index(target) == original.index(target)
 
@@ -153,17 +159,18 @@ class TestTheRefusals:
     def test_a_target_that_is_not_a_column_is_refused(self, tmp_path):
         """The map is built around the target, so getting it wrong would rename the target and
         leave a feature un-renamed -- silently inverting the one column the arm holds fixed."""
-        fixture = load_fixture("toy").model_copy(deep=True)
-        fixture.manifest.target = "not_a_column"
+        fixture = Runnable.from_fixture(load_fixture("toy")).model_copy(
+            update={"target": "not_a_column"}
+        )
         with pytest.raises(ValueError, match="not a column"):
             naming.rename_map(fixture, "opaque")
 
     def test_a_header_with_no_rows_under_it_is_refused(self, tmp_path):
         header_only = tmp_path / "toy.csv"
         header_only.write_text("a,b,churned")
-        fixture = load_fixture("toy").model_copy(deep=True)
-        fixture.manifest.target = "churned"
-        fixture.csv_path = header_only
+        fixture = Runnable.from_fixture(load_fixture("toy")).model_copy(
+            update={"target": "churned", "csv_path": header_only}
+        )
         with pytest.raises(ValueError, match="no rows"):
             naming.materialize(fixture, "opaque", tmp_path / "out")
 
@@ -177,9 +184,9 @@ class TestLineEndings:
         source = tmp_path / "toy.csv"
         with source.open("w", encoding="utf-8", newline="") as handle:
             handle.write("id,feature,churned\r\n1,2,0\r\n2,3,1\r\n")
-        fixture = load_fixture("toy").model_copy(deep=True)
-        fixture.manifest.target = "churned"
-        fixture.csv_path = source
+        fixture = Runnable.from_fixture(load_fixture("toy")).model_copy(
+            update={"target": "churned", "csv_path": source}
+        )
 
         path, mapping = naming.materialize(fixture, "opaque", tmp_path / "out")
 
