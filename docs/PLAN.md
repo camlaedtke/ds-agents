@@ -228,6 +228,12 @@ retrofitting that onto a harness built without it would have meant rewriting it.
 the zero-objection `block` fix NEXT.md named as the first code change, and three new results-row
 columns (`errors`, `commit`, `default_model`) the harness needed in order to be worth running.
 
+Scope note (2026-08-31, second): the re-scorer landed and `--subset full` is one blocker lighter,
+not zero. The run path exists and is exercised by `--subset bench-smoke`; what remains is
+`baseline_score` and a measured cost for the other twelve datasets. `bench-smoke`'s own estimate
+was wrong by more than a factor of two (0.040 guessed, 0.017 measured), which is the argument for
+measuring rather than extrapolating before thirteen real datasets are paid for.
+
 Scope note (2026-08-31): the manifest landed and that session-0 question is answered -- AMLB,
 OpenML suite 271. The phase does NOT close with it, because building the manifest revealed that
 the box was two boxes: a registry of datasets, and a path by which a dataset without a planted
@@ -270,15 +276,36 @@ box, and it is what `--subset full` now waits on.
       an `eval-diff` condition field and a new arm is a new commit, so both arms of a comparison
       have to run in one invocation -- see DECISIONS.md 2026-08-31.
 - [x] LOG.md running. Seven entries; the newest is the harness smoke, labelled as not-a-cell.
-- [ ] **The re-scorer, which is what `--subset full` now waits on.** Nothing withholds a holdout and
-      nothing computes `verified_holdout_score` or `baseline_score`, so running the manifest today
-      would emit 13 rows whose headline column is null. Needs, in order: a `Runnable` protocol over
-      `Fixture | DatasetEntry`; `_dataset_state` beside `_fixture_state`; the holdout split before
-      the graph starts; `verified_holdout_score` by re-applying `feature_code_artifact` to the
-      withheld rows (the reason Phase 1 made the feature artifact *code*); and `baseline_score`
-      from the two AMLB-defined baseline points on that same holdout. Wire ONE dataset first
-      (`credit_g`, 1000 rows) rather than thirteen. Budget note: `dataset_id` is an `eval-diff`
-      condition field, so 13 datasets is 13 cells.
+- [~] **The re-scorer. Built and run; `baseline_score` is the one piece deliberately deferred.**
+      A manifest dataset is runnable end to end: `src/ds_agents/runnable.py` (a concrete adapter
+      over `Fixture | DatasetEntry` rather than the `typing.Protocol` this line asked for -- there
+      is no type checker here, so a structural protocol would document the guardrail instead of
+      being it), `holdout.py` (20% carved before the graph starts, stratified, numpy-only, seeded
+      from `RunConfig.random_seed`, `credit_g`'s indices pinned by test), `rescore.py` (refit from
+      `CANDIDATE_SPECS` -- never from `ModelResult.params`, which is a flat merge across steps and
+      is lossy -- scored in a sandbox through the grader's own `LocalTools`). `_fixture_state`
+      became `_run_state`. Seven new results columns including `rescore_status`, a 13-value enum
+      that is `leakage_graded`'s fix applied to a score.
+      **The self-check is what makes the number a measurement rather than a number**: the same
+      pipeline is fit on the agents' train split and scored on the agents' own holdout first, and
+      compared to what the modeler claimed there. `refit_claim_gap` is exactly 0.0 on every run so
+      far, offline and live. Sensitivity is proved by construction rather than by the live rows --
+      `tests/test_rescore.py` builds a dataset whose only signal is absent from the withheld rows
+      and measures claimed 1.0 against verified 0.45.
+      Live: `evals/results/2026-08-31_credit-g-smoke.jsonl`, 4 rows at $0.0673, `rescore_status`
+      ok 4/4, claimed 0.7520 against verified 0.7476. **All four rows are numerically identical,
+      so the replicates bought no variance estimate** -- `credit_g` has no leak, the reviewer
+      raised nothing and `feature_eng` dropped nothing, so no decision was available to be made
+      differently. `[~]` for one reason: `baseline_score` is not built, so `score_ratio` is null on
+      every benchmark row. Deferred rather than rushed -- the unit point's recipe would be ours and
+      not AMLB's, and the baseline sees every column including a leak, so `score_ratio` inverts its
+      meaning between labelled and unlabelled datasets. See DECISIONS.md 2026-08-31 (third entry).
+- [ ] **`baseline_score`, and the pooling hazard it carries.** AMLB's two points -- a constant
+      class-prior predictor (0.5 roc_auc by construction; usable today as a correctness assertion)
+      and a tuned RandomForest whose grid must be invented here and labelled as ours. Both fit on
+      the agents' train split and scored on the same withheld holdout as the run. Needs its own
+      pre-registration, and needs an answer to whether `score_ratio` can be published at all when
+      it means opposite things on labelled and unlabelled datasets.
 
 ## Phase 5: Ablations and writeup (3 to 4 sessions)
 - [~] reviewer on/off, Haiku/Sonnet reviewer, single agent vs team, loop cap 1/3. Two of these ran

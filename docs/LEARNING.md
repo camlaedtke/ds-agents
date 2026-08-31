@@ -647,3 +647,43 @@ Priority: **load-bearing** means the thesis breaks if this is wrong and you cann
   make the list complete, and pretending it does would turn every other suspicious column into a
   scored mistake. Related: [[eval-baselines]], [[caught-vs-remediated]], [[fixture-difficulty]],
   [[measurement-independence]].
+
+### withheld-holdout-vs-cv-fold — who drew the partition decides what it can grade
+- Priority: load-bearing
+- Came up: 2026-08-31, building the re-scorer
+- Status: flagged
+- Why it matters here: this pipeline already had a holdout before this session, and it could not be
+  used to grade anything. `split_artifact` is drawn by the profiler, using a strategy intake chose,
+  over the frame the agents were mounted on — every part of it decided inside the graph. A split a
+  node decided cannot grade the node that decided it, and the failure is not hypothetical: the
+  modeler reports `claimed_holdout_score` against exactly that partition, and a pipeline that
+  leaked a column into its features scores beautifully there because the leak is present on both
+  sides of it. Cross-validation has the same property and is not a fix — 5 pinned folds inside the
+  train split are five more partitions of rows the agents can see. What makes
+  `verified_holdout_score` a different kind of number is only *when* its rows were removed: before
+  `run_pipeline` was called, above the tools boundary, never entering `$DS_DATASET` or the run's
+  artifact store. The general shape: an evaluation split is only independent of a decision if it
+  existed before the decision was made, and "the model never saw these rows" is a claim about
+  chronology, not about row counts. Note the honest limit recorded alongside it — the sandbox has no
+  filesystem namespace, so what the layout buys is an assertable property (no file the run's store
+  holds contains a withheld row) rather than isolation. Related: [[two-splits]],
+  [[measurement-independence]], [[published-vs-baseline]], [[caught-vs-remediated]].
+
+### normalisation-is-not-a-ratio — why `baseline_score` was deferred rather than guessed
+- Priority: load-bearing
+- Came up: 2026-08-31, deciding not to ship `baseline_score`
+- Status: flagged
+- Why it matters here: AMLB's convention is a *normalisation* — score a system as
+  `(it − zero) / (unit − zero)`, where zero is a constant class-prior predictor and unit is a tuned
+  RandomForest. `PipelineState.score_ratio` is a *ratio*: `verified / baseline`. Those are not the
+  same function and they do not agree about what "1.0" means, which is the first thing to know
+  before the field is populated. The second thing is worse and is the actual reason the work was
+  deferred: the baseline is fit on every column, **including a leak**. On a dataset with a planted
+  trap, a pipeline that correctly drops the trap scores *below* a baseline that kept it — so
+  `score_ratio < 1` is evidence of good behaviour on a labelled dataset and of bad behaviour on an
+  unlabelled one, in the same column, with nothing on the row to distinguish them. A headline
+  column that inverts its meaning depending on a property of the dataset cannot be pooled, and
+  discovering that after the numbers exist is how a results table becomes wrong. The general shape:
+  before computing a normalised score, ask what the reference system was allowed to see, and
+  whether the thing being measured was allowed to see the same. Related: [[published-vs-baseline]],
+  [[eval-baselines]], [[complete-list-or-nothing]], [[two-splits]].

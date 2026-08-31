@@ -1415,3 +1415,41 @@ here rather than discovered later -- 200 withheld rows at a 30% positive rate pu
 error of roc_auc near 0.04, so a `holdout_claim_gap` below roughly 0.08 is not distinguishable from
 noise at n=1. That is the "no 10-run count without a replicate" lesson arriving on a continuous
 column, and it applies to the first gap this project measures.
+
+**Outcome, appended after the runs.** Everything above was written before the code. What the runs
+returned: `rescore_status` is `ok` on 4 of 4 `credit-g-smoke` rows and on the standalone live run,
+and `refit_claim_gap` is **exactly 0.0** on every one of them — the harness's refit reproduced the
+modeler's own claimed score on the agents' own holdout to within 1e-6, so `REFIT_TOLERANCE` was not
+merely unviolated, it was never approached. The instrument's sensitivity is established by
+construction rather than by these rows: `tests/test_rescore.py` builds a dataset whose one
+informative column is informative in exactly the rows the agents get and pure noise in the rows they
+are graded on, and measures claimed 1.0 against verified 0.45. Without that test the whole module
+would be a number generator with no evidence it would ever disagree with the agents.
+
+**One thing the pre-registration did not anticipate, and it is a limit rather than a result: all
+four rows are numerically identical in every column.** Same claimed score, same verified score, same
+20 features, same `pass`, same single loop. The two replicates therefore bought no variance estimate
+at all — they are four samples of one deterministic outcome, not four draws. The cause is visible in
+the row: `credit_g` has no planted leak, the reviewer raised zero objections and `feature_eng`
+dropped nothing, so there was no decision available to be made differently. That is a genuine
+contrast with `claims_timing`, where nondeterminism alone moves a 10-run count by about 3, but it is
+a fact about this dataset and not about the pipeline, and the measured +0.0044 gap sits at a fifth
+of the pre-registered noise floor. It is not evidence the agents did not overstate themselves; it is
+evidence this dataset gave them no opportunity to.
+
+**Two things changed from the plan while building.** `NEXT.md` asked for a `Runnable` *protocol*
+and what landed is a concrete adapter with two named constructors. A structural `typing.Protocol`
+would be unchecked — the dev dependencies are pytest and ruff, there is no type checker — and the
+thing it would document is exactly the guardrail `DatasetEntry`'s docstring says must be a property
+rather than a promise. Under the adapter you cannot reach `_run_state` from a benchmark dataset
+without passing through the one reviewed line that writes `planted_columns=[]` on purpose. And
+`cmd_run --repeat 1` stopped collapsing the run root into the invocation root. That was tolerable
+while the invocation root held only `input/`; it stopped being tolerable when the carve put
+`withheld/` beside it, because "the withheld rows are outside every run root" is a property a test
+has to check and it cannot check a layout that is sometimes one shape and sometimes another. No
+path reaches a results row, so nothing published moves.
+
+**`bench-smoke`'s cost estimate was a guess and is now a measurement**: 0.040 became 0.017, wrong by
+more than a factor of two and wrong in the cheap direction. That is the argument for measuring the
+other twelve before `full` runs rather than extrapolating from this one — a factor-of-two error on
+`credit_g` at 1000 rows says nothing useful about `higgs` at 98k.

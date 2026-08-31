@@ -1,131 +1,137 @@
 # Next session
 
 ## Start here
-**The manifest landed, and the question that blocked it since session 0 is answered.**
-`evals/datasets/manifest.yaml` holds **13 binary-classification datasets** from the AutoML
-Benchmark (Gijsbers et al., JMLR 25(101) 2024; OpenML suite 271), each pinned by OpenML data id +
-task id + upstream md5, each carrying a `published_reference` citable to a stable OpenML run id.
-AMLB was chosen because it is the only candidate that publishes *baseline framework definitions*
-rather than only a dataset list. Cost: $0 in API spend to build it.
+**A dataset nobody in this repo wrote can now be run and graded.** `ds-agents run --dataset
+credit_g` works, and so does `eval --subset bench-smoke`. 20% of the rows are carved out *before*
+`run_pipeline` is called, above the tools boundary, and never enter `$DS_DATASET`, `split_artifact`
+or the run's artifact store; `verified_holdout_score` is the promoted model measured on them.
+Three new modules: `runnable.py`, `holdout.py`, `rescore.py`. `_fixture_state` became `_run_state`.
 
-**The manifest is generated, and that is enforced rather than promised.** `.claude/settings.json`
-denies Edit and Write under `evals/datasets/`, so `ds-agents datasets refresh` is the only writer.
-Every number in the file is an API response field or a measurement on the fetched CSV; the prose
-lives in `src/ds_agents/benchmark.py`. Verified two ways: 27 opt-in `network` tests against the
-live APIs, and `datasets verify --online`, which re-fetches and diffs clean.
+**The number is earned by a self-check, not asserted.** No fitted model is persisted anywhere
+(`ModelResult.model_artifact` is still declared and never written), so grading means refitting --
+from `modeler.CANDIDATE_SPECS`, never from `ModelResult.params`, which is a flat merge across
+pipeline steps and is lossy by construction. Before the withheld rows are touched, the same
+pipeline is fit on the agents' train split and scored on the agents' *own* holdout and compared to
+what the modeler claimed there. That one comparison validates transform re-application, seed,
+positive class, scorer sign and split parsing at once. **`refit_claim_gap` is exactly 0.0 on every
+run so far**, offline and live.
 
-**A published number is recorded and is deliberately NOT `baseline_score`.** An OpenML score comes
-from OpenML's 10-fold CV run by a third-party flow; `verified_holdout_score` will come from our own
-withheld holdout. Dividing them would attribute a *protocol* difference to a *system* difference,
-silently. So `published_reference` is informational and labelled with its protocol on the value,
-and `baselines` is a *definition with no number in it* naming what `baseline_score` must be
-computed from. An AST test asserts no code path from either module reaches `baseline_score`.
+**Sensitivity is proved by construction, not by the live rows.** `tests/test_rescore.py` builds a
+dataset whose one informative column is informative in exactly the rows the agents get and pure
+noise in the rows they are graded on: claimed 1.0, verified 0.45, gap 0.55. Without that, the
+module would be a number generator with no evidence it would ever disagree with the agents.
 
-**The rule chose the datasets, and it disagreed with the plan twice — both times correctly.**
-`SELECTION_RULE` (binary, <=100k rows, <=200 features, <=5M cells, >=5 features surviving
-`feature_eng`'s filters) was applied to measurements, not to expectations. `amazon_employee_access`
-scored 0 usable features on the first build and 9 on the second, because the first measured the
-frame `fetch_openml` returns (ID columns as high-cardinality `category`) and the second measured
-the CSV as re-read (`int64`). **The CSV is what gets mounted at `$DS_DATASET`, so all measured
-fields now come from the re-read file.** The same round trip moved `kc1`'s `positive_class` from
-`'true'` to `'True'` — a manifest recording the former would have named a class no run could match.
+**The live rows: 4 at $0.0673, `rescore_status` ok 4/4, claimed 0.7520 against verified 0.7476.
+And all four are numerically identical in every column**, so the two replicates bought *no variance
+estimate at all* -- four samples of one deterministic outcome. `credit_g` has no planted leak, the
+reviewer raised zero objections and `feature_eng` dropped nothing, so no decision was available to
+be made differently. The +0.0044 gap is a fifth of the pre-registered noise floor and is not
+evidence the agents did not overstate themselves.
 
-**Nine results-row columns stopped lying about datasets with no answer key.**
-`graded_for_leakage = bool(planted)` returns `None` from `leakage_caught`, `leakage_precision`, the
-`false_alarm*` columns and the four `profiler_/reviewer_` grades, generalising the rule
-`leakage_remediated` and the `*_recall` columns already followed. A new `leakage_graded` column
-says so outright rather than making a reader infer it from nine nulls. **No published number
-moves** — the precondition was proved, not assumed: all 145 committed rows carry a non-empty
-`leakage_planted`, and a test fails if that stops being true.
+**Fixtures withhold nothing, by decision.** `withheld_fraction` is 0.0 for every fixture, so all
+145 committed rows and every toy test are byte-for-byte unaffected. Carving a 200-row toy would
+change what the agents see for no gain: planted leakage is a *column*, so a random holdout still
+contains it.
 
-The floor: **681 tests pass offline** (up from 580) plus 27 network tests, ruff clean,
-`uv run ds-agents run --dataset toy` green live at $0.0129. Session spend ~$0.07 all in.
+The floor: **716 tests pass** (up from 681), 27 skipped, ruff clean, `uv run ds-agents run
+--dataset toy` green live at $0.0127. Session spend ~$0.14 all in.
 
 ## First prompt
-Read CLAUDE.md, docs/PLAN.md Phase 4, and the "Start here" above. **The next box is the re-scorer,
-and it is what `--subset full` now waits on**: nothing withholds a holdout and nothing computes
-`verified_holdout_score` or `baseline_score`, so running the 13 datasets today writes 13 rows whose
-headline column is null.
+Read CLAUDE.md, docs/PLAN.md Phase 4, and the "Start here" above. **The remaining Phase 4 box is
+`baseline_score`, and it needs a decision before it needs code.**
 
-**Wire ONE dataset end to end, not thirteen.** `credit_g` (1,000 rows) is the cheapest. In order:
-a `Runnable` protocol over `Fixture | DatasetEntry`; `_dataset_state` beside `_fixture_state`; the
-holdout split *before* the graph starts (never in `split_artifact`); `verified_holdout_score` by
-re-applying `feature_code_artifact` to the withheld rows — which is the whole reason Phase 1 made
-the feature artifact *code*; then `baseline_score` from AMLB's two points (constant class-prior
-predictor, tuned RandomForest) fit on the same train split and scored on the same holdout.
+The zero point is free: a constant class-prior predictor scores exactly 0.5 roc_auc by
+construction, so it is a correctness assertion on the re-scorer rather than a measurement. The unit
+point is the problem. AMLB publishes the *convention* (normalise from constant predictor to tuned
+RandomForest) but not a grid this repo can re-fetch -- `openml1.win.tue.nl` presents a self-signed
+certificate -- so any recipe is **ours**, untraceable in a way nothing else in the manifest is.
 
-Budget warning before anyone types `--subset full`: `dataset_id` is an `eval-diff` condition field,
-so 13 datasets is **13 cells**, and these are real datasets — the measured $0.015-$0.030 and
-21-86s per run on 200-row toys are floors, not estimates.
+**Settle the pooling hazard first, because it may mean `score_ratio` should not be published at
+all.** The baseline is fit on every column, including a leak. On a labelled dataset a pipeline that
+correctly drops the trap scores *below* a baseline that kept it, so `score_ratio < 1` is evidence
+of good behaviour there and of bad behaviour on an unlabelled dataset -- the same column meaning
+opposite things with nothing on the row to separate them. Options worth weighing: compute the
+baseline on the post-`feature_eng` matrix instead of raw columns (changes what it measures);
+publish `baseline_zero_score` and `baseline_unit_score` as separate columns and let a reader
+normalise (honest, more work downstream); or gate `score_ratio` on `leakage_graded` the way the
+nine leakage columns are gated. Pre-register whichever, then build.
+
+After that, `--subset full` needs a measured cost per dataset. Do NOT extrapolate from
+`bench-smoke`: its own estimate was wrong by more than a factor of two (0.040 guessed, 0.017
+measured), and `higgs` is 98x `credit_g`'s row count.
 
 ## Open questions
 
-- **Is `amazon_employee_access` a real dataset or a degenerate one?** It passes the rule with 9
-  usable features, but all nine are integer-encoded high-cardinality IDs (resource, manager,
-  role_family...). It may still produce the zero-signal run the `min_usable_features` criterion
-  exists to prevent — the criterion measures *survivability*, not *learnability*. Worth one cheap
-  run once the run path exists, before it goes in any table.
-- **Is a partially-labelled dataset gradeable at all?** `bank_marketing` carries one documented
-  leak (`V12`) and `leakage_labelled: false`. It is deliberately NOT in `planted_leakage_columns`,
-  because that field is read as a complete list and claiming completeness would score every other
-  suspicious column a false alarm. So today the one real, externally-documented leak this project
-  has access to is unscored. Some third state between "complete answer key" and "nothing" may be
-  worth inventing — but only with a run to test it against.
-- **`published_reference` picks the max over uploaded runs, which is not a protocol-stable anchor.**
-  `kr_vs_kp` reads 1.000 and `numerai28_6` reads 0.530. Both are real and both are the best anyone
-  uploaded, which mostly measures who uploaded. Fine as a realism sanity check, not as a target.
-- **The AMLB self-signed certificate is the reason PLAN.md's box is `[~]` and not `[x]`.** AMLB's
-  *own* per-dataset numbers are not vendored because `openml1.win.tue.nl` cannot be verified from
-  here. If it ever gets a valid cert, those numbers are worth adding as a second reference.
-- **Two AMLB candidates could not be fetched at all** — `guillermo` and `Robert`, both md5
-  mismatches from OpenML itself. Recorded as `fetch_failed` in `excluded`. Both would have failed
-  `max_features` anyway, so nothing was lost, but a *recurring* upstream md5 mismatch is a finding.
-- **A run produced no model at all and was recorded `review_verdict: "pass"`.** Unchanged from last
-  session; fixing verdict derivation changes a column every committed row carries.
-- **The `ci` baseline is NOT a comparand for future ablations.** Unchanged. Both arms of any
-  comparison must run in one invocation at one commit.
-- **No CI job and no thresholds.** Unchanged; the cheap deterministic gate is the better buy.
-- **`errored` needs a companion column.** Unchanged — and `leakage_graded` is now the worked
-  example of what that fix looks like.
+- **Should `score_ratio` exist at all?** See the first prompt. It is the only column in the project
+  whose meaning depends on a property of the dataset rather than on the run, and it is currently
+  null everywhere, which is the cheapest moment to decide.
+- **`credit_g` produced four identical rows. Is that the dataset or the pipeline?** The claim above
+  is that it is the dataset -- no leak, no objections, no drops, so no decision to vary. Worth one
+  cheap check on a second manifest dataset before anyone writes "the pipeline is deterministic on
+  real data" anywhere. `australian` or `phoneme` are the next cheapest.
+- **Is `amazon_employee_access` a real dataset or a degenerate one?** Unchanged, and now *cheap to
+  answer*: the run path exists. Nine integer-encoded high-cardinality ID columns may produce the
+  zero-signal run `min_usable_features` exists to prevent. One run settles it.
+- **Is a partially-labelled dataset gradeable at all?** Unchanged. `bank_marketing`'s documented
+  `V12` is still unscored, deliberately, because `planted_leakage_columns` is read as complete.
+  Now testable against a real run rather than in the abstract.
+- **200 withheld rows put roc_auc's standard error near 0.04**, so a `holdout_claim_gap` under
+  ~0.08 is not distinguishable from noise at n=1. This is the "no 10-run count without a replicate"
+  lesson arriving on a *continuous* column, and it binds every gap this project will publish.
+- **The withheld holdout is a random split, so it cannot catch a temporal or grouped leak.** It
+  catches a model that overfits rows. `claims_timing`'s trap would survive it. Not a defect, but it
+  bounds what `holdout_claim_gap` can ever mean and belongs in the writeup.
+- **`published_reference` picks the max over uploaded runs**, which is not a protocol-stable
+  anchor. Unchanged. `credit_g` reads 0.7889 against our 0.7476 on a different protocol -- plausible
+  and lower, which is the sanity check it is good for and nothing more.
+- **A run produced no model at all and was recorded `review_verdict: "pass"`.** Unchanged, and now
+  it has a companion: `rescore_status` would read `no_model` on such a row, so the two-columns fix
+  exists for the score even though `review_verdict` itself is still wrong.
+- **No CI job and no thresholds.** Unchanged.
+- **`errored` needs a companion column.** Unchanged, and `rescore_status` is now the *second*
+  worked example of what that fix looks like, after `leakage_graded`.
 - **`exhausted` is still uninformative.** Unchanged.
-- **Late detection against the cap** is the remaining structural defect. Unchanged.
-- **Should `by_category` become the default?** Unchanged.
-- **`customer_id` as a false positive is every run.** Unchanged.
-- **Duplicate-rows-across-split is still unbuilt.** Unchanged.
+- **Late detection against the cap** is the remaining structural reviewer defect. Unchanged.
+- **The AMLB self-signed certificate** still blocks vendoring AMLB's own per-dataset numbers.
+- **Two AMLB candidates could not be fetched at all** (`guillermo`, `Robert`, md5 mismatches from
+  OpenML itself). Unchanged.
 - **LangSmith is wired but never exercised.** Unverified until a key exists.
 - `ModelResult` has no field for the modeler's `rationale` or a per-candidate `fit_error`.
 
 ## Parking lot
 
-- **`.mcp.json` still hardcodes the toy dataset on argv.** Now more visibly wrong: there are 13
-  other datasets it cannot see, and Phase 5's generalist arm needs it parameterised.
-- **`benchmark.py` and `benchmark_build.py` are split so reading the manifest never imports
-  sklearn or urllib.** Worth keeping if a third module ever wants the registry.
-- **`csv_sha256` is recorded but deliberately not asserted in the always-on test tier** — it
-  depends on pandas' float formatting, so a version bump would turn it red with nothing wrong.
-- **`network` tests are gated on `DS_AGENTS_NETWORK_TESTS=1`, NOT on `-m "not network"` in
-  addopts.** pytest's `-m` is a single option, so the hook's `pytest -m fast` would *replace* an
-  addopts filter and silently re-enable them.
-- **The `min_usable_features` criterion re-implements `feature_eng`'s filters** using its imported
-  constants, so the two cannot drift. `blood-transfusion` (4 usable) is what it excludes today.
-- **OpenML data ids and task ids are different namespaces and coincide for `credit-g` (31/31).**
-  A test asserts at least one entry where they differ, so the pair stays evidence.
-- **`positive_class` is the minority level, named explicitly**, because "the second one
-  alphabetically" is not a definition anyone can rely on.
-- **13 datasets, 22 excluded, every exclusion recorded with the measurement that caused it** — so
-  "why is `christine` not in here" is answerable from the file rather than a transcript.
-- **The harness's `SUBSETS` still has no `full` entry** and `_resolve_subset`'s message now names
-  the re-scorer rather than the manifest.
-- **A failed run is charged its cell's ESTIMATE, not its real cost.** Unchanged.
-- **The cost cap is invocation-level by choice.** Unchanged.
+- **The sandbox is not a jail, and the docstrings say so rather than implying otherwise.** It has
+  no filesystem namespace, so a snippet could open the withheld CSV by relative path. What the
+  layout buys is an *assertable* property -- no file the run's store holds contains a withheld row,
+  checked by test -- not isolation. Real isolation waits on the Docker backend behind `SandboxPool`.
+- **`ModelResult.model_artifact` is still declared and never written.** The re-scorer refits
+  instead, which is defensible and is now proved faithful to 1e-6. Persisting the fitted model
+  would make the grader cheaper but would also make it grade a *pickle* rather than a recipe.
+- **`cmd_run --repeat 1` now uses `run-0/` instead of collapsing into the invocation root.**
+  Deliberate: containment is a property a test has to check, and it cannot check a layout that is
+  sometimes one shape and sometimes another. No path reaches a results row.
+- **`register_dataset` does an unbounded `pd.read_csv` + per-column `nunique` per run**, and now
+  also copies the file. Free at `credit_g`'s 139 KB. **Measure before `higgs` at 46 MB** -- this is
+  the parking-lot item most likely to become a real cost.
+- **`.mcp.json` still hardcodes the toy dataset on argv.** Unchanged and now more visibly wrong.
+- **`SUBSETS` has no `full` entry**, and `_resolve_subset`'s message has now been wrong twice for
+  the same reason: the blocker keeps moving. It currently names `baseline_score`, and a test
+  asserts it does NOT still name `verified_holdout_score`.
+- **The `credit_g` withheld indices are pinned as a sha256 digest**, not 200 literals. Equally
+  loud, and a diff nobody can read is a diff nobody checks.
+- **`_withhold_rows` uses numpy directly rather than `train_test_split`** -- sklearn's stratified
+  shuffling is not contracted stable across versions, and this is the one partition every headline
+  number sits on.
+- **`csv_sha256` mismatches warn rather than refuse** (`benchmark.require_cached_csv`), because the
+  hash depends on pandas' float formatting. `RunConfig.dataset_hash` now carries the hash of the
+  *agent-view* CSV instead, which is the bytes that actually ran.
+- **`network` tests are gated on `DS_AGENTS_NETWORK_TESTS=1`, NOT on `-m "not network"`.**
+  Unchanged.
+- **The cost cap is invocation-level; a failed run is charged its estimate.** Unchanged.
 - **`ds-agents eval` appends to a same-day, same-name file rather than refusing.** Unchanged.
 - **`forced_drop_release` is closed to further use.** Unchanged.
 - **`feature_eng.py`'s comment on the justification string is still wrong** for a future reader.
 - **`harness.py` and `cli.py` still import each other inside functions.** Deferred again.
 - **The loop-cap default `3` is written in three places.**
 - **`cmd_run` has no per-run `try/except`.** Unchanged.
-- **Docker is deferred, not rejected, and `SandboxPool` is the seam.**
-- **`ArtifactStore` copies the dataset per run and chmods it 0444** — at 98k rows (`higgs`) that
-  copy is no longer free, and `register_dataset` also runs `pd.read_csv` + per-column `nunique`
-  **per run**. Worth measuring before the first `full` invocation.
 - ruff formats Python blocks inside `docs/*.md`, so the hook rewrites design docs on every edit.
