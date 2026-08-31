@@ -850,3 +850,49 @@ in one invocation at one commit — which is what the forced-drop-release cell a
 row carries, and 29 of 30 are at a `-dirty` variant of it. The `toy-default` cell is the same
 nominal configuration as the 2026-08-29 smoke row, and `2b6a22e` touched no `src/`, so those rows
 are *behaviourally* poolable — but `eval-diff` separates them by `commit` and it is right to.
+
+## 2026-08-31 — `credit-g-smoke`: the first rows on a dataset nobody here wrote
+
+`evals/results/2026-08-31_credit-g-smoke.jsonl`, `--subset bench-smoke --replicates 2 --n 2`,
+4 rows at **$0.0673** against a $0.25 cap. 0 refused, 0 failed, nothing stopped early. `commit` is
+`bb93cf3` on all four rows — one cell, not two, which is the 2026-08-31 provenance defect staying
+fixed.
+
+| cell | n | rescore_status | claimed | verified | gap | refit gap | withheld | features | verdict | $/run |
+|---|---|---|---|---|---|---|---|---|---|---|
+| credit-g-default | 4 | ok (4/4) | 0.7520 | 0.7476 | +0.0044 | 0.0 | 200 | 20 | pass | 0.0168 |
+
+**What this file licenses.** It is a write-path proof and a first characterisation: a manifest
+dataset can be resolved, mounted with 20% of its rows withheld, run, and graded on those rows.
+`rescore_status` is `ok` on 4 of 4 and `refit_claim_gap` is exactly 0.0 on 4 of 4 — the harness's
+refit reproduced the modeler's own claimed score on the agents' own holdout to within 1e-6, which
+is what makes `verified_holdout_score` the modeler's model rather than a number computed on some
+rows. `leakage_graded` is `false` and all nine leakage rates are null, correctly: this dataset has
+no answer key.
+
+**What it does not license, and this is the important part. All four rows are numerically
+identical in every column.** Same claimed score, same verified score, same 20 features, same
+`pass`, same single loop. So the two replicates bought **no variance estimate at all** — they are
+four samples of one deterministic outcome, not four draws from a distribution. Do not read the
+0.0044 gap as "measured with low variance"; read it as "measured once, four times". The reason is
+visible in the row: `credit_g` has no planted leak, the reviewer raised zero objections, and
+`feature_eng` dropped nothing, so there was no decision for the model to make differently. That is
+a real contrast with `claims_timing`, where nondeterminism alone moves a 10-run count by about 3 —
+but it is a contrast about *this dataset*, not evidence that the pipeline is deterministic.
+
+**The gap is inside the noise floor and was pre-registered as such.** 200 withheld rows at a 30%
+positive rate put the standard error of roc_auc near 0.04. A `holdout_claim_gap` of +0.0044 is a
+fifth of one standard error. It is **not** evidence that the agents did not overstate themselves;
+it is evidence that this dataset, with nothing dropped and nothing objected to, gives them no
+opportunity to. The instrument's sensitivity is established elsewhere and by construction:
+`tests/test_rescore.py` builds a dataset whose only signal is absent from the withheld rows and
+measures claimed 1.0 against verified 0.45, a gap of 0.55.
+
+**Not a comparand.** Same rule as the `ci` baseline, same reason: `commit` is an `eval-diff`
+condition field and a new arm is a new commit, so both arms of any comparison must run in one
+invocation. What this file *is* good for is the `est_cost_usd` for `bench-smoke`, which was a guess
+(0.040) and is now a measurement (0.0168) — the first entry in `SUBSETS` whose estimate was wrong
+by more than a factor of two, and wrong in the cheap direction.
+
+**`score_ratio` is null on every row** because `baseline_score` is not implemented. That is
+deliberate and pre-registered, not an oversight — see DECISIONS 2026-08-31 (third entry).

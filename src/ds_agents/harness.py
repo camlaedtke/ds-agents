@@ -142,9 +142,10 @@ SUBSETS: dict[str, tuple[Cell, ...]] = {
     # The first subset that names a dataset nobody here wrote. One cell, one dataset, on purpose:
     # `credit_g` is the cheapest thing in the manifest at 1000 rows, and the point is to prove the
     # run-and-grade path end to end before thirteen of them are paid for. `est_cost_usd` is a
-    # GUESS here, unlike every number above it -- those were measured on 2026-08-31 and this one
-    # cannot be until this subset has run once.
-    "bench-smoke": (Cell(name="credit-g-default", dataset="credit_g", est_cost_usd=0.040),),
+    # measurement like every number above it: the 4-row 2026-08-31 `credit-g-smoke` invocation
+    # averaged $0.0168 per run. The pre-run guess was 0.040, wrong by more than a factor of two and
+    # wrong in the cheap direction -- which is why the other twelve get measured before `full`.
+    "bench-smoke": (Cell(name="credit-g-default", dataset="credit_g", est_cost_usd=0.017),),
     # "full" is deliberately absent. See `_resolve_subset`.
 }
 
