@@ -109,13 +109,20 @@ class TestSubsetsPointAtRealFixtures:
         assert [cell.name for cell in SUBSETS["toy"]] == ["toy-default"]
 
     def test_ci_cells_share_loop_cap_three_and_closure_off(self):
-        """The spec's cell definitions, pinned so a future edit notices it changed one."""
+        """The spec's cell definitions, pinned so a future edit notices it changed one.
+
+        The three `est_cost_usd` values are measured means from the 2026-08-31 `ci` baseline, not
+        guesses -- see the comment above `SUBSETS`. They are pinned here so that a future revision
+        has to be deliberate, but note what they are NOT: `est_cost_usd` never reaches a results
+        row, so no published number moves when these do. Only the point at which a cost cap
+        truncates a plan moves.
+        """
         for cell in SUBSETS["ci"]:
             assert cell.loop_cap == 3
             assert cell.objection_closure == "off"
 
         by_name = {cell.name: cell for cell in SUBSETS["ci"]}
-        assert by_name["toy-default"].est_cost_usd == pytest.approx(0.010)
+        assert by_name["toy-default"].est_cost_usd == pytest.approx(0.015)
         claims = by_name["claims-opaque-which"]
         assert claims.dataset == "claims_timing"
         assert claims.naming == "opaque"
@@ -127,7 +134,7 @@ class TestSubsetsPointAtRealFixtures:
         assert reissued.naming == "opaque"
         assert reissued.reviewer_prompt == "which_column"
         assert reissued.objection_routing == "by_category"
-        assert reissued.est_cost_usd == pytest.approx(0.025)
+        assert reissued.est_cost_usd == pytest.approx(0.029)
 
 
 class TestForcedDropReleaseIsAClosedAxis:
@@ -248,7 +255,7 @@ class TestTheCostCap:
             today=date(2026, 8, 29),
         )
 
-        # toy-default (est 0.010) fits; toy-default's actual spend (0.005) + claims-opaque-which's
+        # toy-default (est 0.015) fits; toy-default's actual spend (0.005) + claims-opaque-which's
         # estimate (0.030) does not fit under a 0.02 cap, so the cap stops there.
         assert report.rows_written == 1
         assert report.stopped_early == "cost cap"
@@ -266,7 +273,7 @@ class TestTheCostCap:
             today=date(2026, 8, 29),
         )
 
-        # toy-default's est_cost_usd is 0.010; the fake run actually cost 0.005.
+        # toy-default's est_cost_usd is 0.015; the fake run actually cost 0.005.
         assert report.spend_usd == pytest.approx(0.005)
         assert report.per_cell["toy-default"].spend_usd == pytest.approx(0.005)
         assert report.charged_estimate_usd == 0.0
@@ -296,8 +303,8 @@ class TestTheCostCap:
         assert report.runs_failed == 1
         assert report.rows_written == 0
         # toy-default's est_cost_usd, charged in full because nothing measured what it really cost.
-        assert report.spend_usd == pytest.approx(0.010)
-        assert report.charged_estimate_usd == pytest.approx(0.010)
+        assert report.spend_usd == pytest.approx(0.015)
+        assert report.charged_estimate_usd == pytest.approx(0.015)
 
 
 class TestPublishabilityGate:
@@ -484,3 +491,58 @@ class TestTheLiveRunnerMaterializesOncePerDatasetAndNaming:
 
         # Six runs over two distinct (dataset, naming) pairs: descriptive and opaque, once each.
         assert calls == [("toy", "descriptive"), ("toy", "opaque")]
+
+
+class TestProvenanceIsReadOncePerInvocation:
+    """The harness must not record its own output as a change to the tree that produced its runs.
+
+    Found by the 2026-08-31 `ci` baseline, not by a test: `_run_once` used to call `git_commit()`
+    per run, and the results JSONL is untracked until someone commits it, so writing row 0 made
+    `git status --porcelain` non-empty. Run 0 recorded `8a629bf` and runs 1..29 recorded
+    `8a629bf-dirty`. Because `commit` is one of `evaldiff.CONDITION_FIELDS`, that split
+    `toy-default` into a cell of n=1 and a cell of n=9 -- the field meant to guarantee that pooled
+    rows came from one tree instead guaranteed that they could not be pooled at all.
+
+    This is the same once-per-invocation rule `materialize` already follows above, for the same
+    reason: everything that is supposed to be identical across the runs of one invocation has to be
+    read once, before the runs start changing the thing being read.
+    """
+
+    def test_every_run_in_one_invocation_gets_the_same_commit(self, tmp_path, monkeypatch):
+        from ds_agents import cli, harness
+
+        # A git_commit that answers differently every call, standing in for a tree the invocation
+        # dirties as it goes. If provenance were read per run, these would reach the rows verbatim.
+        answers = iter(["cafe1", "cafe1-dirty", "cafe1-dirty", "cafe1-dirty"])
+        monkeypatch.setattr("ds_agents.provenance.git_commit", lambda *a, **k: next(answers))
+
+        seen: list[str | None] = []
+
+        def capturing_run_once(fixture, **kwargs):
+            seen.append(kwargs["commit"])
+            return _state(cost=0.001)
+
+        monkeypatch.setattr(cli, "_run_once", capturing_run_once)
+
+        runner = harness._live_run(tmp_path, transport="local", no_live=True)
+        cell = Cell(name="a", dataset="toy")
+        for seq in range(3):
+            runner(PlannedRun(cell=cell, replicate=1, index=seq, seq=seq), tmp_path / f"r{seq}")
+
+        assert seen == ["cafe1", "cafe1", "cafe1"]
+
+    def test_run_once_has_no_default_commit_to_fall_back_to(self):
+        """The bug was a default, not a call site, so the guard is on the default.
+
+        `commit` is keyword-only with no default and `None` is a legitimate value (git missing, not
+        a checkout), so a sentinel default would be indistinguishable from the answer it is
+        standing in for. Giving this parameter any default at all would let a third caller
+        reintroduce per-run provenance silently, which is how the first one did it.
+        """
+        import inspect
+
+        from ds_agents import cli
+
+        param = inspect.signature(cli._run_once).parameters["commit"]
+        assert param.default is inspect.Parameter.empty
+        assert param.kind is inspect.Parameter.KEYWORD_ONLY

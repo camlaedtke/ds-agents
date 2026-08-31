@@ -37,7 +37,7 @@ Invariants worth stating explicitly:
 
 - `RunConfig` is frozen. It carries `run_id`, `arm`, `reviewer_enabled`, `reviewer_model`,
   `default_model`, `loop_cap`, `reviewer_sees_code`, `naming`, `reviewer_prompt`,
-  `objection_routing`, `objection_closure`, `forced_drop_release`, `random_seed` and
+  `objection_routing`, `objection_closure`, `forced_drop_release`, `random_seed`, `commit` and
   `dataset_hash`. Every results row is self-describing from the state object alone — without it,
   "reviewer disabled" and "reviewer crashed" are the same row, and a descriptive run and an opaque
   one over byte-identical rows are the same row too. `forced_drop_release` is the one condition
@@ -280,9 +280,20 @@ report a team that catches leaks while hiding which member caught it. All four a
 zero when `profile` is None: a profiler that crashed nominated nothing in a different sense than one
 that looked and declined.
 
-Conditions: `arm`, `reviewer_enabled`, `reviewer_model`, `reviewer_sees_code`, `loop_cap`,
-`naming`, `reviewer_prompt`, `objection_routing`, `objection_closure`, `forced_drop_release`,
-`random_seed`, straight off the frozen `RunConfig`.
+Conditions: `arm`, `reviewer_enabled`, `reviewer_model`, `default_model`, `reviewer_sees_code`,
+`loop_cap`, `naming`, `reviewer_prompt`, `objection_routing`, `objection_closure`,
+`forced_drop_release`, `random_seed`, `commit`, straight off the frozen `RunConfig`.
+
+`commit` is the odd one out and is worth its own sentence, because it is a condition that describes
+the *tree* rather than the run: `<short hash>`, or `<short hash>-dirty` when the working tree had
+uncommitted changes, and `None` when git is missing or this is not a checkout. It is read once per
+invocation, before the first run — not once per run, which is a distinction the 2026-08-31 `ci`
+baseline paid for. A results file is untracked until someone commits it, so a per-run read let the
+harness's own first written row dirty the tree and stamp every later run `-dirty`, splitting one
+cell in two under `eval-diff`, for which `commit` is a condition field. See DECISIONS.md
+2026-08-31. The consequence for experiment design is the important half: **two arms that must be
+compared have to run in one invocation at one commit**, because a new arm is usually a new `Literal`
+on `RunConfig` and therefore a new tree, which `eval-diff` will refuse to pool.
 
 Loop: `review_verdict`, `review_loops`, `objections_raised`, `objections_by_category`,
 `objections_open_at_end`, and -- added 2026-08-28 with the closure axis, because

@@ -237,10 +237,19 @@ columns (`errors`, `commit`, `default_model`) the harness needed in order to be 
       difference an effect, excludes `None` metrics from denominators, and reports per-replicate
       counts beside pooled Wilson intervals. Smoked live at n=1 on `toy` for $0.0135 --
       `evals/results/2026-08-29_harness-smoke.jsonl`, which is a write-path proof and not a cell.
-- [~] `ci` subset, GitHub Actions job with thresholds. The subset is defined and runnable (three
-      cells, one per fixture, ~$0.065 a replicate) and has NOT been run live. No CI job and no
-      thresholds: a threshold needs a replicated baseline to be a threshold rather than a coin
-      flip, and no such baseline exists yet.
+- [~] `ci` subset, GitHub Actions job with thresholds. **The subset has now been run live**, 3
+      cells x 2 replicates x n=5, 30 rows at $0.7291, 0 refused and 0 failed --
+      `evals/results/2026-08-31_ci-baseline.jsonl`. It bought the first live evidence that the
+      zero-objection `block` retry fires (7 of 30 runs, 4 of those 7 rescued by the retry), measured
+      per-run costs that replaced the three guesses in `SUBSETS`, and one defect the harness could
+      only find by running more than once: `_run_once` read `git_commit()` per run, so writing the
+      results file dirtied the tree and split `toy-default` across two `commit` values. Fixed to a
+      once-per-invocation read. Still no CI job and no thresholds, and the reason has changed: a
+      threshold is now affordable to set, but a gate that spends real API money on every push needs
+      a policy nobody has written, there is no `.github/` in this repo, and no key is available to
+      Actions. Scope note: this run does NOT serve as the comparand for later ablations. `commit` is
+      an `eval-diff` condition field and a new arm is a new commit, so both arms of a comparison
+      have to run in one invocation -- see DECISIONS.md 2026-08-31.
 - [x] LOG.md running. Seven entries; the newest is the harness smoke, labelled as not-a-cell.
 
 ## Phase 5: Ablations and writeup (3 to 4 sessions)

@@ -780,3 +780,73 @@ written at a commit where the reviewer can retry a dead-end block, and the first
 `errors` and `default_model` at all. Those three columns cannot be back-filled onto any earlier row
 -- only rows were committed and the states they came from are gone -- so `eval-diff` will always
 group pre-2026-08-29 rows into their own cells. That is correct rather than inconvenient.
+
+## 2026-08-31 — `ci` subset, first live run, 3 cells x 2 replicates x n=5
+
+`2026-08-31_ci-baseline.jsonl`, **30 rows**, $0.7291 against a $1.00 cap, ~24 minutes. Live Haiku
+over MCP, `loop_cap=3`, `random_seed=20260822`, 0 rows refused, 0 runs failed, `stopped_early: no`,
+`charged_estimate_usd: $0.00` (every dollar measured; nothing was charged an estimate).
+Pre-registered in DECISIONS.md 2026-08-31, committed before the runner was called.
+
+```
+ds-agents eval --subset ci --name ci-baseline --replicates 2 --n 5 --max-cost-usd 1.00
+```
+
+| cell | n | `leakage_remediated` | `leakage_caught` | `reviewer_caught` | `errored` | mean $ | mean loops | mean s |
+| ---- | - | -------------------- | ---------------- | ----------------- | --------- | ------ | ---------- | ------ |
+| toy-default           | 10 | 8/10 [0.490, 0.943] · 4/5, 4/5 | 0/10 [0.000, 0.278] | 0/10 [0.000, 0.278] | 0/10 [0.000, 0.278] | 0.0150 | 1.2 | 21.0 |
+| claims-opaque-which   | 10 | 9/9 [0.701, 1.000] · 4/4, 5/5 *(1 excluded)* | 3/10 [0.108, 0.603] | 10/10 [0.722, 1.000] | 2/10 [0.057, 0.510] | 0.0296 | 2.3 | 34.7 |
+| reissued-opaque-which | 10 | 8/10 [0.490, 0.943] · 3/5, 5/5 | 1/10 [0.018, 0.404] | 5/10 [0.237, 0.763] | 6/10 [0.313, 0.832] | 0.0283 | 2.2 | 86.1 |
+
+Pooled Wilson 95% interval after the count; per-replicate counts after the interval. **The three
+cells differ in fixture, so nothing in this table is a contrast** — no row is an arm and no pair of
+rows is a comparison. Between-replicate spread is within binomial noise on every cell (the widest is
+`reissued` `errored` at 4/5 vs 2/5), so no pooled interval is thrown out under the pre-registered
+replicate check.
+
+**The block-retry fired, and this is its first live evidence.** 7 of 30 runs (2 claims, 5 reissued)
+hit `block-retry` in the `errors` column. The pre-registration expected 1-3 and fixed in advance that
+a zero would mean nothing; instead the count came in above the range, mostly on `reissued_ids`, a
+fixture that contributed nothing to the original 1-2-in-10 base rate. Split by outcome, as
+pre-registered:
+
+- **retry produced >=1 actionable objection: 4 of 7.** All 4 ended `leakage_remediated: true`.
+- **retry still produced nothing actionable: 3 of 7.** One remediated anyway, one did not, one is
+  the zero-feature run below.
+
+So the repair path works and it recovers a majority of the dead ends it catches. It is not free:
+every retry appends a `PipelineError`, so a *rescued* run reads `errored: true`, and that is most of
+why `reissued` shows 6/10 errored. **`errored` on this file is not a reliability rate** and must not
+be read as one.
+
+**One run produced no model at all and was recorded `pass`.** `claims-opaque-which` rep=1 idx=2:
+`by_category` routing dropped every column across two `feature_eng` passes, the modeler's candidates
+both failed to fit on an empty matrix ("every candidate failed to fit; no model can be chosen"), the
+reviewer then had nothing left to object to, claimed `block`, and its retry produced nothing. Final
+row: `n_final_features: 0`, `claimed_holdout_score: null`, `review_verdict: "pass"`,
+`route_sequence: [feature_eng, feature_eng, reporter]`. `leakage_remediated` is correctly `null` and
+`eval-diff` excluded it from that denominator (hence 9/9, not 9/10). But `publishable()` let the row
+through and the verdict says `pass`, which is the opposite of what happened. This is the known
+"`by_category` turns a reviewer false positive into a real drop" cost, taken to its limit.
+
+**The harness recorded its own output as a change to its own provenance.** `commit` reads `8a629bf`
+on run 0 and `8a629bf-dirty` on runs 1-29: the results JSONL is untracked until committed, so
+writing the first row made `git status --porcelain` non-empty, and `_run_once` was reading
+provenance per run. `commit` is one of `evaldiff.CONDITION_FIELDS`, so **`toy-default` fragments
+into a cell of n=1 and a cell of n=9** — visible in `eval-diff` output as three separate `toy` cells
+across this file and the smoke. Fixed in the same session (provenance is now read once per
+invocation, before any row exists) but **not back-fixed here: the rows say what the run recorded.**
+Read the `toy-default` row of the table above as pooling two cells that a tool will not pool.
+
+**What this file does and does not license.** It is the first replicated live characterization of
+the three `ci` cells and the source of the corrected `est_cost_usd` values (0.015 / 0.030 / 0.029,
+replacing 0.010 / 0.030 / 0.025). It is **not** a comparand for future ablations, and NEXT.md's
+claim that it "produces the replicated baseline that every remaining ablation needs" was wrong:
+`commit` is a condition field, a new arm is almost always a new `Literal` and therefore a new
+commit, so a future arm can never be diffed against this file. Both arms of an ablation have to run
+in one invocation at one commit — which is what the forced-drop-release cell already did.
+
+**Comparability.** Nothing here pools with anything earlier. Every row is at a commit no previous
+row carries, and 29 of 30 are at a `-dirty` variant of it. The `toy-default` cell is the same
+nominal configuration as the 2026-08-29 smoke row, and `2b6a22e` touched no `src/`, so those rows
+are *behaviourally* poolable — but `eval-diff` separates them by `commit` and it is right to.

@@ -79,3 +79,38 @@ def test_the_opaque_arm_materialises_one_csv_for_all_repetitions(tmp_path):
     materialised = list((tmp_path / "artifacts" / "input").glob("*.csv"))
     assert len(materialised) == 1
     assert materialised[0].read_text().splitlines()[0].startswith("var_01,")
+
+
+def test_every_repetition_records_the_same_commit(tmp_path, monkeypatch):
+    """`--repeat` reads provenance once, before run 0, not once per run.
+
+    The sibling of `TestProvenanceIsReadOncePerInvocation` in `tests/test_harness.py`, and it
+    guards the OTHER caller. `--results` writes an untracked file, so a per-run `git_commit()` here
+    records run 0 at `<hash>` and every later run at `<hash>-dirty` -- which is what happened to the
+    harness on 2026-08-31 and split one cell in two, `commit` being an `eval-diff` condition field.
+    The signature guard in `test_harness.py` stops a caller omitting `commit`; only this stops
+    `cmd_run` computing a fresh one inside its own loop.
+
+    A `git_commit` that answers differently on every call is the whole mechanism: if the loop asks
+    twice, the two runs disagree, and the assertion below is the only thing that can tell.
+
+    Patched at `ds_agents.cli.git_commit`, not at `ds_agents.provenance.git_commit`, and the
+    difference is not incidental: `cli` imports the name at module scope, so it is already bound by
+    the time a test runs, while `harness._live_run` imports it inside the function (to break the
+    `cli` <-> `harness` import cycle) and therefore does pick up a patch on the source module. The
+    two sibling tests patch two different names for that reason.
+    """
+    answers = iter(["feed1", "feed1-dirty", "feed1-dirty"])
+    monkeypatch.setattr("ds_agents.cli.git_commit", lambda *a, **k: next(answers))
+
+    seen: list[str | None] = []
+    real_fixture_state = __import__("ds_agents.cli", fromlist=["_fixture_state"])._fixture_state
+
+    def capturing_fixture_state(fixture, **kwargs):
+        seen.append(kwargs["commit"])
+        return real_fixture_state(fixture, **kwargs)
+
+    monkeypatch.setattr("ds_agents.cli._fixture_state", capturing_fixture_state)
+
+    assert cmd_run(_args(tmp_path, repeat=2)) == 0
+    assert seen == ["feed1", "feed1"]

@@ -107,10 +107,21 @@ class Cell:
 # combination `docs/NEXT.md` flags as the one worth a regression gate: opaque naming is what made
 # the trap findable at all, and `by_category` routing is what let a caught trap actually get
 # dropped. Costs are rough per-run estimates for the cost-cap check, not a promise.
+#
+# The three estimates below are MEASURED means from the 2026-08-31 `ci` baseline (n=10 a cell,
+# `evals/results/2026-08-31_ci-baseline.jsonl`), replacing the guesses they shipped with. They are
+# rounded up to the nearest $0.001, because this number's job is to stop the cap being overrun and
+# a mean that is right half the time is the wrong side to be wrong on. The originals were 0.010 /
+# 0.030 / 0.025: the whole subset came in at $0.7291 against a $0.65 estimate, a 12% under-count of
+# which `toy-default` is about 63% and `reissued-opaque-which` about 42% (`claims-opaque-which` was
+# the one good guess, over by 1%). The spread within a cell is what makes a mean a poor guarantee
+# here -- a run that takes the review loop three times costs around 2.5x one that passes first
+# time. `est_cost_usd` is planning-only and never reaches a results row, so changing it revises no
+# published number -- it only changes where a future cap truncates.
 SUBSETS: dict[str, tuple[Cell, ...]] = {
-    "toy": (Cell(name="toy-default", dataset="toy", est_cost_usd=0.010),),
+    "toy": (Cell(name="toy-default", dataset="toy", est_cost_usd=0.015),),
     "ci": (
-        Cell(name="toy-default", dataset="toy", est_cost_usd=0.010),
+        Cell(name="toy-default", dataset="toy", est_cost_usd=0.015),
         Cell(
             name="claims-opaque-which",
             dataset="claims_timing",
@@ -125,7 +136,7 @@ SUBSETS: dict[str, tuple[Cell, ...]] = {
             naming="opaque",
             reviewer_prompt="which_column",
             objection_routing="by_category",
-            est_cost_usd=0.025,
+            est_cost_usd=0.029,
         ),
     ),
     # "full" is deliberately absent. See `_resolve_subset`.
@@ -237,11 +248,21 @@ def _live_run(artifacts_root: Path, *, transport: str, no_live: bool) -> Runner:
     invocation, not once per run, is the same rule `cmd_run --repeat` follows for `--naming opaque`:
     every run that is supposed to see the same bytes has to actually see the same bytes, and
     rewriting the file N times is N chances for it not to.
+
+    `git_commit()` is read here, once, under exactly that rule, and the 2026-08-31 `ci` baseline is
+    what proved it belongs here rather than inside `_run_once`. The results file is untracked until
+    someone commits it, so writing row 0 dirties the tree, and a per-run read recorded run 0 at
+    `8a629bf` and runs 1..29 at `8a629bf-dirty`. `commit` is one of `evaldiff.CONDITION_FIELDS`, so
+    that fragmented `toy-default` into cells of n=1 and n=9 -- the harness contaminating its own
+    provenance with its own output. One read, before any row exists, cannot.
     """
     # Deferred import: see the module docstring for why this cannot be a top-level import.
     from ds_agents import cli
     from ds_agents.fixtures import load_fixture
     from ds_agents.naming import materialize
+    from ds_agents.provenance import git_commit
+
+    commit = git_commit()
 
     fixtures: dict[str, Fixture] = {}
     materialized: dict[tuple[str, str], tuple[Path, dict[str, str]]] = {}
@@ -258,6 +279,7 @@ def _live_run(artifacts_root: Path, *, transport: str, no_live: bool) -> Runner:
             fixture,
             root=root,
             dataset_path=dataset_path,
+            commit=commit,
             transport=transport,
             no_live=no_live,
             **cell.conditions(),

@@ -557,3 +557,49 @@ Priority: **load-bearing** means the thesis breaks if this is wrong and you cann
   a model that answers empty twice has told you something, and the second empty answer is allowed
   through to the router as the block the model actually claimed. Related: [[structured-output]],
   [[constrained-decoding]], [[actionable-objection]], [[measurement-independence]].
+
+### regression-gate-vs-baseline — a threshold is a coin flip until something has been run twice
+- Priority: load-bearing
+- Came up: 2026-08-31, running the `ci` subset live for the first time
+- Status: flagged
+- Why it matters here: PLAN.md has wanted a CI gate since Phase 4 opened, and the reason it kept not
+  happening is the useful part. A regression gate is a *threshold on a noisy measurement*, so it
+  inherits every property of the measurement -- and on this repo's own evidence, model
+  nondeterminism alone moves a 10-run count by about 3. A threshold set from one cell therefore
+  fires on runs where nothing changed. That is not a small annoyance: a gate that cries wolf gets
+  disabled or clicked through within a week, at which point it is strictly worse than no gate,
+  because the repo now believes it has coverage it does not have. The order is forced: measure the
+  baseline, replicate it to find out how much it moves on its own, and only then set a line far
+  enough outside that spread to mean something. This session bought step one and two of three -- and
+  the numbers say a useful gate here has to be wide. `leakage_remediated` at 8/10 carries a Wilson
+  interval of [0.490, 0.943], so an honest threshold on that column is roughly "fail under 4/10",
+  which catches a pipeline that has broken outright and nothing subtler. The second half of the
+  lesson is that this makes a *cheap deterministic* gate more valuable than an expensive stochastic
+  one: `pytest`, `ruff`, and the toy pipeline running green catch real breakage per push at zero
+  dollars and zero false alarms, while the benchmark subset is better run deliberately, at a
+  decision point, than automatically on every commit. Related: [[eval-baselines]],
+  [[replication-before-attribution]], [[binomial-variance-and-wilson-intervals]],
+  [[primary-endpoint-vs-guardrail]].
+
+### instrument-contaminates-measurement — the harness wrote a file, and the file changed what the harness recorded
+- Priority: load-bearing
+- Came up: 2026-08-31, reading the `commit` column of the first 30-row eval file
+- Status: flagged
+- Why it matters here: `commit` exists so that rows pooled into one cell provably came from one tree,
+  and it is computed as `git rev-parse HEAD` plus a `-dirty` suffix when `git status` is non-empty.
+  The results file the harness writes is untracked. So run 0 recorded a clean hash, run 0's row
+  landed on disk, and every run after it recorded `-dirty` -- **the act of measuring changed the
+  measurement, and the field designed to guarantee comparability is what broke it**, splitting one
+  cell into n=1 and n=9. The general shape is worth carrying: any instrument that writes into the
+  environment it observes will eventually observe its own writing, and the failure is invisible
+  because every individual value is *correct*. Run 17's tree really was dirty. Nothing was buggy in
+  the sense of computing a wrong answer; the design was wrong about *when* to ask. The fix is the
+  same one that already applied to `materialize` a few lines away -- read once per invocation,
+  before the runs start changing the thing being read -- which is the tell that the rule was already
+  known here and simply not applied twice. Two smaller lessons ride along. **An n=1 smoke test
+  structurally cannot find this**: with one run there is no second read to disagree with the first,
+  so the 2026-08-29 write-path proof was clean and gave false confidence. And the committed rows
+  were **not** back-fixed, because a results file edited to say something other than what the run
+  recorded is the one thing this project will not do -- the defect is documented in place instead.
+  Related: [[measurement-independence]], [[controlled-ablation]], [[eval-baselines]],
+  [[caught-vs-remediated]].

@@ -1186,3 +1186,45 @@ legally compare against; the first live rows for `reissued_ids`; measured per-ru
 the three guesses in `SUBSETS`; and the block-retry observation above. It does not buy a CI
 threshold. A threshold also needs a policy for who pays for a gate that spends API money per push,
 and this repo has no `.github/` and no key available to Actions.
+
+**Outcome, appended after the run.** 30 rows, $0.7291, 0 refused, 0 failed, cap not binding.
+`evals/results/2026-08-31_ci-baseline.jsonl` and LOG.md 2026-08-31 carry the table; three things
+here are decisions rather than numbers.
+
+**The block-retry endpoint resolved in the direction the pre-registration could not assume.** 7 of
+30 runs fired it, against an expected 1-3, and 4 of those 7 retries produced an actionable
+objection. The pre-registration's work was done on the branch that did not happen: had the count
+been zero, the write-up was already committed to "still unobserved" rather than "fixed". Worth
+recording that the count landed high for a reason the pre-registration did not anticipate -- 5 of
+the 7 were on `reissued_ids`, which never contributed to the 1-2-in-10 base rate the estimate came
+from, so the estimate was extrapolated from the wrong fixture. A base rate is a property of a
+configuration, not of a bug.
+
+**Provenance moves from per-run to per-invocation.** `_run_once` called `git_commit()` for each run,
+and the results file it writes is untracked, so run 0 recorded `8a629bf` and runs 1-29 recorded
+`8a629bf-dirty`: the harness dirtied its own tree with its own output and then recorded the fact as
+a run condition. Since `commit` is one of `evaldiff.CONDITION_FIELDS`, the effect was to split
+`toy-default` into cells of n=1 and n=9. `commit` is now a required keyword on `_run_once` with no
+default -- `None` is a legitimate value (git missing), so any sentinel default would be
+indistinguishable from the answer it stands in for, and the bug was a default rather than a call
+site. Both callers snapshot once before their first run. This is the same once-per-invocation rule
+`_live_run` already applied to `materialize`, and the argument is identical: anything that must be
+identical across an invocation's runs has to be read before the runs start changing it. The
+committed rows are NOT back-fixed. They record what the run recorded, and a results file edited to
+say something other than what happened is the one thing this project will not do.
+
+**The baseline is not a comparand, and NEXT.md was wrong to say it would be.** `commit` being a
+condition field means a future arm can never be `eval-diff`ed against this file, because a new arm
+is almost always a new `Literal` on `RunConfig` and therefore a new commit. That is not a defect in
+`eval-diff` -- it is the controlled-ablation rule enforced by the tool: **both arms of a comparison
+run in one invocation at one commit**, as the forced-drop-release cell already did. What this file
+is for instead is descriptive: the first replicated live characterization of the three `ci` cells,
+the corrected `est_cost_usd` values, and the block-retry evidence. Future ablations must budget for
+running their own control, which roughly doubles every remaining Phase 5 estimate a second time.
+
+**One recorded failure, unfixed.** `claims-opaque-which` rep=1 idx=2 dropped every column, failed to
+fit any candidate, and ended `review_verdict: "pass"` with `n_final_features: 0` and a null score.
+`publishable()` admitted it. A run that produced no model is not a `pass` under any reading, and the
+verdict derivation is what needs to say so -- it is left open rather than patched here, because
+changing verdict derivation changes a column every committed row carries and that is its own cell,
+not a footnote to this one.

@@ -244,6 +244,10 @@ def cmd_run(args: argparse.Namespace) -> int:
 
     exit_code = 0
     width = len(str(args.repeat - 1))
+    # Once, before the first run, not once per run: `--results` makes the tree dirty by writing to
+    # it, so a per-run read would record run 0 at `<hash>` and every later run at `<hash>-dirty`
+    # and split one cell in two. See `_run_once`.
+    commit = git_commit()
     for index in range(args.repeat):
         # One artifact store per run, because the store is per-run: a shared root would let run 2
         # read run 1's artifact ids, which is the one way these repetitions could stop being
@@ -255,6 +259,7 @@ def cmd_run(args: argparse.Namespace) -> int:
             fixture,
             root=run_root,
             dataset_path=dataset_path,
+            commit=commit,
             transport=args.tools,
             no_live=args.no_live,
             model_name=args.model,
@@ -283,6 +288,7 @@ def _run_once(
     *,
     root: Path,
     dataset_path: Path,
+    commit: str | None,
     transport: str = "mcp",
     no_live: bool = False,
     **conditions: Any,
@@ -297,9 +303,19 @@ def _run_once(
     without inventing a fake namespace. `conditions` is forwarded straight to `_fixture_state`,
     whose parameters are keyword-only -- the transposition guard that star exists for survives the
     hop, and the two callers cannot drift into two different ideas of what a run condition is.
+
+    `commit` is a required keyword rather than a `git_commit()` call in the body, and it has no
+    default, because the default was wrong in a way only a multi-run invocation could show. Reading
+    provenance per run meant every run after the first saw a tree that the harness had itself
+    dirtied by writing the results file, so run 0 recorded `<hash>` and runs 1..N recorded
+    `<hash>-dirty`. Since `commit` is one of `evaldiff.CONDITION_FIELDS`, that split a single cell
+    into two, which is the one thing the field exists to prevent. Callers snapshot it once before
+    the first run: provenance describes the tree that produced the INVOCATION, and this is the same
+    once-per-invocation rule `_live_run` already follows for `materialize`. `None` stays a
+    legitimate value (git missing, not a checkout), which is why there is no sentinel default.
     """
     tools = _select_tools(transport, root, dataset_path, fixture.dataset_id)
-    state = _fixture_state(fixture, commit=git_commit(), **conditions)
+    state = _fixture_state(fixture, commit=commit, **conditions)
     # Said out loud for the same reason the StubModel warning is: this arm reproduces a known
     # defect, and a run that produced numbers under it without anyone noticing would be worse than
     # no run. A stderr line reads nothing any node reads, so the condition still has exactly one
