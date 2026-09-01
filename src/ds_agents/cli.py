@@ -15,6 +15,7 @@ import difflib
 import json
 import sys
 import tempfile
+import time
 from pathlib import Path
 from typing import Any
 
@@ -414,11 +415,25 @@ def _run_once(
     if isinstance(inputs, rescore.RescoreOutcome):
         # No feature code or no split. Neither the re-scorer nor the baseline can run, and neither
         # touches a sandbox to establish it; the call shape stays uniform so `baseline_status` is
-        # written on every row rather than only on the rows that got that far.
+        # written on every row rather than only on the rows that got that far. Both durations stay
+        # None: nothing ran, which is not the same claim as "ran in no time".
         return rescore.apply(state, inputs, rescore.baseline_precondition(prepared, inputs))
+    # Timed here rather than inside either function, because this is the only place that sees both
+    # halves and neither of them is allowed to raise. `wall_seconds` stops when the graph returns,
+    # so without these two numbers the grader's cost is invisible on the row -- which is how a
+    # 72s-on-higgs baseline could hide behind a 4s run-to-run latency spread.
+    started = time.perf_counter()
     outcome = rescore.rescore(state, prepared, inputs, root=root / "rescore")
+    rescored_at = time.perf_counter()
     scale = rescore.baseline(state, prepared, inputs, outcome, root=root / "baseline")
-    return rescore.apply(state, outcome, scale)
+    finished = time.perf_counter()
+    return rescore.apply(
+        state,
+        outcome,
+        scale,
+        rescore_seconds=round(rescored_at - started, 3),
+        baseline_seconds=round(finished - rescored_at, 3),
+    )
 
 
 def _append_results_row(

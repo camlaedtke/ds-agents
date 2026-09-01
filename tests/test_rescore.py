@@ -13,6 +13,7 @@ from "the graph produced no model" from "the grader's sandbox died".
 """
 
 import json
+from datetime import timedelta
 from pathlib import Path
 
 import numpy as np
@@ -26,7 +27,14 @@ from ds_agents.holdout import _withhold_rows, prepare
 from ds_agents.nodes.modeler import CANDIDATE_SPECS, SEED_SENTINEL
 from ds_agents.rescore import REFIT_TOLERANCE, RescoreInputs, RescoreOutcome
 from ds_agents.runnable import Runnable, resolve
-from ds_agents.state import DEFAULT_RANDOM_SEED, ModelResult, PipelineState, TaskSpec
+from ds_agents.state import (
+    DEFAULT_RANDOM_SEED,
+    ModelResult,
+    NodeEvent,
+    PipelineState,
+    TaskSpec,
+    utc_now,
+)
 from ds_agents.tools.llm import StubModel
 from ds_agents.tools.local import LocalTools
 
@@ -596,3 +604,115 @@ class TestABaselineFailureIsNotARunFailure:
         assert row["baseline_status"] == "unit_point_failed"
         assert row["baseline_zero_score"] == 0.5
         assert row["baseline_normalised_score"] is None
+
+
+@pytest.mark.fast
+class TestTheGradersOwnWallCostIsOnTheRow:
+    """`wall_seconds` stops when the graph returns, and the grader runs after it.
+
+    Which means the term this project most needs to price -- a unit-point fit measured at 0.2s on
+    credit_g and 72s on a 98k-row frame -- was invisible in every row committed before 2026-09-01.
+    It was worse than invisible: the four `baseline-smoke` rows read FASTER (19.7-21.0s) than the
+    four `credit-g-smoke` rows that did two fewer fits (22.8-27.3s), because the fits were never in
+    the number and run-to-run LLM latency spread is about 4s.
+    """
+
+    def test_both_durations_are_none_when_neither_half_ran(self):
+        """`None` and `0.0` are different claims. The precondition path does no work at all, and a
+        0.0 there would read as a fit that took no time."""
+        graded = rescore.apply(_state(), RescoreOutcome(status="no_model", detail="none"))
+
+        assert graded.rescore_seconds is None
+        assert graded.baseline_seconds is None
+        row = graded.results_row()
+        assert row["rescore_seconds"] is None
+        assert row["baseline_seconds"] is None
+
+    def test_the_two_halves_are_timed_separately(self):
+        """Two processes, two timeouts, two failure modes -- so two columns. A single
+        `grader_seconds` could not say which half a 900s stall was in."""
+        graded = rescore.apply(
+            _state(),
+            RescoreOutcome(status="no_model", detail="none"),
+            None,
+            rescore_seconds=1.25,
+            baseline_seconds=72.09,
+        )
+
+        row = graded.results_row()
+        assert row["rescore_seconds"] == pytest.approx(1.25)
+        assert row["baseline_seconds"] == pytest.approx(72.09)
+
+
+class TestTheTimingIsActuallyWiredUp:
+    """The unit tests above prove `apply` writes what it is HANDED. This one proves the call site
+    hands it something -- which is the half that a live run would otherwise be the first to check,
+    at eight runs' worth of money.
+    """
+
+    def test_a_graded_run_through_the_cli_records_both_durations(self, tmp_path):
+        from ds_agents.cli import _run_once
+
+        csv_path = tmp_path / "d.csv"
+        _write_split_leak(csv_path)
+        dataset = _runnable(csv_path)
+        prepared = prepare(
+            dataset,
+            "descriptive",
+            into=tmp_path / "input",
+            withheld_into=tmp_path / "withheld",
+            seed=DEFAULT_RANDOM_SEED,
+        )
+        state = _run_once(
+            dataset,
+            root=tmp_path / "run",
+            prepared=prepared,
+            commit="testcommit",
+            transport="local",
+            no_live=True,
+        )
+
+        row = state.results_row()
+        assert row["rescore_seconds"] is not None, "the grader ran but its duration is unrecorded"
+        assert row["baseline_seconds"] is not None, (
+            "the baseline ran but its duration is unrecorded"
+        )
+        assert row["rescore_seconds"] > 0
+        assert row["baseline_seconds"] > 0
+        # The whole point: these are NOT inside wall_seconds, so the grader is extra wall time that
+        # every committed row hid.
+        assert row["node_seconds"], "node_seconds must not be empty on a run that executed nodes"
+
+
+@pytest.mark.fast
+class TestWhereTheWallTimeWent:
+    """`NodeEvent` has carried per-node seconds since Phase 1 and only `ds-agents run` ever printed
+    them. The harness calls `_run_once` directly, so every committed row discarded the one column
+    that answers "which node dominates at scale"."""
+
+    def test_a_node_visited_twice_is_summed_not_overwritten(self):
+        """The review loop revisits `feature_eng` and `modeler`. A dict keyed by node name that
+        overwrote would silently keep only the last visit, understating exactly the runs that
+        looped most."""
+        started = utc_now()
+        state = _state(
+            node_trace=[
+                NodeEvent(node="modeler", started=started, ended=started + timedelta(seconds=2)),
+                NodeEvent(node="modeler", started=started, ended=started + timedelta(seconds=3)),
+            ]
+        )
+
+        assert state.node_seconds == {"modeler": 5.0}
+        assert state.results_row()["node_seconds"] == {"modeler": 5.0}
+
+    def test_an_unfinished_node_contributes_nothing_rather_than_raising(self):
+        """A run that died mid-node still has a row worth writing."""
+        started = utc_now()
+        state = _state(
+            node_trace=[
+                NodeEvent(node="intake", started=started, ended=started + timedelta(seconds=1)),
+                NodeEvent(node="profiler", started=started, ended=None),
+            ]
+        )
+
+        assert state.node_seconds == {"intake": 1.0}

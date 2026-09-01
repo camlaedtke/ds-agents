@@ -146,6 +146,35 @@ SUBSETS: dict[str, tuple[Cell, ...]] = {
     # averaged $0.0168 per run. The pre-run guess was 0.040, wrong by more than a factor of two and
     # wrong in the cheap direction -- which is why the other twelve get measured before `full`.
     "bench-smoke": (Cell(name="credit-g-default", dataset="credit_g", est_cost_usd=0.017),),
+    # The subset that exists to price the rest of the manifest. Four cells forming a 2x2 over the
+    # TWO cost axes this project had been treating as one: wall clock tracks ROWS (fits), token cost
+    # tracks COLUMNS (schema, profile summaries and importance lists all reach a prompt). `credit_g`
+    # is small on both, which is why one measurement of it could price nothing else.
+    #
+    #                    few columns              many columns
+    #   few rows         phoneme   5404 x 5       jasmine  2984 x 144
+    #   many rows        amazon   32769 x 9       nomao   34465 x 118
+    #
+    # Crossed on purpose. With only a wide-and-tall cell the two axes stay confounded and a timeout
+    # there is uninterpretable; with the cross, `jasmine` vs `nomao` separates width from length and
+    # `phoneme` vs `amazon` separates length from width.
+    #
+    # `adult` is NOT here, and its absence is the finding rather than an omission: its split
+    # manifest is 1.25x `DEFAULT_READ_BYTES`, so `feature_eng` refuses on a truncated read and the
+    # run produces a row with no model in it. `amazon` (0.82x) and `nomao` (0.87x) are the two
+    # largest datasets in the manifest that can complete a run at all. See
+    # `test_no_subset_names_a_dataset_whose_split_manifest_would_be_truncated`.
+    #
+    # UNLIKE every other estimate in this dict, these four are GUESSES. Nothing has ever been run on
+    # any of these datasets. They are deliberately generous, because an estimate's job here is to
+    # stop a cap being overrun and `bench-smoke` was wrong by more than 2x in the cheap direction.
+    # Replacing them with measurements is the point of the run, not a side effect of it.
+    "bench-mid": (
+        Cell(name="phoneme-narrow-short", dataset="phoneme", est_cost_usd=0.020),
+        Cell(name="jasmine-wide-short", dataset="jasmine", est_cost_usd=0.060),
+        Cell(name="amazon-narrow-tall", dataset="amazon_employee_access", est_cost_usd=0.030),
+        Cell(name="nomao-wide-tall", dataset="nomao", est_cost_usd=0.065),
+    ),
     # "full" is deliberately absent. See `_resolve_subset`.
 }
 
@@ -173,14 +202,19 @@ def _resolve_subset(subset: str) -> tuple[Cell, ...]:
     available = ", ".join(sorted(SUBSETS))
     if subset == "full":
         raise ValueError(
-            "subset 'full' is not runnable yet, and what is missing is now only a measured cost "
-            "per dataset. The grading is done: a manifest dataset can be run, scored on a "
-            "withheld holdout, and placed on a measured scale -- see `--subset bench-smoke`, "
-            "which does exactly that on credit_g. But these are real datasets up to 98k rows, "
-            "every estimate in SUBSETS is a measurement rather than a guess, and bench-smoke's "
-            "own pre-run guess was out by more than a factor of two. Measure the other twelve "
-            "first. Also note dataset_id is an eval-diff condition field, so 13 datasets is 13 "
-            "cells. See docs/PLAN.md Phase 4 and docs/NEXT.md. "
+            "subset 'full' is not runnable yet, and it now waits on TWO things rather than one. "
+            "(1) Code: four of the thirteen datasets -- adult, bank_marketing, higgs and "
+            "numerai28_6 -- cannot complete a run at all. The profiler writes the split as a JSON "
+            "list of every row index, which exceeds read_artifact's cap above roughly 36k rows; "
+            "feature_eng then refuses on the truncated read, but nothing branches on "
+            "`recoverable`, so the run spends a full run's tokens and writes a publishable row "
+            "with no model in it. See tests/test_split_manifest_size.py. (2) Money: a measured "
+            "cost per dataset, which `--subset bench-mid` exists to produce -- phoneme, jasmine, "
+            "amazon_employee_access and nomao, a 2x2 over the row and column cost axes, and the "
+            "two largest datasets that can still be run. The GRADING is done: see `--subset "
+            "bench-smoke`, which runs and scores credit_g end to end. Also note dataset_id is an "
+            "eval-diff condition field, so 13 datasets is 13 cells. See docs/PLAN.md Phase 4 and "
+            "docs/NEXT.md. "
             f"Available subsets: {available}."
         )
     raise ValueError(f"unknown eval subset {subset!r}. Available subsets: {available}.")

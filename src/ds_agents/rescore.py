@@ -666,14 +666,28 @@ def apply(
     state: PipelineState,
     outcome: RescoreOutcome,
     baseline_outcome: BaselineOutcome | None = None,
+    *,
+    rescore_seconds: float | None = None,
+    baseline_seconds: float | None = None,
 ) -> PipelineState:
-    """Write the grader's result onto the state. Never appends a `PipelineError`."""
+    """Write the grader's result onto the state. Never appends a `PipelineError`.
+
+    The two durations are passed in rather than measured here because `apply` is handed outcomes
+    that were produced elsewhere; timing them at the call site is the only place that can see the
+    work. They stay `None` on the precondition path, where neither half ran at all -- `None` and
+    `0.0` are different claims and the row keeps them apart.
+
+    They are not on `RescoreOutcome` or `BaselineOutcome` because those are frozen records of what
+    was MEASURED, and how long a measurement took is not part of it.
+    """
     update: dict[str, Any] = {
         "verified_holdout_score": outcome.verified_holdout_score,
         "rescore_status": outcome.status,
         "rescore_detail": outcome.detail,
         "refit_claim_gap": outcome.refit_claim_gap,
         "n_withheld_rows": outcome.n_withheld_rows,
+        "rescore_seconds": rescore_seconds,
+        "baseline_seconds": baseline_seconds,
     }
     if baseline_outcome is not None:
         update |= {

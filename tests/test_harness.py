@@ -15,6 +15,7 @@ from datetime import date
 
 import pytest
 
+from ds_agents.benchmark import load_manifest
 from ds_agents.fixtures import available
 from ds_agents.harness import SUBSETS, Cell, HarnessReport, PlannedRun, plan, run_eval
 from ds_agents.runnable import available as runnable_available
@@ -116,6 +117,55 @@ class TestSubsetsPointAtRealFixtures:
             "bench-smoke must name a manifest dataset, not a fixture"
         )
 
+    def test_bench_mid_names_only_manifest_datasets(self):
+        """Four cells forming a 2x2 over the two cost axes, and not a fixture among them.
+
+        Pinned the way `bench-smoke` is, and for the same reason: `dataset_id` is an `eval-diff`
+        condition field, so a dataset silently added or dropped here changes what a results file
+        means. What is deliberately NOT pinned is `est_cost_usd` -- unlike every other subset those
+        four are guesses, and this run exists to replace them.
+        """
+        cells = SUBSETS["bench-mid"]
+        assert [cell.dataset for cell in cells] == [
+            "phoneme",
+            "jasmine",
+            "amazon_employee_access",
+            "nomao",
+        ]
+        fixtures = set(available())
+        for cell in cells:
+            assert cell.dataset not in fixtures, (
+                f"bench-mid must name manifest datasets, not fixtures; {cell.dataset!r} is a "
+                "fixture"
+            )
+
+    def test_bench_mid_crosses_both_cost_axes(self):
+        """The 2x2 is the design, so pin it against the manifest rather than against comments.
+
+        A `datasets refresh` re-fetches every OpenML response and could move a shape. If it did,
+        the wide cell could quietly stop being wide and the run would measure one axis twice while
+        still reporting it as a cross.
+        """
+        entries = {e.dataset_id: e for e in load_manifest().datasets}
+        short_narrow = entries["phoneme"]
+        short_wide = entries["jasmine"]
+        tall_narrow = entries["amazon_employee_access"]
+        tall_wide = entries["nomao"]
+
+        assert short_narrow.n_features < short_wide.n_features
+        assert tall_narrow.n_features < tall_wide.n_features
+        assert short_narrow.n_rows < tall_narrow.n_rows
+        assert short_wide.n_rows < tall_wide.n_rows
+
+    def test_bench_mid_varies_nothing_but_the_dataset(self):
+        """A measurement, not an ablation. If any other condition moved, the per-dataset cost this
+        run publishes would be confounded with it."""
+        reference = Cell(name="reference", dataset="phoneme")
+        for cell in SUBSETS["bench-mid"]:
+            assert cell.conditions() == reference.conditions(), (
+                f"bench-mid cell {cell.name!r} changes a condition; only the dataset may vary"
+            )
+
     def test_the_toy_subset_is_just_toy_default(self):
         assert [cell.name for cell in SUBSETS["toy"]] == ["toy-default"]
 
@@ -175,8 +225,15 @@ class TestTheFullSubsetIsNotYetRunnable:
             run_eval(subset="full", name="probe", dry_run=True)
 
         message = str(excinfo.value)
-        assert "cost" in message, "the remaining blocker is a measured cost per dataset"
+        assert "cost" in message, "one remaining blocker is a measured cost per dataset"
+        # The second blocker, found 2026-09-01: the split manifest outgrows the read cap above
+        # roughly 36k rows, so four datasets produce a row with no model in it. Asserted here so
+        # that fixing it forces this message to be corrected a fifth time.
+        assert "split" in message, "the other remaining blocker is code, not money"
+        for broken in ("adult", "bank_marketing", "higgs", "numerai28_6"):
+            assert broken in message, f"{broken} cannot be run and the message must say so"
         assert "bench-smoke" in message, "the message must point at what DOES work"
+        assert "bench-mid" in message, "and at how the measuring is being done"
         for shipped in ("baseline_score", "score_ratio", "verified_holdout_score"):
             assert shipped not in message, (
                 f"{shipped} shipped or was retired; a message still naming it as missing is false"

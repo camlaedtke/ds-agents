@@ -1601,3 +1601,173 @@ pulling it visible in the data rather than only in git.
 are `dataset_id=credit_g` at byte-identical conditions and they still separated, on `commit` alone.
 Each side reported "only in before / only in after -- not compared". That is the pre-registered
 reason no smoke in this project is a comparand, demonstrated rather than asserted.
+
+## 2026-09-01: four of the thirteen datasets cannot be run, and the column that would have priced
+## the rest could not see the thing it was pricing
+
+Written and committed BEFORE the runner was called, on a clean tree. The outcome is appended at the
+bottom in a second commit.
+
+This session set out to do what `docs/NEXT.md` asked -- measure a mid-sized dataset before funding
+thirteen -- and found two things first that change what the measurement can be.
+
+**1. `wall_seconds` never included the grader.** `ended_at` is stamped inside `run_pipeline`
+(`graph.py`), and `rescore.rescore` and `rescore.baseline` both run after it returns, in
+`cli._run_once`. Neither `RescoreOutcome` nor `BaselineOutcome` carried a duration and there was no
+`perf_counter` anywhere in `rescore.py`. So the term `--subset full` is blocked on pricing -- a
+unit-point fit quoted at 72s on `higgs` -- was structurally invisible in every row this project has
+ever committed. It was worse than invisible: the four `baseline-smoke` rows read 19.65-21.00s while
+the four `credit-g-smoke` rows that did two FEWER fits read 22.79-27.34s, and the difference is
+run-to-run LLM latency spread of about 4s. Anyone reading those two files together would conclude
+the baseline made runs faster.
+
+The fix is three derived columns and no node changes: `rescore_seconds` and `baseline_seconds`,
+timed at the one call site that can see both halves and threaded through `rescore.apply` (already
+the single writer of grader results), plus `node_seconds`, a `{node: seconds}` map summed over
+repeats from the `NodeEvent.wall_seconds` that `NodeEvent` has computed since Phase 1 and that only
+`ds-agents run` ever printed. Two grader columns and not one because they are two processes with two
+timeouts that fail independently -- the entire point of `BaselineStatus` is that the yardstick can
+die without taking the measurement with it, and a single `grader_seconds` could not say which half a
+stall was in. `None` rather than `0.0` on the precondition path, because "did not run" and "ran
+instantly" are different claims.
+
+**2. Four of the thirteen manifest datasets cannot complete a run, and this is a SECOND blocker on
+`--subset full` that is code rather than money.** The profiler writes the split as a JSON artifact
+holding every row index -- `train`, `holdout`, and five folds of (train, valid), so roughly six
+times the agent row count in integers -- and `read_artifact` caps every read at
+`DEFAULT_READ_BYTES = 1 MiB`. Measured by rebuilding the real manifest from the cached CSVs:
+
+| dataset | rows | split manifest | vs cap |
+|---|---|---|---|
+| amazon_employee_access | 32769 | 862,321 B | 0.82x |
+| nomao | 34465 | 910,064 B | 0.87x |
+| bank_marketing | 45211 | 1,210,808 B | **1.15x** |
+| adult | 48842 | 1,312,688 B | **1.25x** |
+| numerai28_6 | 96320 | 2,641,714 B | **2.52x** |
+| higgs | 98050 | 2,690,410 B | **2.57x** |
+
+The failure is quiet, which is why nobody caught it. On a truncated read `feature_eng` refuses with
+`recoverable=False` and `modeler` refuses identically -- but nothing in `graph.py` or the router
+branches on `recoverable`, so the run continues through reviewer and reporter, spends a full run's
+tokens, and `publishable()` accepts the row. **A dataset that cannot be run does not look like a
+failure. It looks like a measurement.** `errored` is `true`, which is the one column that catches it,
+and `errored` being uninformative is already a standing NEXT.md item.
+
+`adult` was the dataset `docs/NEXT.md` named first as the second point on the wall-clock curve. It is
+the wrong choice and could not have produced a number.
+
+This is pinned by `tests/test_split_manifest_size.py`, which projects the manifest size from
+`n_rows` arithmetically -- no CSV is read, and the projection was checked against the real thing on
+nine datasets and is within 0.15%. Three tests: no subset may name a dataset that would truncate
+(proved to fire by temporarily adding `adult`), the unrunnable set is exactly those four, and the
+cliff sits between `nomao` and `bank_marketing`. The second fails the day someone fixes the
+representation, which is the only mechanism that has ever got `_resolve_subset`'s message corrected.
+
+**The `bench-mid` subset is therefore a 2x2 and not a line.** Two axes were being treated as one:
+wall clock tracks rows, token cost tracks columns, and `credit_g` is small on both.
+
+|  | few columns | many columns |
+|---|---|---|
+| **few rows** | phoneme 5404x5 | jasmine 2984x144 |
+| **many rows** | amazon_employee_access 32769x9 | nomao 34465x118 |
+
+Crossed rather than sampled, because with only a wide-and-tall cell a timeout there is
+uninterpretable -- `jasmine` vs `nomao` separates width from length, `phoneme` vs `amazon` separates
+length from width. `amazon` and `nomao` are the two largest datasets in the manifest that can still
+complete a run. All four `est_cost_usd` are GUESSES, unlike every other entry in `SUBSETS`, and
+replacing them is the point of the run.
+
+**The shape-timing table is now reproducible, and it was measured at the wrong shape.** The old
+table exists only as prose in three documents; `ef15609` touched no code. It also timed the full
+frame, when the baseline fits on `SPLIT["train"]` -- the 80% train split of the 80% agent frame, so
+**0.64 x n_rows**. `tests/test_baseline_cost.py` (opt in with `DS_AGENTS_TIMING_TESTS=1`, gated by
+env var and not a marker, following the `network` precedent) fits `rescore._RF` at every manifest
+shape and asserts each clears `BASELINE_TIMEOUT_S` with 5x headroom. Measured:
+
+| dataset | fit rows | seconds | % of budget |
+|---|---|---|---|
+| credit_g | 640 | 0.20 | 0.0% |
+| jasmine | 1910 | 1.72 | 0.2% |
+| amazon_employee_access | 20972 | 7.72 | 0.9% |
+| adult | 31259 | 14.94 | 1.7% |
+| nomao | 22058 | 34.98 | 3.9% |
+| numerai28_6 | 61645 | 45.30 | 5.0% |
+| higgs | 62752 | 57.18 | 6.4% |
+
+These are an UPPER BOUND, not a prediction: the frames are Gaussian noise with one weak signal, which
+is near worst case for tree depth. The table disagrees with the prose one in both directions --
+`higgs` 57.18s against a quoted 72.09s (the old number used 1.56x too many rows), but `adult` 14.94s
+against a quoted 9.85s despite fitting on 36% fewer rows, which is what synthetic noise costs.
+
+**This answers one of NEXT.md's open questions and it is not the answer that was expected.** "Is
+`higgs` affordable, and at what recipe?" -- yes, at `rf-v1`. The slowest shape in the manifest uses
+about 6% of the timeout. `n_estimators` does not need to drop for large frames and `baseline_recipe`
+does not need to fork, so the "two yardsticks" hazard that question worried about does not arise.
+What blocks `higgs` is the split manifest, not the forest.
+
+### Pre-registered endpoints
+
+Invocation: `--subset bench-mid --name bench-mid --replicates 2 --n 1 --max-cost-usd 0.50`, 8 runs,
+$0.35 estimated.
+
+1. **Feasibility, primary.** All 8 runs produce a publishable row with `errored: false`. A
+   `rescore_status` of `no_split` or `no_feature_code` on any row means the size arithmetic above is
+   wrong and the unrunnable set is larger than four; response is to STOP the invocation rather than
+   fund the second replicate.
+2. **`rescore_status` and `baseline_status` are `ok` on 8 of 8**, and `baseline_zero_score` is
+   **exactly 0.5** on every row. The zero point is a correctness assertion, not a measurement with a
+   tolerance, and it has only ever been checked on one dataset.
+3. **Four measured per-dataset costs**, replacing four guesses. A cell whose measured mean exceeds
+   its estimate by more than 2x is reported as an estimate failure, because that is precisely the
+   error `bench-smoke` made and the reason this run exists.
+4. **The two axes separate.** Predicted so it can fail: `cost_usd` is driven by columns, so
+   `jasmine` and `nomao` are the dearest and land within ~25% of each other despite an 11.5x row
+   difference; `node_seconds` and `baseline_seconds` are driven by rows, so `amazon` and `nomao`
+   are the slowest. If `jasmine` is also slow, or `amazon` is also dear, the axes are not
+   independent and `full` needs one cost term rather than two.
+5. **Determinism, the standing question.** `credit_g` returned four identical rows at two separate
+   commits. Two replicates cannot settle it, so this is reported as directional, not as a finding.
+   What would be informative is variation on the wide cells, where `feature_eng` has real decisions
+   available.
+6. **The floor-vs-pipeline asymmetry becomes reachable.** `MAX_ONE_HOT_LEVELS = 20`, and the grader's
+   encoder ordinal-encodes what `feature_eng` skips. `credit_g`'s widest nominal has 10 levels, so
+   nothing was ever skipped and the parking-lot note "the unit point is a floor, not a ceiling" has
+   been latent in every committed row. `amazon_employee_access` is nine integer-encoded
+   high-cardinality ID columns, which land in the baseline's NUMERIC branch and pass straight
+   through. Pre-registered: `baseline_normalised_score` on `amazon` is expected to be depressed
+   relative to `credit_g`'s 0.9309 for that structural reason rather than because the pipeline did
+   worse.
+7. **Not endpoints.** The absolute value of `baseline_normalised_score`, `verified_holdout_score` or
+   `holdout_claim_gap` on any of the four. n=2 per cell, one commit, the grid is ours and the unit
+   point is a floor. Characterisation only. No comparison against the committed `credit_g` rows:
+   `commit` is an `eval-diff` condition field and this is a different commit, so `eval-diff` will
+   refuse, deliberately.
+
+### Failure endpoints
+
+- **A modeler timeout on `nomao` but not `jasmine`** means the binding term is rows x width in
+  `permutation_importance` -- 10 repeats x ~118 columns x 2 candidates, all inside ONE `run_python`
+  call with ONE 240s budget. Projected work is 6.5M row-predicts on `nomao` against 0.69M on
+  `jasmine` and 0.47M on `amazon`. Response is NOT to raise `MODEL_TIMEOUT_S` reflexively: lowering
+  `N_PERMUTATION_REPEATS` changes the numbers `top_importances`, `reviewer_nominated` and
+  `leakage_caught` are all computed from, so it needs its own axis and its own version string the
+  way `baseline_recipe` has one, or rows at two repeat counts get pooled. That is a session, and the
+  finding would be that `full` is blocked on a third thing.
+- **A timeout on both wide cells** means width alone, and `SELECTION_RULE.max_features = 200` -- set
+  without a measurement -- is back on the table.
+- **A profiler timeout on `nomao`** (`PROFILE_TIMEOUT_S = 60`) would implicate the per-column mutual
+  information loop, a term nobody has costed. Raising it is defensible because no recipe moves.
+- **One risk measured and closed before the run.** `ArtifactStore.register_dataset` copies the CSV
+  and does an unbounded `read_csv` plus a per-column `nunique` on every run, and it runs inside
+  `_select_tools` BEFORE the MCP initialize handshake completes, against `_CONNECT_TIMEOUT_S = 60`.
+  A `SystemExit` there is re-raised by `run_eval` and aborts the WHOLE invocation rather than one
+  run, so it is the one path here where a single slow dataset kills everything. Measured
+  2026-09-01: 0.01s at `phoneme`, 0.02s at `jasmine` and `amazon`, **0.17s at `nomao`** (22 MB, 118
+  columns), and it runs three times per benchmark run -- the run's own tools plus a fresh
+  `LocalTools` inside each of `rescore` and `baseline` -- so about half a second at the worst cell.
+  Negligible, and the NEXT.md parking-lot item that asked for this to be measured before a large
+  frame is answered for every dataset that can actually be run.
+- **Note what will NOT fire.** `MAX_CONSECUTIVE_FAILURES = 3` counts only runs that RAISE. A node
+  timeout does not raise, so none of the harness's brakes stop the failure this probe is looking
+  for; `errored` on the row is the only signal, which is the third worked example of the
+  `errored`-needs-a-companion item.

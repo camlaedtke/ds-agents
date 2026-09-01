@@ -681,6 +681,19 @@ class PipelineState(Contract):
         "it is visible in the data and not only in git. Two rows carrying different values must "
         "never be pooled into one normalised distribution.",
     )
+    rescore_seconds: float | None = Field(
+        default=None,
+        description="Wall seconds the re-scorer spent. NOT part of wall_seconds, which stops when "
+        "the graph returns -- the grader runs after it. None means the re-scorer never ran, which "
+        "is different from 0.0.",
+    )
+    baseline_seconds: float | None = Field(
+        default=None,
+        description="Wall seconds the two baseline points spent, separate from rescore_seconds "
+        "because they are a separate process with a separate timeout and can fail alone. This is "
+        "the term the yardstick's wall cost lives in -- 0.2s at credit_g's shape and about a "
+        "minute at the manifest's largest -- and that nothing recorded until 2026-09-01.",
+    )
 
     # bookkeeping
     errors: Annotated[list[PipelineError], operator.add] = Field(default_factory=list)
@@ -703,6 +716,25 @@ class PipelineState(Contract):
         if self.ended_at is None:
             return None
         return (self.ended_at - self.started_at).total_seconds()
+
+    @property
+    def node_seconds(self) -> dict[str, float]:
+        """Wall seconds per node, summed over repeats within the run.
+
+        A plain property rather than a `computed_field`: this is a results-row column, not part of
+        the state contract other nodes read, and every node already carries its own `NodeEvent`.
+        Summed rather than listed because the question it answers is "where did the wall time go at
+        98k rows", and a node that took the review cycle three times spent all three.
+
+        An event with no `ended` contributes nothing rather than raising -- a run that died mid-node
+        still has a row worth writing, and a missing end is already recorded as an error.
+        """
+        totals: dict[str, float] = {}
+        for event in self.node_trace:
+            seconds = event.wall_seconds
+            if seconds is not None:
+                totals[event.node] = round(totals.get(event.node, 0.0) + seconds, 3)
+        return totals
 
     @computed_field
     @property
@@ -1026,6 +1058,16 @@ class PipelineState(Contract):
             "new_objections_per_pass": [len(rp.new_objection_ids) for rp in passes],
             # cost and reliability
             "wall_seconds": self.wall_seconds,
+            # The grader's own wall cost, which `wall_seconds` cannot see: `ended_at` is stamped
+            # when the graph returns and the re-scorer and baseline run after it. Two columns and
+            # not one, because they are two processes with two timeouts that fail independently.
+            "rescore_seconds": self.rescore_seconds,
+            "baseline_seconds": self.baseline_seconds,
+            # Which node the wall time actually went to. `NodeEvent` has carried this since Phase 1
+            # but only `ds-agents run` ever printed it -- the harness calls `_run_once` directly, so
+            # every committed row discarded it. Summed over repeats, because a node that ran three
+            # times cost three times.
+            "node_seconds": self.node_seconds,
             "cost_usd": self.total_cost_usd,
             "errored": bool(self.errors),
             # What went wrong, not just that something did. `errored` is one bit for every failure
