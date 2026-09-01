@@ -142,10 +142,17 @@ class ArtifactStore:
     def path_of(self, artifact_id: ArtifactId) -> Path:
         """Where a snippet can `open()` the artifact.
 
-        The alternative -- rendering an artifact into snippet source, which is what the split
-        manifest does today -- is O(n_rows) in the snippet text: about 7 MB on a 100k-row Phase 4
-        dataset. `sandbox_path` in `ArtifactMeta.extra` is the same value, for callers that
-        already hold the metadata.
+        The split manifest used to be the argument for this: rendering an artifact into snippet
+        source is O(n_rows) in the snippet text, and the old index-list encoding ran to about 7 MB
+        on a 100k-row Phase 4 dataset. It doesn't any more -- the fold-assignment encoding
+        (`ds_agents/split_manifest.py`) is one character per row plus a small header, ~79 KB on
+        `higgs`, the largest dataset in the manifest -- and that shrink was deliberate so the split
+        manifest could stay readable through `read_artifact` rather than move behind
+        `sandbox_path`: the reviewer and any future generalist arm reach an artifact's content
+        through `read_artifact`, not this path, so anything only reachable here is invisible to
+        them. `sandbox_path` remains the right answer for a genuinely large artifact -- a model
+        dump, a large feature matrix -- where that tradeoff doesn't apply. `ArtifactMeta.extra`
+        carries the same value under `"sandbox_path"`, for callers that already hold the metadata.
         """
         if artifact_id not in self._paths:
             raise ToolError(f"no artifact {artifact_id!r}")

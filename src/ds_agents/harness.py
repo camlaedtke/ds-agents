@@ -159,11 +159,13 @@ SUBSETS: dict[str, tuple[Cell, ...]] = {
     # there is uninterpretable; with the cross, `jasmine` vs `nomao` separates width from length and
     # `phoneme` vs `amazon` separates length from width.
     #
-    # `adult` is NOT here, and its absence is the finding rather than an omission: its split
-    # manifest is 1.25x `DEFAULT_READ_BYTES`, so `feature_eng` refuses on a truncated read and the
-    # run produces a row with no model in it. `amazon` (0.82x) and `nomao` (0.87x) are the two
-    # largest datasets in the manifest that can complete a run at all. See
-    # `test_no_subset_names_a_dataset_whose_split_manifest_would_be_truncated`.
+    # `adult` is NOT here. Not because it can't be run any more -- the split manifest fix
+    # (2026-09-01, `ds_agents/split_manifest.py`) landed after this cell was already run, and
+    # `adult`, `bank_marketing`, `higgs` and `numerai28_6` are all runnable now. It is absent
+    # because this is a measurement, not a subset definition: these four numbers are what
+    # `bench-mid`'s 2026-09-01 invocation actually cost on the datasets it actually ran, and
+    # `adult` was not one of them. Pricing it, and the other three, is the next session's job -- see
+    # `_resolve_subset`'s `full` message, which now names exactly that as the one remaining blocker.
     #
     # MEASURED means from the 2026-09-01 run (n=2 a cell,
     # `evals/results/2026-09-01_bench-mid.jsonl`), rounded up to the nearest $0.001, replacing the
@@ -193,12 +195,19 @@ def _resolve_subset(subset: str) -> tuple[Cell, ...]:
     GRADING is now built: the manifest exists, a `Cell` can name a manifest dataset, a holdout is
     withheld before the graph starts, `verified_holdout_score` is measured on it, and the scale it
     is read against -- a constant class-prior predictor and a RandomForest, both on the same rows
-    -- is measured beside it. `bench-smoke` proves all of that on `credit_g`.
+    -- is measured beside it. `bench-smoke` proves all of that on `credit_g`. The split manifest
+    that used to block four datasets from completing a run at all (2026-09-01,
+    `ds_agents/split_manifest.py`) is fixed too, so it is back down to ONE blocker rather than two.
 
-    What is left is money. Every `est_cost_usd` in `SUBSETS` is a measurement, nobody has measured
-    a 98k-row run, and `bench-smoke`'s own guess was wrong by more than a factor of two in the
-    cheap direction -- which is the argument for measuring the other twelve rather than
-    extrapolating from the cheapest one.
+    What is left is money. `adult`, `bank_marketing`, `higgs` and `numerai28_6` are runnable now but
+    are not priced -- `bench-mid`'s four cells measured a cost model of roughly `a + b * n_features`
+    (5 columns $0.011, 9 columns $0.013, 118 columns $0.041, 144 columns $0.042; see
+    `evals/results/2026-09-01_bench-mid.jsonl`), and the only evidence on any of the four is a
+    single `adult` smoke run at $0.0158 against a $0.014 prediction
+    (`evals/results/2026-09-01_adult-smoke.jsonl`, n=1, not a cell). `bench-smoke`'s own guess was
+    wrong by more than a factor of two in the cheap direction -- which is the argument for measuring
+    these four rather than extrapolating the model onto them, and `higgs` in particular carries a
+    `MODEL_TIMEOUT_S` risk and a 46 MB `register_dataset` read that no measurement has touched.
 
     Any other unknown name is more likely a typo, so it gets the shorter message -- but both list
     what IS runnable, because that is what the caller needs next either way.
@@ -208,19 +217,19 @@ def _resolve_subset(subset: str) -> tuple[Cell, ...]:
     available = ", ".join(sorted(SUBSETS))
     if subset == "full":
         raise ValueError(
-            "subset 'full' is not runnable yet, and it now waits on TWO things rather than one. "
-            "(1) Code: four of the thirteen datasets -- adult, bank_marketing, higgs and "
-            "numerai28_6 -- cannot complete a run at all. The profiler writes the split as a JSON "
-            "list of every row index, which exceeds read_artifact's cap above roughly 36k rows; "
-            "feature_eng then refuses on the truncated read, but nothing branches on "
-            "`recoverable`, so the run spends a full run's tokens and writes a publishable row "
-            "with no model in it. See tests/test_split_manifest_size.py. (2) Money: a measured "
-            "cost per dataset, which `--subset bench-mid` exists to produce -- phoneme, jasmine, "
-            "amazon_employee_access and nomao, a 2x2 over the row and column cost axes, and the "
-            "two largest datasets that can still be run. The GRADING is done: see `--subset "
-            "bench-smoke`, which runs and scores credit_g end to end. Also note dataset_id is an "
-            "eval-diff condition field, so 13 datasets is 13 cells. See docs/PLAN.md Phase 4 and "
-            "docs/NEXT.md. "
+            "subset 'full' is not runnable yet, and it now waits on one thing: cost. adult, "
+            "bank_marketing, higgs and numerai28_6 are runnable -- the split manifest fix landed "
+            "2026-09-01 -- but they are not priced. `--subset bench-mid` measured a cost model of "
+            "roughly a + b * n_features on the other nine datasets (5 columns $0.011, 9 columns "
+            "$0.013, 118 columns $0.041, 144 columns $0.042; see "
+            "evals/results/2026-09-01_bench-mid.jsonl). The only evidence on these four is one "
+            "adult smoke run at $0.0158 against a $0.014 prediction (n=1, not a cell), and higgs "
+            "carries a MODEL_TIMEOUT_S risk and a 46 MB register_dataset read that nothing has "
+            "measured. Checking the model on all four is what the next session does. The GRADING "
+            "is done: see "
+            "`--subset bench-smoke`, which runs and scores credit_g end to end. Also note "
+            "dataset_id is an eval-diff condition field, so 13 datasets is 13 cells. See "
+            "docs/PLAN.md Phase 4 and docs/NEXT.md. "
             f"Available subsets: {available}."
         )
     raise ValueError(f"unknown eval subset {subset!r}. Available subsets: {available}.")

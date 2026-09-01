@@ -41,10 +41,17 @@ distinguishable from a run where the reviewer was supposed to answer and silentl
 crashed reviewer scores as a clean pass.
 """
 
+from collections.abc import Callable
 from typing import Any, Literal
 
 from ds_agents.nodes._run import NodeRun
-from ds_agents.state import Disposition, PipelineError, PipelineState, ReviewPass
+from ds_agents.state import (
+    Disposition,
+    NodeName,
+    PipelineError,
+    PipelineState,
+    ReviewPass,
+)
 from ds_agents.tools.llm import StructuredModel
 from ds_agents.tools.protocol import Tools
 
@@ -163,3 +170,30 @@ def route_target(state: PipelineState) -> RoutedTo:
         return "reporter"
     latest = max(state.review_passes, key=lambda rp: rp.iteration)
     return latest.routed_to
+
+
+def halt_or(destination: NodeName) -> Callable[[PipelineState], NodeName]:
+    """What a straight-line edge in `graph.py` does: go to `destination`, or to the reporter.
+
+    A node that returns `recoverable=False` has said nothing downstream can produce a trustworthy
+    result. Until this existed, nothing in the graph or the router read `recoverable` at all, so
+    the run carried on through every remaining node, spent a full run's tokens and wrote a row that
+    looked like a measurement. Four of the thirteen benchmark datasets failed exactly that way.
+
+    To `reporter` and not `END`, because `nodes/reporter.py` is written for this path -- its
+    docstring says the harness needs a row for every dataset including the ones that blew up, or
+    the hardest datasets vanish and every published table biases upward. The reporter calls no
+    model, so halting is cheap.
+
+    The router's OWN conditional edges are deliberately not wrapped. The router is unreachable once
+    a fatal error is on the state, since every edge that could reach it halts first, and a `block`
+    verdict minted with no `ReviewPass` is the state `route_target` calls unreachable.
+
+    It lives beside `route_target` rather than in `graph.py` for the reason `graph.py`'s docstring
+    gives: that file is wiring, and this is a decision about where a run goes.
+    """
+
+    def edge(state: PipelineState) -> NodeName:
+        return "reporter" if state.halted() else destination
+
+    return edge

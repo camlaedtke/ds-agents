@@ -225,13 +225,22 @@ class TestTheFullSubsetIsNotYetRunnable:
             run_eval(subset="full", name="probe", dry_run=True)
 
         message = str(excinfo.value)
-        assert "cost" in message, "one remaining blocker is a measured cost per dataset"
-        # The second blocker, found 2026-09-01: the split manifest outgrows the read cap above
-        # roughly 36k rows, so four datasets produce a row with no model in it. Asserted here so
-        # that fixing it forces this message to be corrected a fifth time.
-        assert "split" in message, "the other remaining blocker is code, not money"
-        for broken in ("adult", "bank_marketing", "higgs", "numerai28_6"):
-            assert broken in message, f"{broken} cannot be run and the message must say so"
+        assert "cost" in message, "the one remaining blocker is a measured cost per dataset"
+        # "split" is deliberately NOT asserted either way. It named the second blocker (the split
+        # manifest outgrowing the read cap above ~36k rows) until the 2026-09-01 fix
+        # (ds_agents/split_manifest.py), so it used to belong in the positive list below. Asserting
+        # its absence now would be just as fragile in the other direction: the fixed message is
+        # free to still say the word while describing the history ("the split manifest fix
+        # landed"), and that mention isn't a false claim the way naming a shipped feature as
+        # missing would be -- it's not claiming anything is still broken. So it belongs in neither
+        # list; the four dataset names below are the ones that actually still need pinning.
+        for dataset in ("adult", "bank_marketing", "higgs", "numerai28_6"):
+            # These are NOT unrunnable any more -- the split fix means all four are runnable. They
+            # still belong in the positive list because the message still needs to name them, for a
+            # different reason: they are runnable but UNPRICED, which is the actual remaining
+            # blocker. A message that dropped them silently would stop telling the next session
+            # which four datasets to price.
+            assert dataset in message, f"{dataset} is unpriced and the message must say so"
         assert "bench-smoke" in message, "the message must point at what DOES work"
         assert "bench-mid" in message, "and at how the measuring is being done"
         for shipped in ("baseline_score", "score_ratio", "verified_holdout_score"):

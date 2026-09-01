@@ -12,6 +12,7 @@ import json
 import pytest
 from conftest import FakeTools, ScriptedModel
 
+from ds_agents import split_manifest
 from ds_agents.nodes.feature_eng import (
     FeatureDrop,
     FeaturePlan,
@@ -32,15 +33,22 @@ from ds_agents.tools.protocol import ArtifactMeta, ArtifactPayload, RunResult, T
 
 pytestmark = pytest.mark.fast
 
-SPLIT_MANIFEST = {
-    "strategy": "stratified",
-    "seed": 20260822,
-    "target": "churned",
-    "n_rows": 200,
-    "train": list(range(160)),
-    "holdout": list(range(160, 200)),
-    "folds": [{"train": list(range(160)), "valid": []}],
-}
+# This node only ever reads `train` out of the split (medians, one-hot levels, everything else is
+# fitted on train rows), so what the folds look like is irrelevant to every test in this file --
+# only that the 160 train rows are accounted for. Under this encoding a row is only "train" if it
+# validates in SOME fold (there is no character for "train, never validated"), so a single-fold
+# stand-in has to put every train row in that one fold's valid set. That fold's own derived train
+# (the complement) is then empty, which is the same degenerate shape the old explicit-list fixture
+# had -- an honest fixture for a node that never looks past `SPLIT["train"]`, not a claim about
+# what a real k-fold split looks like.
+SPLIT_MANIFEST = split_manifest.manifest_from(
+    n_rows=200,
+    holdout=list(range(160, 200)),
+    fold_valid=[list(range(160))],
+    strategy="stratified",
+    seed=20260822,
+    target="churned",
+)
 
 SPLIT_ARTIFACT_ID = "art-007-split-manifest"
 

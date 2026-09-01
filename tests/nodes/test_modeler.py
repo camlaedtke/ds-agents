@@ -11,6 +11,7 @@ import json
 import pytest
 from conftest import FakeTools, ScriptedModel
 
+from ds_agents import split_manifest
 from ds_agents.nodes.modeler import ModelChoice, modeler
 from ds_agents.state import Objection, PipelineState, RunConfig, TaskSpec
 from ds_agents.tools.protocol import ArtifactMeta, ArtifactPayload, RunResult, ToolError
@@ -21,15 +22,20 @@ FEATURE_CODE = (
     "def transform(df):\n    return df[['tenure_months', 'monthly_charges']].astype('float64')\n"
 )
 
-SPLIT_MANIFEST = {
-    "strategy": "stratified",
-    "seed": 20260822,
-    "target": "churned",
-    "n_rows": 200,
-    "train": list(range(160)),
-    "holdout": list(range(160, 200)),
-    "folds": [{"train": list(range(128)), "valid": list(range(128, 160))}],
-}
+# holdout 160..199. Two folds, not one: under this encoding a row is only "train" at all if it
+# validates in SOME fold, so a single fold would have to claim every train row as its own valid
+# set, leaving its complement (its train) empty -- there is no way to spell "trains on 0..127,
+# validates on 128..159" with n_folds=1. A second fold whose valid set is exactly the other 128
+# rows makes fold 0's complement come out to 0..127, which is the same partition the old
+# explicit-list fixture named directly. See split_manifest.py.
+SPLIT_MANIFEST = split_manifest.manifest_from(
+    n_rows=200,
+    holdout=list(range(160, 200)),
+    fold_valid=[list(range(128, 160)), list(range(128))],
+    strategy="stratified",
+    seed=20260822,
+    target="churned",
+)
 
 SNIPPET_OUT = {
     "metric": "roc_auc",
@@ -411,7 +417,13 @@ def test_the_feature_code_and_the_pinned_split_reach_the_snippet():
     code = tools.code_run[0]
     assert "def transform(df):" in code
     assert "churned" in code
-    assert "160" in code  # a train row index from the pinned split
+    # The old assertion here was `"160" in code`, a train row index -- that stopped meaning
+    # anything once explicit index lists were retired: no row index appears anywhere in the
+    # snippet source any more, only the assignment string does. Pin what actually reaches the
+    # snippet under the new form instead: the assignment itself, and that the decoder this node
+    # depends on to read it is really compiled into the code, not just named in a format kwarg.
+    assert SPLIT_MANIFEST["assignment"] in code
+    assert "def decode_split(manifest, n_rows):" in code
 
 
 def test_a_truncated_feature_code_artifact_is_unrecoverable():

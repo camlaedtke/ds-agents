@@ -48,7 +48,9 @@ Invariants worth stating explicitly:
   a pinned split the `contamination` category is unfalsifiable and no run is reproducible. It
   partitions the rows the AGENTS were given, and is *not* the independent holdout behind
   `verified_holdout_score`, which is withheld before the graph starts and never appears in this
-  manifest.
+  manifest. On disk it is a fold-assignment string -- one character per agent row (`"h"` for
+  holdout, a fold digit otherwise) plus a small header, not explicit index lists; see
+  `ds_agents/split_manifest.py` for the encoding.
 - `objections`, `review_passes`, `errors`, and `node_trace` are append-only, annotated with
   `operator.add` so LangGraph merges rather than replaces. An unannotated list field would be
   overwritten by whichever node wrote last, silently emptying the cost table.
@@ -236,8 +238,12 @@ Tools exposed:
   artifacts dir mounted read-write. No network.
 - `read_artifact(id, max_bytes) -> {content, meta, truncated}`
   Capped at `DEFAULT_READ_BYTES` (1 MiB) even when the caller names no limit, in the store rather
-  than in the transport, so the two bindings truncate at the same byte. A large artifact is meant
-  to be opened from inside a snippet at `meta.extra["sandbox_path"]`, not pulled through the tool.
+  than in the transport, so the two bindings truncate at the same byte. A genuinely large artifact
+  is meant to be opened from inside a snippet at `meta.extra["sandbox_path"]`, not pulled through
+  the tool -- the split manifest used to be the example of that (it once ran to several MB on a
+  large dataset) but no longer is: it is now a compact fold-assignment string, deliberately kept
+  small enough to stay readable through `read_artifact` because the reviewer and any future
+  generalist arm never reach `sandbox_path`.
 - `write_artifact(name, content, kind, extra) -> meta`
   Returns the whole `ArtifactMeta` over the wire, not just the id: the id is in it, and an
   external client gets `n_bytes` and `sandbox_path` without a second call. The MCP client takes

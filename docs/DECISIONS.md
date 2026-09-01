@@ -1844,3 +1844,148 @@ interpreting.
 at 119.6s and said nothing about why; `node_seconds` attributed 90% of it to one node. And the
 grader's own cost -- invisible before today -- turns out to be 3 to 7 seconds a run, which is 16% of
 `phoneme` and would have gone on being absent from every cost model built from these files.
+
+## 2026-09-01 (second entry): the split manifest is one character per row, and the complement rule
+## stops being an assumption
+
+The blocker the entry above names is closed. The split manifest no longer lists row indices; it
+carries an `assignment` string of one character per agent row -- `h` for a holdout row, `0`..`4` for
+the fold that row *validates* in -- and every other partition is derived. Train is every non-`h`
+position. A fold trains on every train row it does not validate on.
+
+Measured on the real thing, through the real store: `higgs` goes from 2,690,410 B to 78,831 B, which
+is 7.5% of `DEFAULT_READ_BYTES`. All four datasets that could not previously complete a run now do,
+offline and for nothing, at 36,553 B (`bank_marketing`) to 78,831 B (`higgs`). The headroom runs to
+roughly a million agent rows.
+
+**This is not a cap bump, and the reason is that the representation was never private to the artifact
+store.** The split JSON text is substituted verbatim into FOUR snippet sources -- `feature_eng`,
+`modeler`, and the grader's two bodies in `rescore.py`. Raising `max_bytes` at the three read sites
+would have put a 2.7 MB string into snippet source four times per run on `higgs` and left the cap
+that exists to stop exactly that intact everywhere else.
+
+**Alternatives, costed rather than argued.** On a 5,000-row stratified 5-fold split: base64 of a
+byte array is 6,668 B, 1.33x WORSE than the 5,000 B digit string, because the digit string is already
+one printable byte per row. Run-length as JSON pairs is 41,340 B, 8.3x worse -- mean run length 1.21,
+since a shuffled fold assignment is incompressible by construction. `docs/NEXT.md` floated run-length
+as an option worth costing; that is the cost. Re-deriving the split from the seed inside each snippet
+is smaller than all of these and is refused twice over: the split stops being a recorded object, so a
+later contamination objection has nothing to be falsifiable against, and it would make the partition
+depend on the installed sklearn version, which `holdout._withhold_rows` already refuses to do for the
+withheld carve. Passing `ArtifactMeta.extra["sandbox_path"]` instead -- which `mcp_server/store.py`'s
+own `path_of` docstring has advertised since Phase 2, naming this exact problem and this exact number
+-- is the closest call. It is rejected as the primary fix because the artifact would stay 2.7 MB and
+still truncate: it has to be READABLE through `read_artifact`, not merely usable, since the reviewer
+and any future generalist arm reach it no other way. `path_of` remains right for a genuinely large
+artifact and its docstring has been corrected, because the 7 MB figure in it is now 79 KB.
+
+**`fold_train: "complement"` is in the file, and it is the part of this design that is not about
+size.** "A fold trains on the train rows it does not validate on" is a property of `KFold` and
+`StratifiedKFold`, not of a split. It is false of `TimeSeriesSplit`, where fold-train is a prefix.
+`TaskSpec` already declares `temporal` and `grouped`, and `profiler.SUPPORTED_SPLIT_STRATEGIES`
+refuses them today precisely so a manifest never claims a partition that did not run. Without the
+rule recorded IN the file, the day someone implements `temporal` this encoding stays perfectly
+writable while the decoder hands back fold-training sets containing future rows, with nothing
+raising -- the same contamination the manifest exists to make falsifiable, produced by the artifact
+format itself. So the rule is written down, the decoder refuses any other value, and `SPLIT_SNIPPET`
+checks the claim against what the splitter actually returned on every single run rather than
+assuming it.
+
+**Shrinking the artifact removed a guard, and the replacement had to be deliberate.** Under explicit
+index lists, a truncated read was caught by `ArtifactPayload.truncated` and an out-of-range id by
+each consumer's `0 <= i < len(df)`. Under an assignment string every position is in range by
+construction, so an assignment SHORTER than the frame -- a partial write, or the wrong frame mounted
+-- would silently drop the tail from train AND holdout AND every fold at once, and report a
+plausible `n_train_rows` while doing it. `decode_split` therefore takes the frame length as a
+REQUIRED argument, so no caller can forget to prove it is decoding against the frame it read, and it
+checks the manifest's own `counts` against what it actually decoded. `counts` written and never read
+would have been decoration.
+
+**One constraint the old form did not impose, found by the fixtures rather than by the datasets.**
+There is no character for "a train row that validates in no fold", so every train row must belong to
+exactly one fold's valid set. That is what `KFold` and `StratifiedKFold` produce, so nothing real
+changes -- but two unit-test fixtures had been written as a single fold that validated on nothing,
+and they had to be reshaped to say what they meant. It is a genuine narrowing of what the artifact
+can express, and it is the good kind: a split that discards rows is now unrepresentable rather than
+silently misrepresented, and the encoder raises rather than writing a manifest with a hole in it.
+
+**One implementation, not four.** `src/ds_agents/split_manifest.py` holds the encoder and decoder as
+Python source-string constants, spliced into the snippets as a `{decoder}` / `{encoder}` format
+ARGUMENT rather than concatenated into the template. That distinction is load-bearing: the templates
+are `str.format` strings with `{{`-escaped braces and this source is not escaped, so concatenating it
+the way `rescore._SNIPPET_PRELUDE + _RESCORE_BODY` does would raise at format time, while a
+substituted value is not re-scanned. Nothing is `exec`'d in the node process. `tests/
+test_split_manifest.py` compiles the constants in the test process, which is what makes them one
+implementation under test rather than a mirror -- ruff never looks inside a string literal, so that
+module is the only lint this code will ever have -- and one non-`fast` test runs the same source
+through the real sandbox so the in-process shortcut is never the only evidence.
+
+**There is no dual-form fallback, deliberately.** No committed artifact needs reading: results files
+never contain a manifest. A decoder that also accepted the old explicit lists would have left the
+path production takes exercised only by a bespoke unit test, while `tests/nodes/test_feature_eng.py`
+and `tests/nodes/test_modeler.py` -- the only tests that put a manifest in front of the real
+snippet-formatting code -- kept using the legacy branch. Fixture readability is bought back with
+`split_manifest.manifest_from`, a node-process helper for tests only, pinned by test to agree with
+the encoder on a real split.
+
+**What is lost, irrecoverably: fold ORDER.** The splitter returns membership in permutation order and
+an assignment array can only carry membership. That was paid in its own commit first (`745614a`),
+sorting the fold lists while the explicit form was still in place, so this change could be measured
+as a numeric no-op rather than confounded with an ordering shift -- the same reason
+`forced_drop_release` exists. It was a no-op twice over: the toy run's `cv_scores`, `cv_mean` and
+`claimed_holdout_score` are byte-identical across both commits, and `CANDIDATE_SPECS` holds only
+`LogisticRegression`, `HistGradientBoosting` and `Ridge`, none of them order-sensitive, while the one
+bootstrap estimator in the repo -- the baseline's RandomForest -- fits on `train`, which was already
+sorted.
+
+Live proof, `evals/results/2026-09-01_adult-smoke.jsonl`, one run at $0.0158: `rescore_status` ok,
+`baseline_status` ok, `refit_claim_gap` exactly 0.0, `baseline_zero_score` exactly 0.5, verified
+0.9244 against a claimed 0.9240. `adult` is the first formerly-unrunnable dataset to produce a graded
+row, and the first row anywhere in this project with `baseline_normalised_score` above 1.0 (1.054) --
+the pipeline beat the raw-column floor, which is the direction the parking lot's "the unit point is a
+floor, not a ceiling" note predicts but had not seen.
+
+## 2026-09-01 (third entry): a refusal nothing reads is a comment
+
+`recoverable` was written by thirteen call sites and read by four, none of which was in the graph.
+`feature_eng` refused the truncated split correctly, `modeler` would have refused it identically, and
+the run carried on through reviewer, router and reporter and wrote a publishable row anyway. The
+guard was written, the guard fired, the guard was ignored.
+
+**The spending stops in `graph.py`.** Every straight-line edge is now
+`add_conditional_edges(source, halt_or(destination), ...)`, where `halt_or` returns `reporter` when
+`PipelineState.halted()`. `graph.py` stays wiring-only -- the predicate lives beside `route_target`
+in `nodes/router.py`, for the reason that file's docstring gives.
+
+**To `reporter` and not to `END`**, and `nodes/reporter.py`'s own docstring settles it: it is written
+for the hard-failure path where `spec`, `profile`, `chosen_model` and `final_features` are all
+`None`, because the harness needs a row for every dataset including the ones that blew up or the
+hardest datasets vanish and every published table biases upward. The reporter calls no model, so
+halting is nearly free. One consequence taken deliberately: the router never runs, so `review_verdict`
+stays `pending` rather than reading `pass`. That incidentally closes half of the standing NEXT.md
+item about a run that produced no model being recorded as a pass -- on the halt path only.
+
+**The router's own conditional edges are not wrapped.** The router is unreachable once a fatal error
+is on the state, since every edge that could reach it halts first, and a `block` verdict minted with
+no `ReviewPass` is a state `route_target` calls unreachable.
+
+**`publishable()` is NOT changed, and that is the decision rather than an omission.** Refusing a
+halted row was the obvious move and it is wrong for the same reason the reporter exists: it would
+delete exactly the hardest datasets from `evals/results/` and leave the reason in stdout scrollback,
+which is the same shape as the defect being fixed. A halted run's cost, node trace, timings and
+errors are all real; only its score columns are `None`. `publishable()` means one thing -- no number
+from this run is real -- and overloading it would blur that.
+
+What ships instead is the answer the three previous instances got: a companion column beside the bit.
+`halted_at` is the node whose unrecoverable refusal ended the run, or `None`. `errored` is one bit
+and cannot separate "a column could not be one-hot encoded" from "this dataset cannot be run", and
+the live `adult` row above is the worked example -- `errored: true`, `halted_at: null`, because a
+high-cardinality column was skipped. Fourth instance of this fix after `leakage_graded`,
+`rescore_status` and `baseline_status`, and the standing NEXT.md item asking for it can now be
+closed. All 161 committed rows carry zero errors with `recoverable: false`, so the column ships as
+`null` on every one of them and no history moves; that is asserted by test rather than claimed.
+
+One property recorded because it is a property of the reducer rather than of the method: `errors` is
+`Annotated[list[PipelineError], operator.add]`, so the first fatal error stays on the state for the
+rest of the run and a halted run can never un-halt. Correct by the definition of
+`recoverable=False`, but nobody should have to infer it.

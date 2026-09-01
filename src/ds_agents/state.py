@@ -1070,6 +1070,15 @@ class PipelineState(Contract):
             "node_seconds": self.node_seconds,
             "cost_usd": self.total_cost_usd,
             "errored": bool(self.errors),
+            # WHICH node's refusal ended the run, or None if none did. `errored` is one bit and
+            # cannot separate "a column name could not be associated with the target" from "this
+            # dataset cannot be run at all" -- and until the graph learned to halt, the second case
+            # produced a row that read like a measurement. Non-null is the greppable "this cell did
+            # not run" flag. Fourth instance of the same fix, after `leakage_graded`,
+            # `rescore_status` and `baseline_status`: a status column beside the number rather than
+            # a row silently withheld, because the reporter exists precisely so the hardest
+            # datasets still land in the results file.
+            "halted_at": self.halted_at(),
             # What went wrong, not just that something did. `errored` is one bit for every failure
             # mode a run has, which is why the zero-objection `block` bug was invisible in the
             # committed results files and had to be counted by hand off `route_sequence`. Always a
@@ -1235,6 +1244,26 @@ class PipelineState(Contract):
         """
         return sorted({e.model for e in self.node_trace if e.model in PLACEHOLDER_MODEL_NAMES})
 
+    def fatal_errors(self) -> list[PipelineError]:
+        """Errors a node marked `recoverable=False`, in the order they were raised.
+
+        `errors` uses an `operator.add` reducer, so the first fatal error is on the state for the
+        rest of the run and a halted run can never un-halt. That is correct by the definition of
+        `recoverable=False` -- the node said nothing downstream can produce a trustworthy result --
+        but it is a property of the reducer rather than of this method, so it is written down here
+        rather than left to be inferred.
+        """
+        return [e for e in self.errors if not e.recoverable]
+
+    def halted(self) -> bool:
+        """Whether the graph should stop running nodes and go straight to the reporter."""
+        return bool(self.fatal_errors())
+
+    def halted_at(self) -> NodeName | None:
+        """The node whose unrecoverable refusal ended the run, for `results_row()`."""
+        fatal = self.fatal_errors()
+        return fatal[0].node if fatal else None
+
     def publishable(self) -> tuple[bool, str]:
         """Whether this run may be written to a results file, and why not if it may not.
 
@@ -1250,4 +1279,9 @@ class PipelineState(Contract):
             )
         if not self.node_trace:
             return False, "node_trace is empty; nothing ran"
+        # A halted run IS publishable, deliberately. Its cost, node trace, timings and errors are
+        # all real; only its score columns are None, and `halted_at` says why. Refusing it would
+        # delete exactly the hardest datasets from the results file, which is the bias
+        # `nodes/reporter.py` exists to prevent -- and would leave the reason in stdout scrollback,
+        # which is the same shape as the defect this column was added to fix.
         return True, ""

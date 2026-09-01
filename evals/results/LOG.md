@@ -1058,3 +1058,41 @@ Same rule as every file before it. `commit` is an `eval-diff` condition field an
 Four of the thirteen manifest datasets still cannot be run at all -- `adult`, `bank_marketing`,
 `higgs`, `numerai28_6` -- because the split manifest exceeds `read_artifact`'s 1 MiB cap. That is
 now `--subset full`'s remaining blocker and it is code, not money. This run priced nine of thirteen.
+
+## 2026-09-01 (second): `adult`, the first of the four broken datasets to produce a row
+
+`evals/results/2026-09-01_adult-smoke.jsonl`. One run, $0.0158, `ds-agents run --dataset adult
+--tools mcp --results ...`. **Not a cell**, for the same reason `2026-08-31_credit-g-smoke` is not
+one: n=1, no replicate, no cell annotation, and it exists to prove a code path rather than to
+measure anything.
+
+### What it proves
+
+`adult` could not complete a run at all before this commit -- its split manifest was 1.25x
+`read_artifact`'s cap, `feature_eng` refused on the truncated read, and nothing branched on
+`recoverable`. With the split manifest re-encoded as one character per agent row, the manifest is
+39,457 B (3.8% of the cap) and the whole chain runs: `rescore_status` ok, `baseline_status` ok,
+`refit_claim_gap` exactly 0.0, `baseline_zero_score` exactly 0.5, verified 0.9244 against a claimed
+0.9240 and a `holdout_claim_gap` of -0.0004.
+
+Before spending anything, all four formerly-unrunnable datasets were run end to end offline with
+`--no-live` for $0: `adult`, `bank_marketing`, `numerai28_6` and `higgs` all completed the full node
+trace, with split manifests of 36,553 to 78,831 B. The largest, `higgs`, sits at 7.5% of the cap.
+
+### The one number worth arguing about
+
+`baseline_normalised_score` is **1.054** -- the first row in this project above 1.0, meaning the
+pipeline scored above the raw-column RandomForest floor. Consistent with the parking lot's standing
+note that the unit point is a floor and not a ceiling, and not quotable on its own: n=1, the grid is
+ours, and `feature_eng` dropped `native-country` as too high-cardinality to one-hot while the
+grader's encoder kept it. That is the same floor-vs-pipeline asymmetry `amazon_employee_access`
+showed, with the sign reversed.
+
+### Two things it does not settle
+
+`commit` reads `745614a-dirty`: the row was written mid-session against an uncommitted tree, which
+is honest and is also why it cannot be an arm in any comparison. And the other three datasets are
+still **unpriced** -- `bank_marketing`, `numerai28_6` and `higgs` have never had a live run, and
+`higgs` carries a `MODEL_TIMEOUT_S` risk and a 46 MB `register_dataset` read that this session
+deliberately did not confound with a correctness change. Pricing them is what `--subset full` now
+waits on, and it is money again rather than code.

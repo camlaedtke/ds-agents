@@ -9,6 +9,7 @@ It runs with `StubModel`, so it asserts nothing about leakage detection. A stub 
 design and a test that expected otherwise would be asserting on a placeholder.
 """
 
+import hashlib
 import json
 from pathlib import Path
 
@@ -23,6 +24,13 @@ from ds_agents.tools.local import LocalTools
 from ds_agents.tools.mcp_client import MCPTools, stdio_params
 
 TOY = Path(__file__).parent / "fixtures" / "toy" / "toy.csv"
+
+# The toy fixture's split manifest at the default seed, pinned as a digest rather than a
+# 200-character assignment string -- equally loud, and a diff nobody can read is a diff nobody
+# checks. Mirrors CREDIT_G_DIGEST in test_holdout.py. If this moves, the partition moved, and
+# every number measured against the old one -- including the inflated leak score in
+# `test_the_stub_run_keeps_the_leak_and_the_score_is_inflated` -- was measured on a different split.
+TOY_ASSIGNMENT_DIGEST = "34d2f72506012e97b141192c2b9f4daba5214c355ebffbeeb1ccffca340b5479"
 
 
 def run(root: Path) -> tuple[PipelineState, LocalTools]:
@@ -72,29 +80,67 @@ def test_the_profile_covers_every_column(toy_run):
 
 def test_the_split_manifest_is_an_actual_partition(toy_run):
     """Overlapping train and holdout ids would make every contamination objection unfalsifiable
-    and every score quietly optimistic."""
+    and every score quietly optimistic -- but under the assignment encoding (one character per
+    row, see ds_agents/split_manifest.py) that is now true BY CONSTRUCTION of the decoder: there is
+    no assignment where a row is both `"h"` and a fold digit, so `train & holdout == set()` and the
+    fold-disjointness checks the old version of this test made can no longer fail. That is coverage
+    this test is not actually doing any more, so it checks the manifest's SHAPE instead -- the
+    header fields are present, the assignment is exactly as long as the frame, its alphabet is
+    within `h` plus the fold digits, and `counts` and `assignment_sha256` agree with what the
+    assignment itself says -- and pins the toy fixture's actual partition as a digest, the way
+    `test_holdout.py`'s `CREDIT_G_DIGEST` pins the withheld rows. If this digest moves, the split
+    moved, and every number measured against the old one (including the inflated leak score in
+    `test_the_stub_run_keeps_the_leak_and_the_score_is_inflated`) was measured on a different
+    question."""
     state, tools = toy_run
 
     assert state.split_artifact is not None
     manifest = json.loads(tools.read_artifact(state.split_artifact).content)
 
-    train, holdout = set(manifest["train"]), set(manifest["holdout"])
-    assert train & holdout == set()
-    assert train | holdout == set(range(200))
-    for fold in manifest["folds"]:
-        assert set(fold["train"]) & set(fold["valid"]) == set()
-        assert set(fold["valid"]) & holdout == set(), "a fold must not validate on the holdout"
+    assert set(manifest) == {
+        "version",
+        "encoding",
+        "fold_train",
+        "strategy",
+        "seed",
+        "target",
+        "n_rows",
+        "n_folds",
+        "holdout_fraction",
+        "assignment",
+        "counts",
+        "assignment_sha256",
+    }
+    assignment = manifest["assignment"]
+    assert len(assignment) == manifest["n_rows"] == 200
+    alphabet = set("h") | {str(k) for k in range(manifest["n_folds"])}
+    assert set(assignment) <= alphabet
+
+    counts = manifest["counts"]
+    assert counts["train"] == sum(1 for c in assignment if c != "h")
+    assert counts["holdout"] == sum(1 for c in assignment if c == "h")
+    assert counts["folds"] == [
+        sum(1 for c in assignment if c == str(k)) for k in range(manifest["n_folds"])
+    ]
+
+    assert manifest["assignment_sha256"] == hashlib.sha256(assignment.encode()).hexdigest()
+    assert manifest["assignment_sha256"] == TOY_ASSIGNMENT_DIGEST
 
 
 def test_the_split_is_reproducible_from_the_seed(tmp_path: Path):
     """Two runs of the same config have to produce the same partition, or no result is
-    reproducible and no ablation is a comparison."""
+    reproducible and no ablation is a comparison.
+
+    Comparing `["assignment"]` rather than `["holdout"]` is strictly stronger than the old
+    `holdout`-only comparison: the assignment string carries the fold membership too, so this now
+    pins that a repeat run reproduces the folds as well as the holdout, not just the holdout alone.
+    """
     first, first_tools = run(tmp_path / "a")
     second, second_tools = run(tmp_path / "b")
 
     left = json.loads(first_tools.read_artifact(first.split_artifact).content)
     right = json.loads(second_tools.read_artifact(second.split_artifact).content)
-    assert left["holdout"] == right["holdout"]
+    assert left["assignment"] == right["assignment"]
 
 
 def test_the_stub_is_recorded_as_the_model(toy_run):
@@ -229,6 +275,7 @@ def test_a_lower_is_better_metric_reports_scores_in_natural_units(tmp_path: Path
     import subprocess
     import sys
 
+    from ds_agents import split_manifest
     from ds_agents.nodes.modeler import (
         CANDIDATE_SPECS,
         MODEL_SNIPPET,
@@ -251,11 +298,19 @@ def test_a_lower_is_better_metric_reports_scores_in_natural_units(tmp_path: Path
     frame.to_csv(csv, index=False)
 
     rows = list(range(60))
-    split = {
-        "train": rows[:45],
-        "holdout": rows[45:],
-        "folds": [{"train": rows[:30], "valid": rows[30:45]}],
-    }
+    # Two folds, not one: under the assignment encoding a row is only "train" if it validates in
+    # SOME fold, so a single fold would have to claim every train row as its own valid set. A
+    # second fold whose valid set is the other 30 rows makes fold 0's complement (its train) come
+    # out to exactly rows[:30], reproducing the same partition the old explicit-list fixture named
+    # directly. See split_manifest.py and the equivalent comment in tests/nodes/test_modeler.py.
+    split = split_manifest.manifest_from(
+        n_rows=60,
+        holdout=rows[45:],
+        fold_valid=[rows[30:45], rows[:30]],
+        strategy="kfold",
+        seed=20260822,
+        target="y",
+    )
     transform = (
         "import pandas as pd\n"
         "SOURCE_COLUMNS = ['signal', 'noise']\n"
@@ -265,6 +320,7 @@ def test_a_lower_is_better_metric_reports_scores_in_natural_units(tmp_path: Path
     )
 
     code = MODEL_SNIPPET.format(
+        decoder=split_manifest.DECODER_SRC,
         target="y",
         task_type="regression",
         positive_class=None,

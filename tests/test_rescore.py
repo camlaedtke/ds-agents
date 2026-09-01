@@ -191,7 +191,10 @@ class TestTheInstrumentDetectsAnOverclaim:
         assert manifests, "the profiler wrote no split manifest"
         split = json.loads(manifests[0].read_text())
         assert split["n_rows"] == 320, "the agents' frame is not the post-carve frame"
-        assert max(split["train"] + split["holdout"]) < 320
+        # There are no explicit index lists any more (see split_manifest.py): the assignment is
+        # one character per agent row, so its length pins the same claim the old max() did -- the
+        # agents' frame is the post-carve frame and no row id can point outside it.
+        assert len(split["assignment"]) == 320
 
 
 @pytest.mark.fast
@@ -510,7 +513,8 @@ class TestEveryBaselineStatusHasItsOwnReason:
         assert "no_model" in result.detail
 
     def test_an_unparseable_snippet_is_reported_not_raised(self, tmp_path):
-        """A split manifest with no `train` key. The snippet raises inside the sandbox, and the
+        """A split manifest with no `assignment` key -- `decode_split` sees `encoding` is missing
+        (not `"assignment-v1"`) and refuses it. The snippet raises inside the sandbox, and the
         grader records that rather than taking the run down with it."""
         prepared = _prepared(tmp_path, withheld=True)
         state = _state()

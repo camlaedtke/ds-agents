@@ -27,6 +27,7 @@ from typing import Any, Literal
 
 from pydantic import Field
 
+from ds_agents import split_manifest
 from ds_agents.nodes._run import NodeRun
 from ds_agents.state import (
     COLUMN_SCOPED_CATEGORIES,
@@ -59,13 +60,19 @@ import json, os
 import numpy as np
 import pandas as pd
 
+{decoder}
+
 TARGET = {target!r}
 DROP = {drop!r}
 MAX_LEVELS = {max_levels}
-SPLIT = json.loads({split_json!r})
+SPLIT_MANIFEST = json.loads({split_json!r})
 
 df = pd.read_csv(os.environ["DS_DATASET"])
-train_rows = [i for i in SPLIT["train"] if 0 <= i < len(df)]
+# Decoded against THIS frame's length, which is what makes a manifest written for a different
+# frame an exception rather than a silently short training set. The bounds filter this line used
+# to carry is now the decoder's job: see ds_agents/split_manifest.py.
+SPLIT = decode_split(SPLIT_MANIFEST, len(df))
+train_rows = SPLIT["train"]
 train = df.iloc[train_rows]
 
 drop = sorted({{c for c in DROP if c in df.columns}} | {{TARGET}})
@@ -444,6 +451,7 @@ def feature_eng(state: PipelineState, *, tools: Tools, model: StructuredModel) -
     try:
         feature_run = tools.run_python(
             FEATURE_SNIPPET.format(
+                decoder=split_manifest.DECODER_SRC,
                 target=state.spec.target,
                 drop=drop_list,
                 max_levels=MAX_ONE_HOT_LEVELS,

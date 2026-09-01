@@ -353,10 +353,28 @@ is the one row-driven term and is never more than 4% of a run.
       separated rather than assumed. Endpoints: `rescore_status` and `baseline_status` ok 8/8,
       `baseline_zero_score` exactly 0.5 on 8/8, `refit_claim_gap` exactly 0.0 on 8/8, every cell
       under its estimate. `evals/results/2026-09-01_bench-mid.jsonl`. See DECISIONS.md 2026-09-01.
-- [ ] **Make the split manifest fit, so the other four datasets can be run.** This is `full`'s
-      remaining blocker. It is a representation change to a load-bearing artifact -- the indices are
-      substituted into the modeler's snippet source, and `credit_g`'s are pinned by digest -- so it
-      is its own session, not a cap bump.
+- [x] **Make the split manifest fit, so the other four datasets can be run. Done, and `full` is
+      back to waiting on money alone.** The manifest is now one character per agent row -- `h` for
+      holdout, `0`..`4` for the fold that row validates in -- and every other partition is derived.
+      `higgs` goes 2,690,410 B to 78,831 B, 7.5% of the read cap, with headroom to roughly a million
+      rows. All four formerly-unrunnable datasets complete end to end, proved offline for $0 with
+      `--no-live` before anything was funded, and `adult` produced the first graded row of the four
+      live at $0.0158 (`rescore_status` ok, `baseline_status` ok, `refit_claim_gap` exactly 0.0,
+      `baseline_normalised_score` 1.054 -- the first row in this project above the raw-column floor).
+      Not a cap bump, for the reason the box said: the JSON text is substituted into four snippet
+      sources, not just read. Run-length was costed and is 8.3x WORSE than explicit lists (mean run
+      length 1.21 on a shuffled assignment); base64 is 1.33x worse than the digit string; seed
+      re-derivation is refused because the split stops being a recorded object and would depend on
+      the installed sklearn version. `evals/results/2026-09-01_adult-smoke.jsonl`. See DECISIONS.md
+      2026-09-01 (second entry).
+- [x] **`recoverable` is read. A fatal refusal halts the run and the row says so.** Every
+      straight-line edge in `graph.py` is now `halt_or(destination)`; a `recoverable=False` error
+      routes straight to `reporter` and no further node spends. The row is still written --
+      deliberately, because refusing it would delete the hardest datasets from the results file --
+      and carries `halted_at`, the node that refused. Fourth instance of the companion-column fix
+      after `leakage_graded`, `rescore_status` and `baseline_status`, which closes the standing
+      "`errored` needs a companion column" item. `publishable()` is unchanged. See DECISIONS.md
+      2026-09-01 (third entry).
 
 ## Phase 5: Ablations and writeup (3 to 4 sessions)
 - [~] reviewer on/off, Haiku/Sonnet reviewer, single agent vs team, loop cap 1/3. Two of these ran

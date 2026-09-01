@@ -793,8 +793,12 @@ Priority: **load-bearing** means the thesis breaks if this is wrong and you cann
   harness quietly appends a line to the file you will later compute an average over. The defence is
   not a better guard, it is asking of every refusal: who reads this, and what do they do differently?
   If the answer is "nothing", the refusal is a comment.
+  FIXED 2026-09-01, and how it was fixed is half the lesson: the graph now halts to the reporter on
+  an unrecoverable error, but the row is still WRITTEN, carrying `halted_at`. Refusing to write it
+  would have deleted exactly the hardest datasets from the results file, which is the same failure
+  wearing the opposite coat. See docs/DECISIONS.md 2026-09-01 (third entry).
   Related: [[failure-domain-separation]], [[cost-hides-in-the-cheapest-case]],
-  [[status-column-beside-the-number]].
+  [[status-column-beside-the-number]], [[a-guard-that-stops-being-reachable]].
 
 ### two-axes-treated-as-one — when "how big is it" has more than one answer
 - Priority: useful
@@ -813,3 +817,43 @@ Priority: **load-bearing** means the thesis breaks if this is wrong and you cann
   one axis look like a trend right up until the second axis moves. The cheap tell is a wide-and-short
   case: if it is expensive, the expensive thing is not length.
   Related: [[cost-hides-in-the-cheapest-case]], [[eval-baselines]].
+
+### encoding-as-a-contract — a representation decides what can be said, including what can be lied about
+- Priority: load-bearing
+- Came up: 2026-09-01, replacing the split manifest's explicit index lists with an assignment string
+- Status: flagged
+- Why it matters here: the new split manifest stores one character per row and derives every
+  partition from it, including each fold's training set. That derivation rests on a rule -- a fold
+  trains on the train rows it does not validate on -- which is true of `KFold` and false of
+  `TimeSeriesSplit`. The old form could not have this bug, because it wrote the fold's training rows
+  down. The new form is smaller precisely because it does not, and the price is that a *correct*
+  encoder plus a *correct* decoder can still produce a wrong split the day the splitter changes:
+  implement `temporal`, and the same code silently hands later folds training rows from the future.
+  Nothing raises, because nothing is broken -- the assumption just stopped being true.
+  The general shape: **compression is the removal of redundancy, and redundancy is what catches
+  errors.** Every field you derive instead of storing is a rule you are now responsible for keeping
+  true, somewhere far from where it is applied. The defence is to put the rule IN the artifact
+  (`fold_train: "complement"`), refuse any other value, and check the claim against reality at write
+  time — which turns an assumption into a recorded, falsifiable property. The same instinct is why
+  the manifest carries `counts` it does not need and a `sha256` nobody has to read.
+  Related: [[eval-baselines]], [[a-guard-that-stops-being-reachable]],
+  [[status-column-beside-the-number]].
+
+### a-guard-that-stops-being-reachable — the checks a change quietly disarms
+- Priority: useful
+- Came up: 2026-09-01, shrinking the split manifest below the read cap
+- Status: flagged
+- Why it matters here: the split manifest was fixed by making it 40x smaller. Two guards stopped
+  working as a side effect, and neither was mentioned in the change that broke them. `truncated` was
+  a real backstop while the artifact could exceed the 1 MiB read cap; now it can't, so it never
+  fires. Each consumer filtered row ids with `0 <= i < len(df)`, which was a real bound while the
+  manifest listed indices; under an assignment string every position is in range by construction, so
+  the filter is now a no-op — and a manifest written for a *different, larger* frame would decode
+  silently, dropping the tail of the data from training and holdout and every fold at once while
+  reporting a perfectly plausible row count.
+  The general shape: **fixing the thing a guard was watching can disarm the guard**, and the loss is
+  invisible because nothing fails. Before shipping a change that makes a failure mode unreachable,
+  ask which existing checks were only working *because* of it. Here the answer was to make the
+  replacement deliberate: `decode_split` takes the frame length as a required argument, so no caller
+  can forget to prove it is decoding against the frame it actually read.
+  Related: [[silent-refusal-looks-like-a-result]], [[encoding-as-a-contract]].

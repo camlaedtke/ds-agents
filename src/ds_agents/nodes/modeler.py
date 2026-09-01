@@ -23,6 +23,7 @@ from typing import Any
 
 from pydantic import Field
 
+from ds_agents import split_manifest
 from ds_agents.nodes._run import NodeRun
 from ds_agents.state import Contract, ModelResult, PipelineError, PipelineState
 from ds_agents.tools.llm import StructuredModel
@@ -127,6 +128,8 @@ from sklearn.metrics import get_scorer
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import FunctionTransformer
 
+{decoder}
+
 TARGET = {target!r}
 TASK_TYPE = {task_type!r}
 POSITIVE_CLASS = {positive_class!r}
@@ -144,7 +147,7 @@ SENTINEL = {sentinel!r}
 N_REPEATS = {n_repeats}
 TOP_N = {top_n}
 SPECS = {specs!r}
-SPLIT = json.loads({split_json!r})
+SPLIT_MANIFEST = json.loads({split_json!r})
 FEATURE_CODE = {feature_code!r}
 
 # exec inside the SANDBOX, which is where agent code belongs. CLAUDE.md's rule against exec is
@@ -156,6 +159,9 @@ SOURCE_COLUMNS = list(ns["SOURCE_COLUMNS"])
 MATRIX_COLUMNS = list(ns["FEATURE_ORDER"])
 
 df = pd.read_csv(os.environ["DS_DATASET"])
+# Decoded against this frame's length. A manifest written for a different frame raises here
+# rather than fitting on whichever rows happened to be in range.
+SPLIT = decode_split(SPLIT_MANIFEST, len(df))
 y_raw = df[TARGET]
 
 # Reported, never swallowed: silently substituting classes[-1] for a positive_class that does not
@@ -387,6 +393,7 @@ def modeler(state: PipelineState, *, tools: Tools, model: StructuredModel) -> di
     scoring = _scoring_for(state.spec.task_type, state.spec.metric)
     specs = CANDIDATE_SPECS[state.spec.task_type]
     code = MODEL_SNIPPET.format(
+        decoder=split_manifest.DECODER_SRC,
         target=state.spec.target,
         task_type=state.spec.task_type,
         positive_class=state.spec.positive_class,

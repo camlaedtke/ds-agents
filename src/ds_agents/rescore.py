@@ -34,6 +34,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from ds_agents import split_manifest
 from ds_agents.holdout import PreparedDataset
 from ds_agents.nodes.modeler import CANDIDATE_SPECS, SEED_SENTINEL, _scoring_for
 from ds_agents.state import BaselineStatus, PipelineState, RescoreStatus
@@ -89,17 +90,22 @@ import numpy as np
 import pandas as pd
 from sklearn.metrics import get_scorer
 
+{decoder}
+
 TARGET = {target!r}
 TASK_TYPE = {task_type!r}
 POSITIVE_CLASS = {positive_class!r}
 SCORING = {scoring!r}
 SIGN = -1.0 if SCORING.startswith("neg_") else 1.0
 SEED = {seed}
-SPLIT = json.loads({split_json!r})
+SPLIT_MANIFEST = json.loads({split_json!r})
 WITHHELD_PATH = {withheld_path!r}
 
 # The frame the agents were mounted on. Its row ids are what SPLIT indexes.
 df = pd.read_csv(os.environ["DS_DATASET"])
+# Decoded against this frame's length, so the grader refuses a manifest for another frame rather
+# than scoring on whichever rows happened to be in range.
+SPLIT = decode_split(SPLIT_MANIFEST, len(df))
 withheld = pd.read_csv(WITHHELD_PATH)
 
 # Resolved on the AGENT frame, then applied to both. Resolving it on the withheld rows would flip
@@ -550,6 +556,7 @@ def _snippet_kwargs(
         "scoring": _scoring_for(state.spec.task_type, state.spec.metric),
         "seed": state.config.random_seed,
         "sentinel": SEED_SENTINEL,
+        "decoder": split_manifest.DECODER_SRC,
         "split_json": inputs.split_json,
         "withheld_path": str(prepared.withheld_csv),
     }

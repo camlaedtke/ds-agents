@@ -21,6 +21,7 @@ from typing import Any
 
 from pydantic import ValidationError
 
+from ds_agents import split_manifest
 from ds_agents.nodes._run import NodeRun
 from ds_agents.state import (
     ColumnProfile,
@@ -114,6 +115,8 @@ import numpy as np
 import pandas as pd
 from sklearn.model_selection import KFold, StratifiedKFold, train_test_split
 
+{encoder}
+
 TARGET = {target!r}
 SEED = {seed}
 STRATEGY = {strategy!r}
@@ -133,28 +136,31 @@ splitter = (
     else KFold(n_splits=N_FOLDS, shuffle=True, random_state=SEED)
 )
 y_train = y.iloc[train_rows]
-# Sorted, like `train` and `holdout` below. The splitter returns fold membership in
-# permutation order, which is an artefact of how the partition was drawn rather than a
-# property of it, and row ORDER changes what a bootstrap estimator fits on. Sorting makes
-# the manifest a statement about membership only -- which is all the fold-assignment
-# encoding can carry anyway, so this is the one line where that cost is paid and visible.
-folds = [
-    {{
-        "train": sorted(int(i) for i in train_rows[tr]),
-        "valid": sorted(int(i) for i in train_rows[va]),
-    }}
-    for tr, va in splitter.split(train_rows, y_train if stratify is not None else None)
-]
+train_set = set(int(i) for i in train_rows)
+fold_valid = []
+for tr, va in splitter.split(train_rows, y_train if stratify is not None else None):
+    valid = sorted(int(i) for i in train_rows[va])
+    # The manifest is about to CLAIM fold_train == "complement", and the decoder will apply that
+    # rule rather than read a list. True of KFold and StratifiedKFold, false of TimeSeriesSplit --
+    # so it is checked against what this splitter actually returned, every run, rather than
+    # assumed. The day `temporal` is implemented this refuses instead of silently handing later
+    # folds a training set containing future rows.
+    if set(int(i) for i in train_rows[tr]) != train_set - set(valid):
+        raise ValueError(
+            "splitter %r does not use complement fold-training; the assignment encoding cannot "
+            "represent this split" % type(splitter).__name__
+        )
+    fold_valid.append(valid)
 
-manifest = {{
-    "strategy": STRATEGY,
-    "seed": SEED,
-    "target": TARGET,
-    "n_rows": int(len(df)),
-    "train": sorted(int(i) for i in train_rows),
-    "holdout": sorted(int(i) for i in holdout_rows),
-    "folds": folds,
-}}
+manifest = encode_split(
+    n_rows=int(len(df)),
+    holdout=[int(i) for i in holdout_rows],
+    fold_valid=fold_valid,
+    strategy=STRATEGY,
+    seed=SEED,
+    target=TARGET,
+    holdout_fraction=HOLDOUT_FRACTION,
+)
 path = os.path.join(os.environ["DS_ARTIFACTS"], "split_manifest.json")
 with open(path, "w") as fh:
     json.dump(manifest, fh)
@@ -247,6 +253,7 @@ def profiler(state: PipelineState, *, tools: Tools, model: StructuredModel) -> d
         try:
             split_run = tools.run_python(
                 SPLIT_SNIPPET.format(
+                    encoder=split_manifest.ENCODER_SRC,
                     target=state.spec.target,
                     seed=state.config.random_seed,
                     strategy=state.spec.split_strategy,

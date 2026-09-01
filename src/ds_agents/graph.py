@@ -7,6 +7,10 @@ The whole skeleton, cycle included:
                                +---------------- feature_eng -------+
                                           `-- modeler --'
 
+Every straight-line edge above is really `halt_or(destination)`: a node that returned an error with
+`recoverable=False` sends the run to `reporter` and no further node runs. The reporter is written
+for that path, so a dataset that cannot be run still produces a row -- one carrying `halted_at`.
+
 The router sits on a conditional edge; the cycle edges back to `feature_eng` and `modeler` fire
 whenever `route_target` reads a `block` verdict off the router's latest `ReviewPass`.
 
@@ -28,7 +32,7 @@ from ds_agents.nodes.modeler import modeler
 from ds_agents.nodes.profiler import profiler
 from ds_agents.nodes.reporter import reporter
 from ds_agents.nodes.reviewer import reviewer
-from ds_agents.nodes.router import route_target, router
+from ds_agents.nodes.router import halt_or, route_target, router
 from ds_agents.state import PipelineState, utc_now
 from ds_agents.tools.llm import StructuredModel
 from ds_agents.tools.protocol import Tools
@@ -43,7 +47,8 @@ NODES = (
     ("reporter", reporter),
 )
 
-# Straight-line edges.
+# Straight-line edges -- conditional in LangGraph's sense but not in this pipeline's, because the
+# only thing that diverts one is an unrecoverable error. See `halt_or` in `nodes/router.py`.
 EDGES = (
     ("intake", "profiler"),
     ("profiler", "feature_eng"),
@@ -67,7 +72,9 @@ def build_graph(
         builder.add_node(name, partial(node, tools=tools, model=node_model))
     builder.add_edge(START, "intake")
     for source, destination in EDGES:
-        builder.add_edge(source, destination)
+        builder.add_conditional_edges(
+            source, halt_or(destination), {destination: destination, "reporter": "reporter"}
+        )
     builder.add_conditional_edges("router", route_target, ROUTES)
     builder.add_edge("reporter", END)
     return builder.compile()
