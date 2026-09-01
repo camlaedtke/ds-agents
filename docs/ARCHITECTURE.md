@@ -353,3 +353,13 @@ whether each pass re-raised the same objection or found a new one). All four are
 Cost and reliability: `wall_seconds` (real elapsed, not the sum of node events), `cost_usd`,
 `errored`. The harness must emit a row for every dataset even on hard failure, or the hardest
 datasets disappear and every table biases upward.
+
+Where that time and money went: `node_seconds` (a `{node: seconds}` map summed over repeats, so a
+node the review loop visited three times shows all three), plus `rescore_seconds` and
+`baseline_seconds`. Those last two are NOT inside `wall_seconds` and cannot be: `ended_at` is
+stamped when the graph returns, and the grader runs after it. Before 2026-09-01 nothing recorded
+them, which made the yardstick's own wall cost -- the dominant term at the manifest's larger shapes
+-- invisible in every committed row, and made a run WITH two extra fits look faster than one
+without. They are two columns rather than one because the re-scorer and the baseline are separate
+processes with separate timeouts that fail independently; `None` on both means neither ran, which
+is a different claim from `0.0`.
