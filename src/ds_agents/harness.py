@@ -165,15 +165,21 @@ SUBSETS: dict[str, tuple[Cell, ...]] = {
     # largest datasets in the manifest that can complete a run at all. See
     # `test_no_subset_names_a_dataset_whose_split_manifest_would_be_truncated`.
     #
-    # UNLIKE every other estimate in this dict, these four are GUESSES. Nothing has ever been run on
-    # any of these datasets. They are deliberately generous, because an estimate's job here is to
-    # stop a cap being overrun and `bench-smoke` was wrong by more than 2x in the cheap direction.
-    # Replacing them with measurements is the point of the run, not a side effect of it.
+    # MEASURED means from the 2026-09-01 run (n=2 a cell,
+    # `evals/results/2026-09-01_bench-mid.jsonl`), rounded up to the nearest $0.001, replacing the
+    # guesses they shipped with. The guesses were 0.020 / 0.060 / 0.030 / 0.065 and every one was
+    # HIGH -- the invocation came in at $0.2120 against a $0.35 estimate. That is the opposite of
+    # `bench-smoke`'s error and it is the safe direction to be wrong in, but it is still a 40% miss.
+    #
+    # One caveat that a mean cannot carry: all 8 runs took the review loop exactly once and none
+    # raised an objection, so these are the cost of a run that passes first time. The `ci` comment
+    # above records that a run looping three times costs about 2.5x one that does not, and nothing
+    # here has been observed looping.
     "bench-mid": (
-        Cell(name="phoneme-narrow-short", dataset="phoneme", est_cost_usd=0.020),
-        Cell(name="jasmine-wide-short", dataset="jasmine", est_cost_usd=0.060),
-        Cell(name="amazon-narrow-tall", dataset="amazon_employee_access", est_cost_usd=0.030),
-        Cell(name="nomao-wide-tall", dataset="nomao", est_cost_usd=0.065),
+        Cell(name="phoneme-narrow-short", dataset="phoneme", est_cost_usd=0.011),
+        Cell(name="jasmine-wide-short", dataset="jasmine", est_cost_usd=0.042),
+        Cell(name="amazon-narrow-tall", dataset="amazon_employee_access", est_cost_usd=0.013),
+        Cell(name="nomao-wide-tall", dataset="nomao", est_cost_usd=0.041),
     ),
     # "full" is deliberately absent. See `_resolve_subset`.
 }

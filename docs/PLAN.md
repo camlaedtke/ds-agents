@@ -332,6 +332,32 @@ box, and it is what `--subset full` now waits on.
       `credit_g`: `baseline_status` ok, zero exactly 0.5, unit 0.7660 against a verified 0.7476,
       normalised 0.9309. See DECISIONS.md 2026-08-31 (fourth entry).
 
+Scope note (2026-09-01): the phase does not close, and the reason changed shape. `--subset full`
+was down to money; it is now down to CODE again, and the money question is answered. Nine of the
+thirteen datasets are priced (`bench-mid`, 8 rows, $0.2120); the other four -- `adult`,
+`bank_marketing`, `higgs`, `numerai28_6` -- **cannot complete a run at all**, because the profiler
+writes the split as a JSON list of every row index and `read_artifact` caps reads at 1 MiB. The
+failure is silent: `feature_eng` refuses with `recoverable=False`, nothing branches on
+`recoverable`, so the run spends full tokens and writes a publishable row with no model in it. The
+cost model itself came out simpler than planned and for an unwelcome reason -- the pre-registered
+"tokens track columns, wall clock tracks rows" prediction was half wrong. Both track columns, because
+the modeler's `permutation_importance` is `10 x n_columns` scoring passes per candidate and
+dominates everything: 108s at 144 columns against 8s at 9. The baseline, this phase's whole worry,
+is the one row-driven term and is never more than 4% of a run.
+- [x] **The grader's own wall cost, and the 2x2 that priced nine datasets.** `wall_seconds` stops
+      when the graph returns and the grader runs after it, so the term `full` was blocked on pricing
+      was structurally invisible in every committed row -- a run WITH two extra fits read faster
+      than one without. Fixed with `rescore_seconds`, `baseline_seconds` and `node_seconds`, all
+      derived from existing state, no node changes. `bench-mid` crosses few/many rows with few/many
+      columns (`phoneme`, `jasmine`, `amazon_employee_access`, `nomao`) so the axes could be
+      separated rather than assumed. Endpoints: `rescore_status` and `baseline_status` ok 8/8,
+      `baseline_zero_score` exactly 0.5 on 8/8, `refit_claim_gap` exactly 0.0 on 8/8, every cell
+      under its estimate. `evals/results/2026-09-01_bench-mid.jsonl`. See DECISIONS.md 2026-09-01.
+- [ ] **Make the split manifest fit, so the other four datasets can be run.** This is `full`'s
+      remaining blocker. It is a representation change to a load-bearing artifact -- the indices are
+      substituted into the modeler's snippet source, and `credit_g`'s are pinned by digest -- so it
+      is its own session, not a cap bump.
+
 ## Phase 5: Ablations and writeup (3 to 4 sessions)
 - [~] reviewer on/off, Haiku/Sonnet reviewer, single agent vs team, loop cap 1/3. Two of these ran
       early, in Phase 3. The Haiku/Sonnet reviewer arm ran crossed with a prompt condition --

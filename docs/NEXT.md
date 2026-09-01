@@ -1,64 +1,70 @@
 # Next session
 
 ## Start here
-**Phase 4's last box is closed. `baseline_score` and `score_ratio` are retired, not implemented.**
-`score_ratio` computed `verified / baseline`; AMLB's convention is `(x − zero) / (unit − zero)`, and
-those are different functions that disagree about what 1.0 means. What ships instead is two raw
-points plus one derived column: `baseline_zero_score`, `baseline_unit_score`,
-`baseline_normalised_score`, `baseline_status`, `baseline_detail`, `baseline_recipe`. Retiring two
-published columns was free and that is **checked rather than claimed** — all 149 committed rows
-carried both as `null`, pinned by test, and no committed results file was edited.
+**`--subset full` is blocked on code again, and the money question is answered.** Nine of the
+thirteen datasets are priced. The other four -- `adult`, `bank_marketing`, `higgs`, `numerai28_6` --
+**cannot complete a run at all**, and nobody knew because nobody had run one.
 
-**The zero point is a correctness assertion, and it fired.** A constant class-prior predictor scores
-exactly 0.5 roc_auc by construction — every pair is a tie — so 0.5 is not a measurement with a
-tolerance, it is an assertion that the grader resolved the positive class, applied the scorer sign,
-and scored the rows it meant to. **Exactly 0.5 on 4 of 4 live rows.**
+**The mechanism, because it is the most useful thing here.** The profiler writes the train/test
+split as a JSON artifact holding every row index -- `train`, `holdout`, and five folds of
+(train, valid), so roughly six times the agent row count in integers -- and `read_artifact` caps
+every read at `DEFAULT_READ_BYTES = 1 MiB`. Above roughly 36k rows those collide. `feature_eng` then
+refuses on the truncated read with `recoverable=False`, which is correct. But **nothing in the graph
+or the router reads `recoverable`**, so the run continues through reviewer and reporter, spends a
+full run's tokens, and `publishable()` accepts it. A dataset that cannot be run does not look like a
+failure. It looks like a measurement. Pinned by `tests/test_split_manifest_size.py`, which projects
+the size from `n_rows` with no CSV read and was proved to fire by temporarily adding `adult`.
 
-**The pooling hazard is closed by a gate that cannot fire yet.** `baseline_normalised_score` returns
-`None` whenever `planted_leakage_columns` is non-empty, because the baseline is fit on every raw
-column including the trap. Said plainly: that contradiction is currently *unreachable* — fixtures
-have `withheld_fraction = 0.0`, so no fixture row is graded and every row that can carry a baseline
-has an empty planted list. The gate is written now because it costs one `if` now, and because
-widening the carve to fixtures is already parked as a future cell. The two raw points are **not**
-gated; only the quotient is.
+**The pre-registered cost model was half wrong, and the half that was wrong is the one this phase
+has been worrying about.** Prediction: tokens track columns, wall clock tracks rows. Tokens track
+columns almost exactly -- `jasmine` and `nomao` cost **within 2.4%** of each other across an 11.5x
+row difference. But wall clock tracks columns too: `jasmine` (2984 rows, 144 cols) is the **slowest
+cell in the run at 119.6s**, beating `nomao` at 11.5x its size, while `amazon` (32769 rows, 9 cols)
+finished in 19.3s. `node_seconds` names it: the modeler is **108.2s at 144 columns against 8.0s at
+9**, because `permutation_importance` is `10 x n_columns` scoring passes per candidate. **Price
+`full` as `a + b x n_features`, one term.**
 
-**The baseline is independent, and it runs in its own process.** It sees the raw frame through the
-grader's own mechanical encoder — not the agents' `feature_code_artifact` — because a yardstick that
-inherits the decisions it measures cannot say whether those decisions helped. Its own sandbox, its
-own timeout, its own ten-value `BaselineStatus`, because a RandomForest that dies on a wide frame
-must not take `verified_holdout_score` with it; `unit_point_failed` keeps the zero point.
+**So the baseline was the wrong thing to worry about.** `baseline_seconds` is the one row-driven
+term measured here and it is **never more than 4% of a run** (0.4s at `jasmine`, 4.2s at `nomao`).
+The 72s-on-`higgs` figure that motivated deferring `score_ratio` and versioning `baseline_recipe`
+was real but not binding. The binding constraint is `MODEL_TIMEOUT_S`, already 45% consumed at 144
+columns, and `SELECTION_RULE.max_features = 200` -- set without a measurement -- is what stands
+between the manifest and a timeout.
 
-**Live: 4 rows at $0.0645, all four pre-registered endpoints passed.** `baseline_status` ok 4/4,
-zero exactly 0.5, `baseline_recipe` `rf-v1` 4/4, $0.0161/run against a measured $0.0168 — the two
-extra fits cost no tokens. Characterisation only, explicitly not a result: unit 0.7660, verified
-0.7476, normalised **0.9309**. `evals/results/2026-08-31_baseline-smoke.jsonl`.
+**The old timing table was also measured at the wrong shape.** The baseline fits `SPLIT["train"]`,
+which is 0.64 x `n_rows`, not `n_rows`. `tests/test_baseline_cost.py`
+(`DS_AGENTS_TIMING_TESTS=1`) re-derives it at the correct shapes and answers an open question: the
+slowest shape in the manifest uses **6.4% of the 900s timeout**, so `n_estimators` does NOT need to
+drop and `baseline_recipe` does NOT need to fork.
 
-The floor: **741 tests pass** (up from 716), 27 skipped, ruff clean, `uv run ds-agents run --dataset
-toy` green live at $0.0130 and reporting `baseline_status: no_withheld_holdout`. Session spend
-~$0.11 all in.
+Live: **8 rows at $0.2120** against a $0.35 estimate, 0 failed, `rescore_status` and
+`baseline_status` ok 8/8, `baseline_zero_score` exactly 0.5 on 8/8, `refit_claim_gap` exactly 0.0 on
+8/8. `evals/results/2026-09-01_bench-mid.jsonl`. The floor: **751 tests pass** (up from 741, plus
+two new opt-in modules), ruff clean, toy pipeline green.
 
 ## First prompt
-Read CLAUDE.md, docs/PLAN.md Phase 4, and the "Start here" above. **`--subset full` has one blocker
-left and it is money, not code.** The grading is complete: a manifest dataset runs, is scored on a
-withheld holdout, and is placed on a measured scale.
+Read CLAUDE.md, docs/PLAN.md Phase 4, and the "Start here" above. **The next task is making the
+split manifest fit, because it is the only thing between here and `--subset full`.**
 
-**Start from the timing table, because it is the finding that changes the plan.** The unit point was
-timed at three shapes: **0.20s at `credit_g` (1000×20), 9.85s at `adult` (48842×14), 72.09s at
-`higgs` (98050×28)**, against an LLM portion of ~21s per run. So the baseline is invisible at the
-cheapest dataset and roughly quadruples wall time at the largest, and **none of that was visible
-from `bench-smoke`**. This is the second time the cheapest dataset has hidden a cost term from this
-project — the first was `bench-smoke`'s own $0.040-guessed / $0.017-measured error.
+It is NOT a cap bump. Three things make it a design change worth a session:
+1. The whole split JSON is substituted into the modeler's snippet SOURCE
+   (`nodes/modeler.py`, `split_json=split_payload.content`), so the representation is not private to
+   the artifact store.
+2. `credit_g`'s withheld indices are pinned in a test as a sha256 digest, and `tests/test_holdout.py`
+   asserts properties of the current form.
+3. Whatever replaces it has to keep the property that makes the split auditable -- a reader must
+   still be able to check which rows were trained on.
 
-Three things that follow, in order:
+Options worth costing before picking one: raise `max_bytes` only at the three call sites that read
+this artifact (smallest change, but the 1 MiB cap exists because artifacts get rendered into prompts
+and snippet source, and this one is 2.7 MB at `higgs`); store the split as a run-length or
+fold-assignment array rather than explicit index lists (`n_rows` bytes instead of ~6x, and it stays
+readable); or re-derive the split inside each snippet from the seed rather than passing it (smallest
+artifact, but then the split is no longer a recorded object and auditability is lost).
 
-1. **Measure a mid-sized dataset before funding thirteen.** `phoneme` or `australian` are cheap and
-   also answer the standing "is that the dataset or the pipeline?" question. Then one of `adult` /
-   `nomao` / `jasmine` to get a second point on the wall-clock curve — one point is not an estimate.
-2. **Decide whether `higgs` is worth 72s of yardstick per run**, or whether `n_estimators` drops for
-   the big frames. If it drops, `baseline_recipe` must change with it, and rows at two recipes must
-   not be pooled — that is what the column is for.
-3. **`full` is 13 cells**, because `dataset_id` is an `eval-diff` condition field. Price it as 13
-   cells × replicates, not as 13 runs.
+**Second, and cheap: `recoverable` is written and never read.** That is what turned a correct refusal
+into a paid-for row. Worth fixing independently of the split, because it is the general defect and
+the split is only the instance that exposed it.
 
 ## Open questions
 
@@ -75,9 +81,14 @@ Three things that follow, in order:
   RandomForest on `credit_g`.** Not quotable: n=1 effective, the grid is ours, and the encoder keeps
   high-cardinality columns `feature_eng` skips, which makes the unit point a **floor** rather than a
   strong model. Whether a floor is the right unit point at all is a real question for the writeup.
-- **Is `amazon_employee_access` a real dataset or a degenerate one?** Unchanged and still cheap to
-  answer. Nine integer-encoded high-cardinality ID columns land in the baseline's *numeric* branch
-  and pass straight through, so this run now probes the encoder as well as `min_usable_features`.
+- ~~**Is `amazon_employee_access` a real dataset or a degenerate one?**~~ **ANSWERED 2026-09-01:
+  real, and it is the most interesting of the four.** It graded cleanly -- `rescore_status` ok,
+  verified 0.8126 -- and returned the **lowest `baseline_normalised_score` of the run at 0.8751**.
+  It is also the only cell where `feature_eng` dropped columns the grader kept (7 final features
+  from 9), which is the floor-vs-pipeline asymmetry the parking lot describes reaching a results
+  file for the first time. Its nine integer-encoded ID columns do pass straight through the
+  baseline's numeric branch, so the yardstick keeps identifiers the pipeline discarded. That is the
+  concrete case the writeup's "is a floor the right unit point at all" question needs.
 - **Is a partially-labelled dataset gradeable at all?** Unchanged. `bank_marketing`'s documented
   `V12` is still unscored, deliberately, because `planted_leakage_columns` is read as complete. Note
   it would also be the first dataset where the leak-suppression gate could matter — if `V12` were

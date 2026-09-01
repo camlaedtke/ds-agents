@@ -990,3 +990,71 @@ was lost and no committed file was edited**. They are replaced by `baseline_zero
 `baseline_recipe`. Recorded here because a future reader who concatenates this directory will get a
 `score_ratio` column that is null for a reason nothing on the row explains, and this is the row that
 explains it. See DECISIONS.md 2026-08-31 (fourth entry).
+
+## 2026-09-01 — `bench-mid`, the first four manifest datasets, and the cost axis that was wrong
+
+`evals/results/2026-09-01_bench-mid.jsonl`. 4 cells x 2 replicates x n=1 = **8 rows**, commit
+`b39a4c0`, **$0.2120** against a $0.35 estimate and a $0.50 cap. 0 refused, 0 failed, no early stop.
+Pre-registered in DECISIONS.md 2026-09-01 before the runner was called.
+
+| cell | shape | cost | wall | rescore | baseline | modeler | verified | normalised |
+|---|---|---|---|---|---|---|---|---|
+| phoneme-narrow-short | 5404x5 | $0.0102 | 18.6s | 1.8s | 0.6s | 9.6s | 0.9466 | 0.9925 |
+| jasmine-wide-short | 2984x144 | $0.0419 | 119.6s | 1.6s | 0.4s | **108.2s** | 0.8610 | 0.9328 |
+| amazon-narrow-tall | 32769x9 | $0.0130 | 19.3s | 0.6s | 3.5s | 8.0s | 0.8126 | 0.8751 |
+| nomao-wide-tall | 34465x118 | $0.0409 | 96.9s | 2.5s | 4.2s | **74.5s** | 0.9954 | 1.0040 |
+
+Cells are named for their SHAPE because that is the condition being varied: this is a 2x2 crossing
+few/many rows with few/many columns, and nothing else differs between the four.
+
+### The headline is a refuted prediction
+
+The run pre-registered two independent cost axes -- tokens with columns, wall clock with rows. The
+first is confirmed sharply: **`jasmine` and `nomao` cost within 2.4% of each other despite an 11.5x
+row difference**. The second is **wrong**. `jasmine`, the second-smallest dataset in the manifest at
+2984 rows, is the slowest cell in the run; `amazon` at 32769 rows is among the fastest.
+`node_seconds` names the cause without a second run: the modeler takes **108.2s at 144 columns and
+8.0s at 9**, because `permutation_importance` costs `10 x n_columns` scoring passes per candidate.
+
+**Both axes are width.** `--subset full` should be priced as `a + b x n_features`, one term.
+
+### Which means the thing this phase has been worrying about was the wrong term
+
+`baseline_seconds` is the one measurement here that IS row-driven, and it is **never more than 4% of
+a run** (0.4s at `jasmine`, 4.2s at `nomao`). The 72s-on-`higgs` figure that motivated deferring
+`score_ratio`, versioning `baseline_recipe`, and asking whether `higgs` was affordable at all was
+real but not the binding constraint. The binding constraint is `MODEL_TIMEOUT_S`, which at 144
+columns is already 45% consumed. `SELECTION_RULE.max_features = 200` was set without a measurement
+and is now the thing standing between the manifest and a timed-out run.
+
+### Endpoints, including the ones that were not interesting
+
+`rescore_status` and `baseline_status` **ok 8/8**. `baseline_zero_score` **exactly 0.5 on 8/8** and
+`baseline_recipe` `rf-v1` on 8/8 -- the grader's correctness assertion, previously checked on one
+dataset, now holds on five. `refit_claim_gap` **exactly 0.0 on every row**. `errored` 0/8. Every
+cell came in UNDER its estimate (0.43x to 0.70x), which is a 40% miss in the safe direction and the
+opposite of `bench-smoke`'s error; `SUBSETS` now carries the measured means.
+
+`holdout_claim_gap` +0.0112 / +0.0028 / +0.0013 / +0.0001 on 596 to 6892 withheld rows. Not
+interpreted: they are small, and the point of the column is that it exists.
+
+### Determinism: narrower than it looked
+
+`phoneme`, `jasmine` and `amazon` are identical across replicates on every substantive column,
+reproducing `credit_g`. **`nomao` is not** -- `profiler_nominated` was `V1, V7, V97, V100` in one
+replicate and empty in the other, and a smoke run at the same commit finished with 113 final
+features against the cell's 118. Three outcomes, one dataset, one commit. The identical-rows
+observation holds where the pipeline has no decision available to make differently, and should stop
+being described as a property of the pipeline.
+
+### Not a comparand
+
+Same rule as every file before it. `commit` is an `eval-diff` condition field and these four
+`dataset_id`s have never been run, so there is nothing in this directory to compare against; the
+`credit_g` rows are context, not an arm.
+
+### What it does not settle
+
+Four of the thirteen manifest datasets still cannot be run at all -- `adult`, `bank_marketing`,
+`higgs`, `numerai28_6` -- because the split manifest exceeds `read_artifact`'s 1 MiB cap. That is
+now `--subset full`'s remaining blocker and it is code, not money. This run priced nine of thirteen.

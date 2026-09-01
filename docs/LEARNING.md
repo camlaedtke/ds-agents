@@ -771,3 +771,45 @@ Priority: **load-bearing** means the thesis breaks if this is wrong and you cann
   paid, or at two sizes so you can see the slope — one point on a curve is not an estimate, it is a
   number. Related: [[instrument-contaminates-measurement]], [[eval-baselines]],
   [[failure-domain-separation]], [[reference-system-independence]].
+
+### silent-refusal-looks-like-a-result — the failure that writes a row
+- Priority: load-bearing
+- Came up: 2026-09-01, pricing `--subset full` and discovering four datasets cannot be run
+- Status: flagged
+- Why it matters here: the profiler writes the train/test split as a JSON artifact holding every row
+  index, and `read_artifact` caps every read at 1 MiB. Above roughly 36k rows those two facts
+  collide, and `feature_eng` correctly refuses to fit on a partial split — it raises with
+  `recoverable=False`, which is exactly the right call. The problem is what happens next: *nothing
+  in the graph or the router reads `recoverable`*. The run continues through reviewer and reporter,
+  spends a full run's worth of tokens, and `publishable()` accepts the result. So four of the
+  thirteen benchmark datasets do not fail loudly — they produce a **row**, with no model, no
+  verified score, and a shape indistinguishable at a glance from a real measurement. Nobody noticed
+  because nobody had run one.
+  The general shape, and it is the thing worth carrying: **a component can refuse correctly and
+  still produce a wrong system**, whenever the refusal is recorded somewhere nothing downstream
+  consults. The guard was written, the guard fired, the guard was ignored. This is the same class of
+  defect as a caught exception that is logged and swallowed, and it is *more* dangerous in an eval
+  harness than in an application, because an application shows a user a broken screen while a
+  harness quietly appends a line to the file you will later compute an average over. The defence is
+  not a better guard, it is asking of every refusal: who reads this, and what do they do differently?
+  If the answer is "nothing", the refusal is a comment.
+  Related: [[failure-domain-separation]], [[cost-hides-in-the-cheapest-case]],
+  [[status-column-beside-the-number]].
+
+### two-axes-treated-as-one — when "how big is it" has more than one answer
+- Priority: useful
+- Came up: 2026-09-01, designing `bench-mid` as a 2x2 rather than a line
+- Status: flagged
+- Why it matters here: this project had been sizing datasets by rows, because rows are what
+  `n_rows` says and what a RandomForest fit scales with. But an agent pipeline pays on two
+  independent axes: **wall clock tracks rows** (fits, permutation importance) and **token cost
+  tracks columns** (the schema, the per-column profile, the drop plan all get rendered into a
+  prompt, and the feature prompt is re-rendered on every review pass). `credit_g` is small on both,
+  so one measurement of it constrains neither. The manifest contains shapes that separate cleanly —
+  `jasmine` is 144 columns on 2984 rows, `nomao` is 118 columns on 34465 — and a table sampled only
+  along the row axis had missed that `nomao` has *more cells* than `higgs`.
+  The general shape: before extrapolating a cost from one measurement, ask how many things the word
+  "bigger" could mean for this workload, and sample a **cross** rather than a line. Two points on
+  one axis look like a trend right up until the second axis moves. The cheap tell is a wide-and-short
+  case: if it is expensive, the expensive thing is not length.
+  Related: [[cost-hides-in-the-cheapest-case]], [[eval-baselines]].

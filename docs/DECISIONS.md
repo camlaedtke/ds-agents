@@ -1771,3 +1771,76 @@ $0.35 estimated.
   timeout does not raise, so none of the harness's brakes stop the failure this probe is looking
   for; `errored` on the row is the only signal, which is the third worked example of the
   `errored`-needs-a-companion item.
+
+### Outcome, appended after the runs
+
+Everything above was written and committed before the runner was called, on a clean tree, at
+`b39a4c0`. `evals/results/2026-09-01_bench-mid.jsonl`, 8 rows, **$0.2120 against a $0.35 estimate
+and a $0.50 cap**, 0 refused, 0 failed, nothing stopped early.
+
+| cell | shape | cost | est | wall | rescore | baseline | modeler | verified | normalised |
+|---|---|---|---|---|---|---|---|---|---|
+| phoneme-narrow-short | 5404x5 | $0.0102 | 0.020 | 18.6s | 1.8s | 0.6s | 9.6s | 0.9466 | 0.9925 |
+| jasmine-wide-short | 2984x144 | $0.0419 | 0.060 | 119.6s | 1.6s | 0.4s | **108.2s** | 0.8610 | 0.9328 |
+| amazon-narrow-tall | 32769x9 | $0.0130 | 0.030 | 19.3s | 0.6s | 3.5s | 8.0s | 0.8126 | 0.8751 |
+| nomao-wide-tall | 34465x118 | $0.0409 | 0.065 | 96.9s | 2.5s | 4.2s | **74.5s** | 0.9954 | 1.0040 |
+
+**Endpoints 1, 2 and 3 passed.** All 8 rows publishable with `errored: false`; `rescore_status` and
+`baseline_status` `ok` on 8 of 8; `baseline_zero_score` **exactly 0.5** on 8 of 8 and
+`baseline_recipe` `rf-v1` on 8 of 8, so the correctness assertion that had only ever fired on
+`credit_g` now holds on four more datasets. `refit_claim_gap` is **exactly 0.0** on every row, which
+is the self-check that earns the withheld number, now proved on four datasets nobody here wrote. No
+cell exceeded its estimate; every one came in UNDER, between 0.43x and 0.70x. That is the safe
+direction and still a 40% miss, recorded as such.
+
+**Endpoint 4 FAILED, and it is the finding of the session.** The pre-registration predicted two
+independent axes: token cost driven by columns, wall clock driven by rows. The first half is
+confirmed almost exactly -- `jasmine` $0.0419 and `nomao` $0.0409 land **within 2.4%** of each other
+despite an 11.5x row difference, and the two narrow cells sit together at $0.0102 and $0.0130. Cost
+is a function of width and essentially not of length.
+
+The second half is **wrong**. Wall clock is not driven by rows either. `jasmine` -- 2984 rows, the
+second-smallest dataset in the manifest -- is the **slowest cell in the run at 119.6s**, beating
+`nomao` at 11.5x its size, while `amazon` at 32769 rows finished in 19.3s. `node_seconds` says why
+in one line: the modeler takes **108.2s on jasmine and 8.0s on amazon**, because
+`permutation_importance` costs `N_PERMUTATION_REPEATS x n_columns` scoring passes per candidate.
+**Both axes are width.**
+
+So the term this whole phase has been worrying about was the wrong one. The baseline -- the 72s
+`higgs` number that motivated the deferral, the recipe fork, and the `baseline_recipe` column -- is
+the one thing here that IS row-driven, and it is small: 0.4s on `jasmine`, 4.2s on `nomao`, never
+more than 4% of a run. `--subset full` should be priced as **`a + b x n_features`**, one term, not
+two, and the risk at scale is `MODEL_TIMEOUT_S`, not `BASELINE_TIMEOUT_S`. At 144 columns the
+modeler already uses 45% of its 240s budget; `SELECTION_RULE.max_features = 200` -- set without a
+measurement -- is what stands between the manifest and a timeout, and it now has a number behind it
+for the first time.
+
+**Endpoint 5, determinism: three cells identical, one not, and the exception is informative.**
+`phoneme`, `jasmine` and `amazon` are byte-identical across both replicates on every substantive
+column, reproducing `credit_g`'s result on three more datasets. `nomao` varies on
+`profiler_nominated` -- one replicate nominated `V1, V7, V97, V100` as leakage candidates and the
+other nominated nothing -- while still landing on the same 118 final features. **And the pre-run
+smoke of `nomao` at this same commit dropped five columns and finished with 113.** So there are
+three distinct outcomes on one dataset at one commit, and the "identical rows" result is narrower
+than it looks: it holds where the pipeline has no decision available to make differently, and
+`nomao` is the first dataset here where it does. This is still not a determinism finding at n=2; it
+is a reason to stop treating the identical-rows observation as a property of the pipeline.
+
+**Endpoint 6 confirmed in direction.** `amazon_employee_access` returns the **lowest**
+`baseline_normalised_score` of the four at 0.8751, against `phoneme` 0.9925, `jasmine` 0.9328 and
+`nomao` 1.0040. It is also the only cell where `feature_eng` dropped columns the grader kept -- 7
+final features from 9 -- which is precisely the floor-vs-pipeline asymmetry the parking lot
+describes, reaching a results file for the first time. `nomao` above 1.0 means the pipeline beat a
+raw-column RandomForest there; at n=2 on our own grid that is characterisation, not a result.
+
+**What did not happen.** No node timed out, so none of the failure endpoints fired and
+`MAX_CONSECUTIVE_FAILURES` was never tested. `register_dataset` cost what it was measured at.
+`holdout_claim_gap` is small and positive on all four (+0.0112, +0.0028, +0.0013, +0.0001) on 596 to
+6892 withheld rows -- far more rows than `credit_g`'s 200, so the standing "a gap under ~0.08 is
+noise at n=1" caveat binds much less tightly here, though these are still not gaps worth
+interpreting.
+
+**Two columns earned their place immediately.** `wall_seconds` alone would have reported `jasmine`
+at 119.6s and said nothing about why; `node_seconds` attributed 90% of it to one node. And the
+grader's own cost -- invisible before today -- turns out to be 3 to 7 seconds a run, which is 16% of
+`phoneme` and would have gone on being absent from every cost model built from these files.
