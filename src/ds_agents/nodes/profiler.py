@@ -133,8 +133,16 @@ splitter = (
     else KFold(n_splits=N_FOLDS, shuffle=True, random_state=SEED)
 )
 y_train = y.iloc[train_rows]
+# Sorted, like `train` and `holdout` below. The splitter returns fold membership in
+# permutation order, which is an artefact of how the partition was drawn rather than a
+# property of it, and row ORDER changes what a bootstrap estimator fits on. Sorting makes
+# the manifest a statement about membership only -- which is all the fold-assignment
+# encoding can carry anyway, so this is the one line where that cost is paid and visible.
 folds = [
-    {{"train": train_rows[tr].tolist(), "valid": train_rows[va].tolist()}}
+    {{
+        "train": sorted(int(i) for i in train_rows[tr]),
+        "valid": sorted(int(i) for i in train_rows[va]),
+    }}
     for tr, va in splitter.split(train_rows, y_train if stratify is not None else None)
 ]
 
