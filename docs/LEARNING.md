@@ -950,5 +950,47 @@ Priority: **load-bearing** means the thesis breaks if this is wrong and you cann
   up? The audit that made this decidable is worth as much as the rule -- all twenty-two
   `PipelineError` sites were read, exactly one was reclassified, and that ratio is what makes this a
   rule about a site rather than a licence to sweep errors into counts.
+- Sharpened 2026-09-02, same day, by a third variant nobody was looking for. `--subset full` put
+  `errored: true` on exactly 1 of 52 rows, and both of that row's errors are the zero-objection
+  block-retry firing and then **succeeding**: the reviewer claimed `block` with nothing actionable,
+  was re-asked once, and the retry produced a usable objection. So the taxonomy is not two-valued.
+  A routine decision is not an error (the cardinality skip). A real anomaly with no column needs a
+  companion column (a failed fit). And a real anomaly that was **recovered from** is a third thing
+  again -- `errored` can say it happened but has no way to say it was handled, so a run where the
+  repair mechanism worked exactly as designed is indistinguishable in a rate from one where
+  something went wrong and stayed wrong. The general question to ask of any boolean failure flag:
+  does it distinguish *occurred* from *occurred and was handled*, and if not, which of those is it
+  quietly publishing? Left open in NEXT.md rather than answered, deliberately.
   Related: [[complete-list-or-nothing]], [[silent-refusal-looks-like-a-result]],
   [[instrument-contaminates-measurement]], [[caught-vs-remediated]].
+
+### the-assumption-beside-the-estimate — the printed caveat was the whole error, and the model was fine
+- Priority: load-bearing
+- Came up: 2026-09-02, `--subset full` overrunning its estimate by 10.2%
+- Status: flagged
+- Why it matters here: `--subset full` came in at $1.2165 against $1.1040, and the obvious reading --
+  the one this project would have reached for, having spent two sessions refining a cost model -- is
+  that the model under-predicted again. It did not. **All** of the miss sits in two of thirteen
+  cells, and every one of the 46 runs that reviewed exactly once landed within 0.95x-1.04x of its
+  cell's price. `australian` (+81%) and `kr_vs_kp` (+87%) each sent 2 of 4 runs around the review
+  loop three times. `kc1` -- also modelled, also never run, but four first-pass runs -- came in at
+  **-0.5%**, and that control is what makes the rest readable. Restricted to first-pass runs the two
+  overrunning cells read -7% and +7.7%: the model was accurate to within +/-8% *for the runs it was
+  a model of*.
+  The thing worth carrying is where the error actually lived. It was not in the fitted coefficients,
+  the residual sd, or the degrees of freedom -- all the places two prior sessions had learned to
+  look. It was in one sentence printed in `SUBSETS` directly above the numbers, which had said
+  correctly for two sessions that every price assumes a run that passes first time. **The caveat was
+  stated, committed, correct, and load-bearing, and nobody costed it.** A documented assumption
+  behaves exactly like an undocumented one until someone puts a number on it, because prose does not
+  propagate into an estimate.
+  The corollary is about what to do next, and it is the harder half. Having 13 datasets in hand, the
+  reflex is to re-fit `a + b*n_features + c*n_rows` on all of them. That fits the wrong thing: the
+  residuals are not noise around a size term, they are a bimodal split on a variable the model does
+  not contain. What the estimate needs is a **loop-rate term**, and this file has 6 looping runs to
+  estimate one from -- so the refit is declined rather than performed. A model that under-predicts
+  for a reason you have identified should not be re-fitted until the reason is in it; doing so
+  launders a known mechanism into a slightly larger intercept and destroys the evidence that the
+  mechanism was there.
+  Related: [[a-fit-is-not-a-model]], [[confounded-by-what-you-did-not-vary]],
+  [[cost-hides-in-the-cheapest-case]], [[two-axes-treated-as-one]].

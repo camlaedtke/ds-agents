@@ -1199,3 +1199,138 @@ other side to compare to, and running it would produce a table of empty cells.
   refuted at 7-13 categorical columns, which is not the same as refuted at 36.
 - **Whether the row term is real or is `higgs`.** The refit's improvement rests heavily on one cell.
   n=9 datasets, 3 parameters.
+
+## 2026-09-02 (second): `--subset full` -- all 13 datasets, and the loop assumption is the whole error
+
+`evals/results/2026-09-02_full.jsonl`, 52 rows, 13 cells x n=4 (2 replicates x 2), one commit
+(`70f7547`), **$1.2165 against a $1.60 cap and a $1.1040 estimate**. 0 refused, 0 failed, no early
+stop. 4 datasets ran live for the first time. Pre-registration: `docs/DECISIONS.md` 2026-09-02
+(fourth entry), committed before the runner was called. Feasibility was proved offline for $0 at
+this commit first, all 13 cells, `--no-live`.
+
+**Every pre-registered grader endpoint is clean 52/52.** `rescore_status` ok, `baseline_status` ok,
+`baseline_zero_score` **exactly 0.5**, `refit_claim_gap` **exactly 0.0**, `baseline_recipe` `rf-v1`,
+`halted_at` null. `leakage_graded` is false 52/52, which is correct and is the gate working: no
+manifest dataset carries an answer key, so nine leakage columns are `None` rather than claiming the
+reviewer missed something.
+
+### Headline: the cost model was not wrong. The assumption printed next to it was.
+
+The estimate missed by +10.2%, and **all of the miss is in two cells** -- `australian` +81.0% and
+`kr_vs_kp` +87.4%. Neither is a cost-model failure. Every one of the 46 runs that reviewed once
+landed within 0.95x-1.04x of its cell's price; the two overrunning cells each had 2 of 4 runs go to
+`review_loops=3`.
+
+| cell | kind | est | measured (n=4) | resid | loops seen |
+|---|---|---|---|---|---|
+| phoneme | measured | $0.0110 | $0.0105 | -4.9% | 1,1,1,1 |
+| amazon-employee-access | measured | $0.0140 | $0.0124 | -11.1% | 1,1,1,1 |
+| adult | measured | $0.0160 | $0.0161 | +0.4% | 1,1,1,1 |
+| credit-g | measured | $0.0170 | $0.0162 | -5.0% | 1,1,1,1 |
+| bank-marketing | measured | $0.0180 | $0.0155 | -14.1% | 1,1,1,1 |
+| numerai28-6 | measured | $0.0180 | $0.0170 | -5.3% | 1,1,1,1 |
+| higgs | measured | $0.0250 | $0.0240 | -4.0% | 1,1,1,1 |
+| nomao | measured | $0.0410 | $0.0427 | +4.2% | 1,1,1,1 |
+| jasmine | measured | $0.0420 | $0.0421 | +0.3% | 1,1,1,1 |
+| **australian** | MODELLED | $0.0160 | **$0.0290** | **+81.0%** | 1,2,3,3 |
+| sylvine | MODELLED | $0.0180 | $0.0196 | +8.8% | 1,1,1,2 |
+| kc1 | MODELLED | $0.0180 | $0.0179 | -0.5% | 1,1,1,1 |
+| **kr-vs-kp** | MODELLED | $0.0220 | **$0.0412** | **+87.4%** | 1,1,3,3 |
+
+`kc1` is the control that makes this readable: modelled, never run, all four runs passed first time,
+**-0.5%**. Restricting the two overrunning cells to their first-pass runs, `australian` reads
+$0.0149 against $0.0160 (-7%) and `kr_vs_kp` $0.0237 against $0.0220 (+7.7%). So the four modelled
+prices were accurate to within +/-8% *for the runs the model was a model of*, and the residual sd
+band was never the exposure. The exposure was the sentence in `SUBSETS` saying every price assumes a
+run that passes first time.
+
+### The loop multiplier, measured on manifest datasets for the first time
+
+Each run normalised against its own cell's first-pass mean, so dataset size divides out:
+
+| review_loops | n | mean multiplier | range |
+|---|---|---|---|
+| 1 | 46 | x1.00 | 0.95 - 1.04 |
+| 2 | 2 | **x1.80** | 1.71 - 1.89 |
+| 3 | 4 | **x2.46** | 2.12 - 2.84 |
+
+The standing figure was "about 2.5x", carried since the toy fixture and never checked on real data.
+It reproduces at **x2.46**. Thin -- n=4 at three loops, n=2 at two -- so it is a measurement, not an
+interval, and it should not be quoted tighter than "roughly 1.8x and 2.5x". The parking-lot item
+"the cost of a run that loops is unmeasured on any manifest dataset" is closed.
+
+### The four never-run datasets are the only ones the reviewer ever objects to
+
+**0 objections across all 36 runs of the nine previously-run datasets. 6 objecting runs out of the
+16 new ones.** NEXT.md predicted these four would be the interesting ones and that is the one
+prediction here that paid.
+
+Also the first `exhausted` verdicts ever recorded on a manifest dataset: 4 of them, 2 `australian`
+and 2 `kr_vs_kp`, all at `loop_cap=3`.
+
+The most instructive single row is a `kr_vs_kp` run that raised 2 `implausible_importance`
+objections, **addressed both to `modeler`**, and finished with
+`objected_columns_unremediated: ['bxqsq', 'rimmx', 'wknck']`. That is the `actionable-objection`
+failure -- a correct-shaped objection sent to the one node with no column lever -- reproducing
+outside the trap fixtures for the first time, on a dataset nobody here wrote, under the default
+`objection_routing="as_addressed"`. It is the strongest available argument that the `by_category`
+arm is measuring something real rather than an artifact of `claims_timing`.
+
+### The new columns' first live exercise
+
+`n_candidates` is 2 on 52/52, so the denominator populates. `n_candidates_failed_to_fit` is **0 on
+52/52** and `candidates_failed_to_fit` is empty on every row -- the expected and least interesting
+outcome, pre-registered as such. The column is not shown to work by this run; what is shown is that
+it does not fire spuriously.
+
+`errored` is true on exactly **1 of 52** rows, a `kr_vs_kp` run, and both its errors are the
+zero-objection block-retry: the reviewer claimed `block` with nothing actionable, was re-asked once,
+and the retry produced 1 actionable objection. **The retry worked and the run is recorded as
+errored.** That is a real observation about the column and it is left open rather than patched --
+see NEXT.md.
+
+### Scores
+
+| cell | verified | unit | separation | normalised | n_final_features |
+|---|---|---|---|---|---|
+| phoneme | 0.9466 | 0.9500 | 0.4500 | 0.992 | 5.0 |
+| amazon-employee-access | 0.8154 | 0.8572 | 0.3572 | 0.883 | 7.5 |
+| adult | 0.9244 | 0.9027 | 0.4027 | 1.054 | 12.0 |
+| credit-g | 0.7476 | 0.7660 | 0.2660 | 0.931 | 20.0 |
+| bank-marketing | 0.9359 | 0.9279 | 0.4279 | 1.019 | 16.0 |
+| numerai28-6 | 0.5211 | 0.5101 | **0.0101** | **2.089** | 21.0 |
+| higgs | 0.8006 | 0.7914 | 0.2914 | 1.031 | 28.0 |
+| nomao | 0.9954 | 0.9934 | 0.4934 | 1.004 | 117.0 |
+| jasmine | 0.8610 | 0.8870 | 0.3870 | 0.933 | 144.0 |
+| australian | 0.8772 | 0.9237 | 0.4237 | 0.890 | 13.2 |
+| sylvine | 0.9130 | 0.9739 | 0.4739 | 0.871 | 19.2 |
+| kc1 | 0.7675 | 0.8055 | 0.3055 | 0.876 | 21.0 |
+| kr-vs-kp | 0.9662 | 1.0000 | 0.5000 | 0.932 | 35.2 |
+
+Pre-registered endpoint 3 holds: `numerai28_6`'s separation reproduces at **0.0101**, identical to
+`bench-tall`. The 2.089 is a property of a near-chance dataset meeting the normalisation's
+definition, not a property of the run, and it may be quoted with its denominator beside it.
+
+`kr_vs_kp`'s unit point is **exactly 1.0000** -- a tuned RandomForest on the raw frame solves it
+perfectly, and the pipeline's 0.9662 sits below it. That is the [[reference-system-independence]]
+price paid on a dataset with no trap in it: the reference system is simply better here.
+
+### Not a comparand
+
+No `eval-diff` was run and none should be. `commit` and `dataset_id` are both
+`evaldiff.CONDITION_FIELDS`, this is a new commit, and 4 of the 13 datasets are new -- there is
+nothing on the other side, and running it would produce a table of empty cells. Same call and same
+reason as `bench-tall`.
+
+### What it does not settle
+
+- **No count in this file may be quoted as an effect.** n=2 per cell per replicate, so
+  `per_replicate` cannot test the binomial independence assumption and the pooled Wilson interval is
+  not earned. Fixed in advance, not discovered afterwards.
+- **The loop multiplier rests on 6 runs.** It agrees with the toy fixture's prior, which is
+  reassurance and not replication.
+- **Why `australian` and `kr_vs_kp` loop and the other eleven do not** is unexplained. `australian`
+  is the smallest dataset in the manifest (690 rows) and `kr_vs_kp` the most categorical (36
+  columns, all categorical); nothing yet connects those two facts to a reviewer that objects.
+- **`objections_raised` is 0 on 36 of 52 rows.** A reviewer that never objects is not obviously
+  working, and this file cannot distinguish "nothing to object to" from "not looking".

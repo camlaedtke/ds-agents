@@ -2522,3 +2522,50 @@ measurement.
   gap in `halted_at`'s coverage.
 - **What will not fire.** `MAX_CONSECUTIVE_FAILURES = 3` counts only runs that RAISE, and a node
   timeout does not raise.
+
+### Outcome, appended after the runs
+
+`evals/results/2026-09-02_full.jsonl`, 52 rows, one commit (`70f7547`), **$1.2165** against a
+$1.1040 estimate and a $1.60 cap. 0 refused, 0 failed, no early stop. Full numbers in
+`evals/results/LOG.md`.
+
+Every endpoint in group 1 held 52/52 with no tolerance, and endpoint 2 held: `halted_at` null on
+all 52 and `runs_failed` 0, so the four never-run datasets ran live exactly as the $0 offline pass
+said they would. Endpoint 3 held: `numerai28_6`'s `baseline_separation` reproduced at **0.0101**,
+identical to `bench-tall`, which settles the 2.089 as a property of a near-chance dataset rather
+than of a run. Endpoint 4 returned its least interesting option, as it was pre-registered to be
+allowed to: `n_candidates_failed_to_fit` is 0 on 52/52 and `n_candidates` is 2 on 52/52, so the
+denominator populates and the numerator does not fire spuriously. Nothing here shows the column
+works; it shows it is quiet.
+
+**The failure endpoint that fired is the one that was named, and it explains the entire overrun.**
+`kr_vs_kp` was pre-registered as the softest number in `SUBSETS` and it overran by 87.4%. What was
+not predicted is that the reason had nothing to do with its 36 categorical columns: it is the OTHER
+named failure endpoint, the loop assumption. Every one of the 46 runs that reviewed once landed
+within 0.95x-1.04x of its cell's price. `australian` (+81.0%) and `kr_vs_kp` (+87.4%) each sent 2
+of 4 runs to `review_loops=3`, and `kc1` -- modelled, never run, four first-pass runs -- came in at
+**-0.5%**. Restricted to first-pass runs the two overrunning cells read -7% and +7.7%.
+
+So the cost model was not refuted and was never the exposure. The exposure was a sentence printed
+next to it, which `SUBSETS` had stated correctly for two sessions: every price assumes a run that
+passes first time. This is worth recording as a decision rather than a result, because the
+temptation now is to re-fit the cost model on 13 datasets, and that would be fitting the wrong
+thing. What the estimate needs is not a better `a + b*n_features + c*n_rows`; it is a loop-rate
+term, and this file has 6 looping runs to estimate one from. The refit is declined until there is
+something to fit.
+
+The loop multiplier itself is now measured on manifest datasets for the first time -- x1.80 at two
+loops (n=2) and **x2.46** at three (n=4), against a standing "about 2.5x" carried from the toy
+fixture and never checked. It agrees, which is reassurance and not replication, and it is recorded
+at that strength.
+
+**One observation the run produced that nothing was looking for.** `errored` is true on exactly one
+of 52 rows, and both of that row's errors are the zero-objection block-retry firing and *succeeding*
+-- the reviewer claimed `block` with nothing actionable, was re-asked once, and the retry produced a
+usable objection. A successful recovery is recorded as an error. That is the third variant of the
+`errored` question in three sessions and it is genuinely different from the other two: the
+cardinality skip was a routine decision misfiled as an error, a failed fit is an anomaly with no
+column, and this is a real anomaly that was *handled*. `errored` has no way to say "and it was
+recovered". It is reopened in NEXT.md rather than patched here, because deciding whether a
+successful retry belongs in a published failure rate is exactly the kind of column-semantics
+question this repo has now twice been glad it did not answer in a hurry at the end of a session.

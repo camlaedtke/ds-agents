@@ -406,22 +406,50 @@ is the one row-driven term and is never more than 4% of a run.
       permanently-wrong committed rows, not four: every row `adult` has ever produced here.
       See DECISIONS.md 2026-09-02 (second entry).
 
+Scope note (2026-09-02, second): `--subset full` RAN. 52 rows, 13 cells x n=4, one commit
+(`70f7547`), **$1.2165** against a $1.1040 estimate and a $1.60 cap, 0 refused, 0 failed --
+`evals/results/2026-09-02_full.jsonl`. Every pre-registered grader endpoint held 52/52 with no
+tolerance, `halted_at` null 52/52, and the four never-run datasets ran live exactly as the $0
+offline pass said. The +10.2% overrun is entirely two cells and is **not** a cost-model failure:
+all 46 first-pass runs landed within 0.95x-1.04x of their price, and `kc1` -- modelled, never run,
+four first-pass runs -- came in at -0.5%. `australian` and `kr_vs_kp` each sent 2 of 4 runs to
+`review_loops=3`. The loop multiplier is measured on manifest data for the first time (x1.80 at
+two loops, **x2.46** at three) and matches the toy fixture's standing "about 2.5x". A refit on 13
+datasets is DECLINED: the residuals are a bimodal split on a variable the model does not contain,
+and the estimate needs a loop-rate term rather than a larger intercept. See DECISIONS.md 2026-09-02
+(fourth entry).
+
 Scope note (2026-09-02): Phase 4 closes. Two boxes stay `[~]` and both for reasons outside the
 code: the manifest, because AMLB's raw-results store presents a self-signed certificate and a number
 this repo cannot re-fetch is one it will not publish; and the `ci` subset, because a GitHub Actions
 job that spends real API money on every push needs a policy nobody has written, there is no
-`.github/` here, and no key is available to Actions. `--subset full` is runnable and priced at about
-$1.10 for 52 runs; it has not been run, because that is a budget decision and it has never been put
-to anyone. That is the phase's actual exit state and it is not a blocker of the kind the previous
-four scope notes described.
+`.github/` here, and no key is available to Actions. `--subset full` was the third such item and it
+is now closed rather than excused: it was a budget decision, it was put to Cameron on 2026-09-02,
+the answer was yes, and it ran. That is the phase's actual exit state and it is not a blocker of the
+kind the previous four scope notes described.
 
 ## Phase 5: Ablations and writeup (3 to 4 sessions)
 
-Entry state (2026-09-02): the three live column defects are closed, so the results schema Phase 5
-draws its tables from does not need a footnote -- except for `adult`'s five `errored` rows, which
-are ground truth and stay wrong. `--subset full` at ~$1.10 is still unrun and is still a budget
-decision rather than a technical one.
+Entry state (2026-09-02, updated): the three live column defects are closed and **`--subset full`
+has run**, so Phase 5 draws its tables from 52 rows covering all 13 manifest datasets at one commit,
+plus the 149 fixture rows already committed. The schema needs one footnote and only one: `adult`'s
+five `errored` rows, which are ground truth and stay wrong.
 
+Two constraints Phase 5's writeup inherits and must not quietly drop. **No count in
+`2026-09-02_full.jsonl` may be quoted as an effect** -- n=2 per cell per replicate cannot earn a
+Wilson interval, and that was fixed in advance rather than discovered. And the benchmark rows are
+`leakage_graded: false` 52/52, so every leakage headline in the writeup still rests on the fixtures,
+not on the manifest.
+
+What `full` bought the writeup beyond coverage: the reviewer objects on **only** the four
+never-run datasets (0 objections in 36 runs of the other nine), the first `exhausted` verdicts ever
+seen on a manifest dataset, and one `kr_vs_kp` row that reproduces the `actionable-objection`
+failure -- objections addressed to `modeler`, which has no column lever, leaving three columns
+unremediated -- outside the trap fixtures for the first time.
+
+- [x] **All 13 manifest datasets run end to end, `--subset full`.** Not one of the four listed
+      ablations, and listed here because it is what the phase's tables are drawn from. 52 rows,
+      $1.2165, `evals/results/2026-09-02_full.jsonl`. See the entry state above.
 - [~] reviewer on/off, Haiku/Sonnet reviewer, single agent vs team, loop cap 1/3. Two of these ran
       early, in Phase 3. The Haiku/Sonnet reviewer arm ran crossed with a prompt condition --
       `evals/results/2026-08-28_reviewer-ablation.jsonl`; its Sonnet cells were topped up to n=7
