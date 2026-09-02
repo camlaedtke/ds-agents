@@ -166,6 +166,59 @@ class TestSubsetsPointAtRealFixtures:
                 f"bench-mid cell {cell.name!r} changes a condition; only the dataset may vary"
             )
 
+    def test_bench_tall_names_the_four_datasets_that_were_never_priced(self):
+        """The four that could not complete a run before the 2026-09-01 split-manifest fix."""
+        assert [cell.dataset for cell in SUBSETS["bench-tall"]] == [
+            "adult",
+            "bank_marketing",
+            "numerai28_6",
+            "higgs",
+        ]
+
+    def test_bench_tall_varies_nothing_but_the_dataset(self):
+        """Same reason as `bench-mid`: a measurement, not an ablation."""
+        reference = Cell(name="reference", dataset="adult")
+        for cell in SUBSETS["bench-tall"]:
+            assert cell.conditions() == reference.conditions(), (
+                f"bench-tall cell {cell.name!r} changes a condition; only the dataset may vary"
+            )
+
+    def test_bench_tall_estimates_are_the_pre_registered_cost_model(self):
+        """These four `est_cost_usd` values ARE the pre-registration, so a typo in one is not a
+        planning nuisance -- it silently rewrites the prediction the arm is measured against.
+
+        Pinned against the `bench-mid` fit rather than as four literals, so the numbers stay
+        traceable to the four measurements they came from: OLS of `cost ~ a + b * n_features` on
+        (5, $0.011), (9, $0.013), (118, $0.041), (144, $0.042) gives a = $0.010621 and
+        b = $0.00023375 per column. See docs/DECISIONS.md 2026-09-02.
+        """
+        a, b = 0.010621, 0.00023375
+        entries = {entry.dataset_id: entry for entry in load_manifest().datasets}
+        for cell in SUBSETS["bench-tall"]:
+            predicted = a + b * entries[cell.dataset].n_features
+            assert cell.est_cost_usd == pytest.approx(round(predicted, 3), abs=1e-9), (
+                f"bench-tall cell {cell.name!r} carries est_cost_usd {cell.est_cost_usd}, which is "
+                f"not the pre-registered prediction {round(predicted, 3)} for "
+                f"{entries[cell.dataset].n_features} columns. Once the arm has RUN these become "
+                "measured means and this test is what should be updated to say so."
+            )
+
+    def test_bench_tall_anti_correlates_rows_with_categoricals(self):
+        """The property that makes the arm interpretable, pinned so it cannot quietly stop holding.
+
+        `H_rows` and `H_categorical` predict opposite orderings of the residual only because the two
+        taller datasets are the fully numeric ones. If a future manifest refresh changed a dtype,
+        the two hypotheses would become confounded and the arm would settle nothing -- so this
+        asserts the design property rather than trusting the comment.
+        """
+        entries = {entry.dataset_id: entry for entry in load_manifest().datasets}
+        categorical = {"adult", "bank_marketing"}
+        numeric = {"numerai28_6", "higgs"}
+        assert categorical | numeric == {cell.dataset for cell in SUBSETS["bench-tall"]}
+        assert max(entries[d].n_rows for d in categorical) < min(
+            entries[d].n_rows for d in numeric
+        ), "the categorical cells must be the SHORTER pair, or rows and dtype are confounded"
+
     def test_the_toy_subset_is_just_toy_default(self):
         assert [cell.name for cell in SUBSETS["toy"]] == ["toy-default"]
 

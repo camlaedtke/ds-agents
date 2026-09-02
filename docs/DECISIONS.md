@@ -1989,3 +1989,181 @@ One property recorded because it is a property of the reducer rather than of the
 `Annotated[list[PipelineError], operator.add]`, so the first fatal error stays on the state for the
 rest of the run and a halted run can never un-halt. Correct by the definition of
 `recoverable=False`, but nobody should have to infer it.
+
+## 2026-09-02: the last four datasets are priced, and the cost model is tested rather than applied
+
+`bench-mid` fitted `cost ~= a + b * n_features` on four measurements, and the repo immediately began
+quoting new runs against it -- `docs/NEXT.md` recorded the one `adult` smoke run at "$0.0158, 13%
+high". This session prices the four datasets that became runnable on 2026-09-01 (`adult`,
+`bank_marketing`, `numerai28_6`, `higgs`), which is the last blocker on `--subset full`. It also
+tests the model it would otherwise have applied, because two things about that model turned out to
+be wrong.
+
+**The `adult` residual was never evidence.** The fit is 4 points and 2 parameters: a=$0.010621,
+b=$0.00023375 per column, in-sample residuals -$0.00079 / +$0.00028 / +$0.00280 / -$0.00228, and a
+residual sd of **$0.0026 on 2 degrees of freedom**. `adult`'s residual is **+$0.0019** -- smaller
+than the error the model already makes on the data it was fitted to. A textbook 95% prediction
+interval at 14 columns is `[$0.0004, $0.0274]` (t=4.303 on 2 dof, se_pred=$0.00315), a span of
+$0.027 -- wider than any cost this project has ever measured.
+The model is under-determined, not refuted, and "13% high" was reading the fit's own noise as a
+finding. The pre-registered band below is therefore **+/-$0.0026, the fit's own residual sd**,
+stated as a rule rather than as an interval nobody could act on.
+
+**All four points it was fitted on have zero categorical columns, and nobody chose that.**
+`phoneme`, `jasmine`, `amazon_employee_access` and `nomao` are entirely numeric, so `feature_eng`
+one-hot encodes nothing on any of them and `LEVELS` in the emitted transform is empty in all four.
+That fell out of picking a 2x2 on rows x columns, because dtype was not one of the two axes anyone
+was thinking about. Both out-of-sample points measured since are categorical and both ran ABOVE the
+model: `credit_g` (13 categorical, 54 one-hot levels) +$0.0015 and `adult` (7 categorical plus 1
+skipped at `MAX_ONE_HOT_LEVELS`, 58 levels) +$0.0019. `credit_g` has 1000 rows, so that residual
+cannot be a row term. The mechanism is not speculative: the reviewer reads `feature_code_artifact`
+into its prompt, and that artifact's `LEVELS`, `FEATURE_ORDER` and `COLUMN_SOURCE` grow with one-hot
+level count and not with rows.
+
+So the arm has a primary deliverable and a secondary one, and they are independent. The primary is
+**four measured per-cell means**, so `full` needs no extrapolation on these four whatever the model
+does. The secondary is a test of the model, and it is worth running because rows and categoricals
+are **anti-correlated** across exactly these four datasets -- `adult` (48,842 rows, 7 categorical)
+and `bank_marketing` (45,211, 9) against `numerai28_6` (96,320, 0) and `higgs` (98,050, 0). The two
+hypotheses predict opposite orderings of the residual. That is luck rather than design, and it is
+worth recording as luck: had the four been correlated, the same $0.24 would have settled nothing.
+
+**Two risks NEXT.md carried are closed for $0 before any money moved, and one of them was stale.**
+
+- `MODEL_TIMEOUT_S = 240` was flagged as the `higgs` risk on the grounds that it was already 45%
+  consumed at 144 columns on `jasmine`. It does not extrapolate, because `permutation_importance`
+  issues `n_repeats x n_columns x n_candidates` scoring CALLS and each pays a fixed cost rebuilding
+  a frame through the in-pipeline transform. `jasmine` is 2,880 such calls; `higgs`, at 28 columns,
+  is 560. Measured two ways: the offline `higgs` run's modeler node took **24.8s** and a direct fit
+  of the binary `CANDIDATE_SPECS` at the real shapes (62,752 train / 15,688 holdout / 28 columns)
+  took **12.6s**, 5.3% of the budget. The binding term is call count, not rows -- which is
+  `bench-mid`'s "both track columns" finding applied to wall clock. **No timeout is raised.**
+- `register_dataset` was carried as "Never measured. This is the session to measure it." That was
+  stale: DECISIONS recorded it on 2026-09-01 for the nine datasets that could be run. What was
+  missing was these four, and the fact that the record was prose in a commit that touched no code.
+  Both are fixed by `tests/test_register_dataset_cost.py`, which prints a re-derivable table across
+  all thirteen shapes. `higgs` is the worst at **0.25s per call, 0.75s per run, 1.2% of budget**;
+  `nomao` reproduces the recorded 0.17s exactly.
+
+### Why the register_dataset measurement is a test and not a results column
+
+It measures harness *setup*, not run behaviour, and it is constant across the replicates of a cell,
+so sixteen rows would carry four distinct numbers four times each. Adding a column also makes all
+~150 committed rows carry it as `null` forever, a price this repo has paid four times deliberately.
+
+The counter-argument is real and is recorded rather than waved away: `wall_seconds` still excludes
+it, so a reader of the results file cannot reconstruct a run's true wall cost -- which is the exact
+defect `rescore_seconds` and `baseline_seconds` were added to fix. The distinction being drawn is
+that those measure the GRADER, which is the term `--subset full` was blocked on pricing, and this is
+about one second of setup. If it ever stops being about one second, the column argument comes back.
+
+**The finding the test records, which is not the timing.** There is no timeout on `register_dataset`
+itself. Under the default `--tools mcp` it runs inside the server subprocess before the MCP
+`initialize` handshake returns, so the only thing bounding it is `MCPTools._CONNECT_TIMEOUT_S = 60`, and
+under `--tools local` not even that. **But that is only true of ONE of the three calls, and the
+other two are worse.** `rescore.rescore` and `rescore.baseline` each construct `LocalTools`
+directly and never pass through `cli._select_tools`, so their registrations are unbounded under
+BOTH transports, always. A breach on the graph's call raises `SystemExit`, which `harness.run_eval`
+re-raises rather than counting, so it aborts a whole invocation rather than one run and
+`MAX_CONSECUTIVE_FAILURES` never sees it; a hang on either grader call does not raise at all and
+simply blocks forever, invisible to every column. So `--tools` was never the axis -- the guard that
+exists governs the one call that has one, and the grader's two have none. Recorded, not fixed: at
+1.2% of budget at the largest shape in the manifest, the exposure is small and the guard is worth
+designing deliberately rather than in a pricing session. Its absence is now an open question in
+NEXT.md rather than an unstated assumption. The
+test's headroom is 10x rather than `test_baseline_cost.py`'s 5x for the related reason that the 60s
+budget is not registration's alone -- it also covers interpreter boot, importing `mcp_server`, and
+the handshake itself.
+
+`CALLS_PER_RUN = 3` stops being a sentence at the same time. `test_a_benchmark_run_registers_the_
+dataset_exactly_three_times` spies on the store across a full graph-plus-rescore-plus-baseline run,
+so the multiplier on every number in that table is now a property. Three is correct rather than
+wasteful: `rescore` and `baseline` each build their own `LocalTools` precisely so a grader failure
+cannot take the run's store with it.
+
+### Pre-registered endpoints
+
+Invocation: `--subset bench-tall --name bench-tall --replicates 2 --n 2 --max-cost-usd 0.40`,
+16 runs, $0.2440 estimated. n=4 per cell rather than `bench-mid`'s 2 because the endpoint is a cell
+MEAN compared against a prediction at the $0.002 scale, and `nomao`'s two committed runs were
+$0.0378 and $0.0439 -- a within-cell spread larger than the discrepancy being tested. The cap at
+1.6x the estimate is deliberate: here the estimate's job is to be the prediction, and the CAP is
+what protects the budget.
+
+The four `est_cost_usd` values shipped in `SUBSETS["bench-tall"]` ARE the point predictions --
+$0.014, $0.014, $0.016, $0.017, from `a + b * n_features` at 14, 16, 21 and 28 columns. The commit
+that replaces them with measured means is the permanent record of the miss.
+
+| cell | cols | categorical | prediction | consistent band (+/-$0.0026) |
+|---|---|---|---|---|
+| adult-categorical-tall | 14 | 7 (58 levels) | $0.0139 | $0.0113 - $0.0165 |
+| bank-categorical-tall | 16 | 9 (44 levels) | $0.0144 | $0.0117 - $0.0170 |
+| numerai-numeric-tall | 21 | 0 | $0.0155 | $0.0129 - $0.0181 |
+| higgs-numeric-tall | 28 | 0 | $0.0172 | $0.0145 - $0.0198 |
+
+1. **Feasibility, primary.** All 16 runs produce a publishable row with `errored: false` and
+   `halted_at: null`. Any non-null `halted_at`, or a `rescore_status` of `no_split` or
+   `no_feature_code`, means the offline pass missed something; response is to STOP the invocation
+   rather than fund the second replicate. Offline runs at this commit put all four at
+   `halted_at: null`, `rescore_status: ok`, `baseline_status: ok`.
+2. **Grader correctness, asserted with no tolerance.** `rescore_status` and `baseline_status` `ok`
+   16/16; `baseline_zero_score` **exactly 0.5** 16/16; `baseline_recipe` `rf-v1` 16/16;
+   `refit_claim_gap` **exactly 0.0** 16/16. These are correctness assertions on positive class,
+   scorer sign and row selection at once, and they have held on five datasets. Extending them to
+   nine is most of what this run buys beyond the price.
+3. **Four measured per-cell means**, replacing four predictions. A cell whose measured mean exceeds
+   its estimate by more than 2x is reported as an estimate failure, the error `bench-smoke` made.
+4. **The model check, stated so it can fail.** `residual = measured mean - point prediction`:
+   - *Column-only model survives:* all four residuals inside +/-$0.0026 with no monotone trend in
+     rows. `full` may then be priced from the model, though every cell still ships its own mean.
+   - *H_rows:* `numerai28_6` and `higgs` above band, `adult` and `bank_marketing` inside. This
+     REFUTES the column-only model and `full` must be re-priced with a row term.
+   - *H_categorical:* `adult` and `bank_marketing` above band, the numeric two inside or below. The
+     2.9x row extrapolation survives, but the fitted set was confounded -- and `kr_vs_kp` (36
+     categorical columns, 73 one-hot levels) becomes the cell in `full` the model can least price.
+   - *Neither:* residuals scattered with no pattern. The fit was never determined enough to test,
+     and that is the report.
+   H_categorical is pre-registered as the hypothesis with prior support (`credit_g` +$0.0015 at
+   1000 rows, `adult` +$0.0019), so a result confirming it is confirmatory at n=4 cells and nothing
+   more.
+5. **Timing, each against an offline number already on record.** `node_seconds["modeler"] < 240`
+   16/16 and specifically `higgs` **under 40s**; `node_seconds["profiler"] < 60` 16/16 (offline max
+   was 7.5s on `higgs`); `baseline_seconds` on `higgs` under the 57.18s synthetic bound in
+   `tests/test_baseline_cost.py`, reported beside it -- the offline run came in at 37.8s, so this is
+   the first evidence of how loose that deliberately-worst-case bound is on real data.
+6. **Determinism, which closes a standing question for free.** NEXT.md wants one cheap run on a
+   second manifest dataset before anyone writes "the pipeline is deterministic on real data". Four
+   runs in each of four cells answers it on four more. Pre-register the asymmetry: `adult` and
+   `bank_marketing` have real `feature_eng` decisions available (`adult` already skips
+   `native-country` at `MAX_ONE_HOT_LEVELS = 20`), so variation is EXPECTED there;
+   `numerai28_6` and `higgs` are fully numeric with nothing to decide, so identical rows there
+   merely reproduce `credit_g` and mean nothing stronger. Directional at n=4.
+7. **`bank_marketing`'s `V12` stops being hypothetical.** It is the manifest's only non-empty
+   `known_leakage`, documented and deliberately unscored, and this is the first run that executes
+   the dataset. Recorded as an observation rather than an endpoint: what `rescore_status`,
+   `n_withheld_rows` and `baseline_normalised_score` do, and whether anything downstream noticed.
+8. **Not endpoints.** The absolute value of `verified_holdout_score`, `holdout_claim_gap` or
+   `baseline_normalised_score` on any cell. n=4, one commit, the grid is ours, the unit point is a
+   floor. Characterisation only. **No `eval-diff` comparison** -- four new `dataset_id` values at a
+   new commit, so there is nothing to compare and running it would be theatre.
+
+### Failure endpoints
+
+- **A modeler timeout anywhere.** It would mean both offline measurements were wrong by an order of
+  magnitude. Note it CANNOT surface as `halted_at`: `modeler.py` reports it through
+  `run.failure(...)`, and `NodeRun.failure` defaults `recoverable=True`, so `halt_or` never fires.
+  What appears instead is `errored: true`, `halted_at: null` and no `chosen_model` -- the shape the
+  `recoverable` fix exists to make visible, arriving through the one door that fix does not cover.
+  This is the first known gap in `halted_at`'s coverage and it is recorded whether or not it fires.
+  Response if it does fire: raise `MODEL_TIMEOUT_S` with the measurement as the justification, on
+  the same grounds this file already allows for `PROFILE_TIMEOUT_S` -- no recipe moves, it feeds no
+  number on a results row, and a run that finishes at 240s finishes identically at 480s. Do NOT drop
+  `N_PERMUTATION_REPEATS`, for the reason recorded on 2026-09-01: it feeds `top_importances`,
+  `reviewer_nominated` and `leakage_caught`, so it needs its own axis and its own version string.
+- **`baseline_status: unit_point_failed` on `higgs` or `numerai28_6`** would mean the 5x headroom in
+  `test_baseline_cost.py` was measured against the wrong thing, and `BASELINE_TIMEOUT_S` and
+  `n_estimators` come back on the table with `baseline_recipe` as the lever.
+- **A `SystemExit` out of `_select_tools`** aborts the whole invocation rather than one run. Measured
+  to 1.2% of its only bound in advance; see above.
+- **What will NOT fire.** `MAX_CONSECUTIVE_FAILURES = 3` counts only runs that RAISE. A node timeout
+  does not raise, and per the first bullet a modeler timeout does not even halt.

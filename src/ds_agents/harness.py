@@ -164,8 +164,7 @@ SUBSETS: dict[str, tuple[Cell, ...]] = {
     # `adult`, `bank_marketing`, `higgs` and `numerai28_6` are all runnable now. It is absent
     # because this is a measurement, not a subset definition: these four numbers are what
     # `bench-mid`'s 2026-09-01 invocation actually cost on the datasets it actually ran, and
-    # `adult` was not one of them. Pricing it, and the other three, is the next session's job -- see
-    # `_resolve_subset`'s `full` message, which now names exactly that as the one remaining blocker.
+    # `adult` was not one of them. Pricing it, and the other three, is what `bench-tall` below does.
     #
     # MEASURED means from the 2026-09-01 run (n=2 a cell,
     # `evals/results/2026-09-01_bench-mid.jsonl`), rounded up to the nearest $0.001, replacing the
@@ -182,6 +181,71 @@ SUBSETS: dict[str, tuple[Cell, ...]] = {
         Cell(name="jasmine-wide-short", dataset="jasmine", est_cost_usd=0.042),
         Cell(name="amazon-narrow-tall", dataset="amazon_employee_access", est_cost_usd=0.013),
         Cell(name="nomao-wide-tall", dataset="nomao", est_cost_usd=0.041),
+    ),
+    # The subset that prices the last four datasets, and the one that tests the cost model rather
+    # than just applying it. `bench-mid` fitted `cost ~= a + b * n_features` on four points and the
+    # project started quoting new runs against it; this is the arm that asks whether that model
+    # survives contact with anything it was not fitted on.
+    #
+    # WHAT THIS IS, LITERALLY: a line along the ROW axis. 45k to 98k rows, extending 2.9x beyond the
+    # tallest thing the model was fitted on (`nomao`, 34,465) at widths of 14 to 28, which is
+    # interpolation on the fitted 5-to-144 range. Within these four, rows and column count are
+    # nearly rank-identical (45k/16, 49k/14, 96k/21, 98k/28), so they are CONFOUNDED and no residual
+    # computed inside `bench-tall` alone separates them.
+    #
+    # WHAT NOBODY CHOSE, AND IT IS THE INTERESTING PART: all four datasets the cost model was fitted
+    # on have ZERO categorical columns. `phoneme`, `jasmine`, `amazon_employee_access` and `nomao`
+    # are entirely numeric, so `feature_eng` one-hot encodes nothing on any of them and `LEVELS` in
+    # the emitted transform is empty in all four. That fell out of picking a 2x2 on rows x columns,
+    # because dtype was not one of the two axes anyone was thinking about. Both out-of-sample points
+    # measured since are categorical and both came in ABOVE the model: `credit_g` (13 categorical,
+    # 54 one-hot levels) +$0.0015, `adult` (7 categorical + 1 skipped, 58 levels) +$0.0019.
+    # `credit_g` has 1000 rows, so that residual cannot be a row term.
+    #
+    # There is a mechanism. The reviewer reads `feature_code_artifact` into its prompt, and that
+    # artifact carries `LEVELS`, `FEATURE_ORDER` and `COLUMN_SOURCE`, which grow with one-hot level
+    # count and not with rows -- and `feature_eng` additionally reasons in prose about cardinality,
+    # which a fully numeric dataset never triggers.
+    #
+    # These four separate the two hypotheses, because rows and categoricals are ANTI-CORRELATED
+    # across them:
+    #
+    #                     categorical                     numeric
+    #   ~45-49k rows      adult 7 cat / 58 levels
+    #                     bank_marketing 9 cat / 44 levels
+    #   ~96-98k rows                                      numerai28_6 0 cat
+    #                                                     higgs 0 cat
+    #
+    # So H_rows (the model needs a row term) predicts `numerai28_6` and `higgs` run high, and
+    # H_categorical predicts `adult` and `bank_marketing` do. Opposite orderings, one $0.24 run.
+    # That is luck rather than design and it is worth saying so: had the four been correlated, this
+    # would have cost the same and settled nothing.
+    #
+    # A 2x2 over rows x categoricals DOES exist, but only by pooling with committed cells
+    # (short+numeric = phoneme/jasmine, tall+numeric = amazon/nomao/numerai/higgs,
+    # short+categorical = credit_g, tall+categorical = adult/bank_marketing -- these two fill the
+    # empty corner). It crosses a `commit` boundary, `commit` is an `evaldiff.CONDITION_FIELDS`
+    # field, and `eval-diff` will refuse the comparison. It is a table you may draw by hand with the
+    # boundary named, never one the tooling blesses.
+    #
+    # The four numbers below are PREDICTIONS, not measurements -- the only ones in this dict that
+    # are. They are `a + b * n_features` from the `bench-mid` fit (a=$0.010621, b=$0.00023375 per
+    # column): $0.0139, $0.0144, $0.0155, $0.0172, which round to the $0.001 the field carries as
+    # $0.014, $0.014, $0.016, $0.017. Shipping them here
+    # IS the pre-registration, and the commit that replaces them with measured means is the
+    # permanent record of how wrong they were, which is what `bench-mid` and `ci` both did.
+    #
+    # Register the band with them: the fit has 4 points and 2 parameters, and its own in-sample
+    # residual sd is $0.0026. A residual inside +/-$0.0026 is consistent with the model. (A textbook
+    # 95% interval on 2 dof carries t=4.30 and would accept anything, which is why the band and not
+    # the interval is the pre-registered rule.) Note the `adult` smoke run's +$0.0019 is SMALLER
+    # than the error the fit already makes on its own training data -- it never was evidence
+    # against the model, and `docs/NEXT.md` calling it "13% high" was reading noise as a finding.
+    "bench-tall": (
+        Cell(name="adult-categorical-tall", dataset="adult", est_cost_usd=0.014),
+        Cell(name="bank-categorical-tall", dataset="bank_marketing", est_cost_usd=0.014),
+        Cell(name="numerai-numeric-tall", dataset="numerai28_6", est_cost_usd=0.016),
+        Cell(name="higgs-numeric-tall", dataset="higgs", est_cost_usd=0.017),
     ),
     # "full" is deliberately absent. See `_resolve_subset`.
 }

@@ -720,3 +720,44 @@ class TestWhereTheWallTimeWent:
         )
 
         assert state.node_seconds == {"intake": 1.0}
+
+
+@pytest.mark.fast
+class TestTheDatasetIsRegisteredOncePerToolSurface:
+    """How many times a benchmark run copies and parses the whole CSV before it can be graded.
+
+    `ArtifactStore.register_dataset` copies the file, does an unbounded `pd.read_csv` and computes
+    a per-column `nunique`. It runs once for the graph's tools and once more inside each of
+    `rescore.rescore` and `rescore.baseline`, which build their own `LocalTools` so a grader
+    failure cannot take the run's store with it. Three is therefore correct rather than wasteful --
+    but it was recorded only as a sentence in `docs/DECISIONS.md`, and it is the multiplier on
+    every number in `tests/test_register_dataset_cost.py`. A refactor that shared one store between
+    the three would change the cost of every benchmark run and silently invalidate that table.
+    """
+
+    def test_a_benchmark_run_registers_the_dataset_exactly_three_times(self, tmp_path, monkeypatch):
+        from mcp_server import store as store_module
+
+        calls: list[str] = []
+        original = store_module.ArtifactStore.register_dataset
+
+        def spy(self, path, dataset_id):
+            calls.append(str(path))
+            return original(self, path, dataset_id)
+
+        monkeypatch.setattr(store_module.ArtifactStore, "register_dataset", spy)
+
+        csv_path = tmp_path / "registered.csv"
+        _write_split_leak(csv_path)
+        state = _pipeline_run(tmp_path, csv_path)
+
+        assert state.rescore_status == "ok", state.rescore_detail
+        assert state.baseline_status == "ok", state.baseline_detail
+        assert len(calls) == 3, (
+            f"expected 3 registrations (graph, rescore, baseline), got {len(calls)}: {calls}. "
+            "If this dropped, the per-run figures in tests/test_register_dataset_cost.py and the "
+            "note in docs/DECISIONS.md are now wrong by the same factor."
+        )
+        assert len(set(calls)) == 1, (
+            f"all three registrations must read the same agent CSV, got {set(calls)}"
+        )
