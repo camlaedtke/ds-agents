@@ -903,6 +903,85 @@ class TestTheBaselineScale:
         assert self._state(verified_holdout_score=None).baseline_normalised_score is None
 
 
+class TestTheScalePublishesItsOwnLength:
+    """`baseline_separation` is the denominator `baseline_normalised_score` divides by, on the row.
+
+    Without it a normalised score is uncheckable. `numerai28_6` returned 2.089 -- the largest value
+    anywhere in `evals/results/` -- not because the run was extraordinary but because the dataset is
+    near-chance and its two reference points are 0.0101 apart. Nothing on the row said so and
+    `baseline_status` read `ok`.
+    """
+
+    _state = staticmethod(TestTheBaselineScale._state)
+
+    def test_it_is_the_number_the_normalised_score_divides_by(self):
+        state = self._state()
+        assert state.baseline_separation == pytest.approx(0.25)
+        assert state.baseline_normalised_score == pytest.approx(
+            (state.verified_holdout_score - state.baseline_zero_score) / state.baseline_separation
+        )
+
+    def test_the_numerai_observation_is_pinned_with_its_explanation(self):
+        """The measurement that motivated the column, from `2026-09-02_bench-tall.jsonl`. 2.089 and
+        0.0101 belong on the same row: the first is not interpretable without the second."""
+        state = self._state(
+            verified_holdout_score=0.5211,
+            baseline_zero_score=0.5,
+            baseline_unit_score=0.5101,
+        )
+        assert state.baseline_separation == pytest.approx(0.0101, abs=1e-9)
+        assert state.baseline_normalised_score == pytest.approx(2.089, abs=1e-3)
+        row = state.results_row()
+        assert row["baseline_separation"] == pytest.approx(0.0101, abs=1e-9)
+        # NOT suppressed and NOT a status. Both points were measured perfectly well; a narrow scale
+        # is a fact about the dataset, and withholding the quotient would lose the finding.
+        assert row["baseline_status"] == "ok"
+        assert row["baseline_normalised_score"] is not None
+
+    def test_it_is_direction_aware_like_the_score_it_explains(self):
+        """Sign-corrected so wider is always bigger. An rmse unit point BELOW its zero point is a
+        scale of positive length, and reporting it as -0.5 would read as an inverted axis."""
+        state = self._state(
+            spec=TaskSpec(target="y", task_type="regression", metric="rmse"),
+            verified_holdout_score=1.0,
+            baseline_zero_score=2.0,
+            baseline_unit_score=1.5,
+        )
+        assert state.baseline_separation == pytest.approx(0.5)
+
+    def test_a_degenerate_scale_reports_its_length_where_the_quotient_reports_nothing(self):
+        """The two columns disagree on purpose. The quotient is withheld because dividing by it
+        is meaningless; the length is published because it is exactly what a reader needs to see
+        why."""
+        level = self._state(baseline_unit_score=0.50)
+        assert level.baseline_normalised_score is None
+        assert level.baseline_separation == pytest.approx(0.0)
+
+        inverted = self._state(baseline_unit_score=0.45)
+        assert inverted.baseline_normalised_score is None
+        assert inverted.baseline_separation == pytest.approx(-0.05)
+
+    def test_a_planted_leak_suppresses_the_quotient_but_not_the_length(self):
+        """Gated like the two raw points, not like the quotient. The distance between the reference
+        points is a property of the dataset and the recipe; it says nothing about the run's grade,
+        so the pooling hazard that suppresses the quotient does not reach it."""
+        state = self._state(planted_leakage_columns=["leak"])
+        assert state.baseline_normalised_score is None
+        assert state.baseline_separation == pytest.approx(0.25)
+        assert state.results_row()["baseline_separation"] == pytest.approx(0.25)
+
+    def test_a_missing_point_gives_none_rather_than_raising(self):
+        assert self._state(baseline_unit_score=None).baseline_separation is None
+        assert self._state(baseline_zero_score=None).baseline_separation is None
+
+    def test_it_does_not_need_a_verified_score(self):
+        """Unlike the quotient. The scale exists whether or not the run produced a number to place
+        on it, and a row where the re-scorer failed can still say how long the yardstick was."""
+        state = self._state(verified_holdout_score=None)
+        assert state.baseline_normalised_score is None
+        assert state.baseline_separation == pytest.approx(0.25)
+
+
 class TestResultsRow:
     def test_catching_the_planted_leak_scores_as_a_catch(self):
         row = populated_state().results_row()

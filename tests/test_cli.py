@@ -487,3 +487,44 @@ class TestTheEvalCommands:
 
         assert cmd_eval_diff(args) == 0
         assert "underpowered" in capsys.readouterr().out
+
+    def test_the_default_metrics_are_the_ones_evaldiff_declares(self):
+        """Not a second copy of the list in the parser. `--metrics` had no CLI flag at all until
+        2026-09-02, even though `compare()` accepted the argument from the beginning."""
+        from ds_agents.evaldiff import DEFAULT_METRICS
+
+        args = self.parse("eval-diff", "b.jsonl", "a.jsonl")
+        assert tuple(args.metrics.split(",")) == DEFAULT_METRICS
+
+    def test_a_null_predicate_metric_runs_end_to_end(self, tmp_path, capsys):
+        """`halted_at` is null on every healthy run, so a bare `halted_at` would exclude all four
+        rows here and tally 0/0. The predicate is what makes the column askable."""
+        rows = [
+            {"dataset_id": "toy", "naming": "descriptive", "halted_at": None},
+            {"dataset_id": "toy", "naming": "descriptive", "halted_at": "profiler"},
+        ]
+        before, after = tmp_path / "b.jsonl", tmp_path / "a.jsonl"
+        for path in (before, after):
+            path.write_text("\n".join(json.dumps(r) for r in rows) + "\n")
+        args = self.parse("eval-diff", str(before), str(after), "--metrics", "halted_at:notnull")
+
+        assert cmd_eval_diff(args) == 0
+        out = capsys.readouterr().out
+        assert "halted_at:notnull" in out, out
+        # 2, not 1. A bare `halted_at` would have excluded the healthy row and read 1/1.
+        assert "before  1/2" in out and "after   1/2" in out, out
+
+    def test_an_unknown_predicate_exits_2_before_either_file_is_read(self, tmp_path, capsys):
+        """Checked in `cmd_eval_diff` rather than left to `tally`, so the message appears once and
+        before two results files are loaded. A bad predicate must not fall through as a column
+        name: an unknown column tallies as n=0 and renders as an empty row, which reads as
+        "no data" rather than as a typo."""
+        before, after = tmp_path / "b.jsonl", tmp_path / "a.jsonl"
+        for path in (before, after):
+            path.write_text(json.dumps({"dataset_id": "toy"}) + "\n")
+        args = self.parse("eval-diff", str(before), str(after), "--metrics", "halted_at:notnul")
+
+        assert cmd_eval_diff(args) == 2
+        err = capsys.readouterr().err
+        assert "unknown metric predicate" in err
+        assert "notnul" in err

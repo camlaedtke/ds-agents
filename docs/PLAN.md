@@ -396,6 +396,15 @@ is the one row-driven term and is never more than 4% of a run.
       `baseline_normalised_score` returns 2.089 on `numerai28_6` because it divides by the unit
       point's span, which on a near-chance dataset is 0.0101. Both reopened in NEXT.md rather than
       patched. See DECISIONS.md 2026-09-02.
+      **Both closed on 2026-09-02, in a defect session between the phases.** `errored` was fixed
+      upstream of itself -- the skip is a decision (`n_skipped_high_cardinality`) rather than an
+      error, and the definition `bool(self.errors)` never changed; the other twenty-one
+      `PipelineError` sites were audited and none was touched. `baseline_separation` publishes the
+      denominator instead of suppressing the quotient or overloading `baseline_status`. `eval-diff`
+      gained `--metrics` with a `column:notnull` predicate, which is what makes `errored` and
+      `halted_at` askable as rates at all. 822 tests, up from 799. The blast radius is five
+      permanently-wrong committed rows, not four: every row `adult` has ever produced here.
+      See DECISIONS.md 2026-09-02 (second entry).
 
 Scope note (2026-09-02): Phase 4 closes. Two boxes stay `[~]` and both for reasons outside the
 code: the manifest, because AMLB's raw-results store presents a self-signed certificate and a number
@@ -407,6 +416,12 @@ to anyone. That is the phase's actual exit state and it is not a blocker of the 
 four scope notes described.
 
 ## Phase 5: Ablations and writeup (3 to 4 sessions)
+
+Entry state (2026-09-02): the three live column defects are closed, so the results schema Phase 5
+draws its tables from does not need a footnote -- except for `adult`'s five `errored` rows, which
+are ground truth and stay wrong. `--subset full` at ~$1.10 is still unrun and is still a budget
+decision rather than a technical one.
+
 - [~] reviewer on/off, Haiku/Sonnet reviewer, single agent vs team, loop cap 1/3. Two of these ran
       early, in Phase 3. The Haiku/Sonnet reviewer arm ran crossed with a prompt condition --
       `evals/results/2026-08-28_reviewer-ablation.jsonl`; its Sonnet cells were topped up to n=7

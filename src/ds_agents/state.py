@@ -254,14 +254,29 @@ baseline is fit on the agents' `split["train"]` and scored on the same withheld 
 every reason the re-scorer could not run is also a reason this could not. `baseline_detail` carries
 which `rescore_status` it was.
 
-Two things are deliberately NOT statuses. A degenerate scale -- the unit point level with or below
-the zero point -- stays `ok`, because both points really were measured and that is a finding about
-the dataset rather than a failure to measure; `baseline_normalised_score` returns `None` and the
-two raw columns show why. And a planted leak leaves both raw scores on the row untouched: only the
-normalised column is suppressed, by the gate in `baseline_normalised_score`.
+Three things are deliberately NOT statuses. A degenerate scale -- the unit point level with or
+below the zero point -- stays `ok`, because both points really were measured and that is a finding
+about the dataset rather than a failure to measure; `baseline_normalised_score` returns `None` and
+the two raw columns show why. A planted leak leaves both raw scores on the row untouched: only the
+normalised column is suppressed, by the gate in `baseline_normalised_score`. And a scale that is
+real but NARROW is not a status either -- `numerai28_6` measured both points honestly 0.0101 apart
+and read 2.089 normalised, which is a fact about a near-chance dataset rather than a failure. That
+one is why `baseline_separation` exists: the span goes on the row so a reader can see what the
+normalised column was divided by, instead of a status flag asserting that they should not trust it.
 """
 
 DEFAULT_RANDOM_SEED = 20260822
+
+DEFAULT_LOOP_CAP = 3
+"""How many review passes a run gets before the router gives up and reports.
+
+Here rather than in FOUR places: `RunConfig`, `cli._run_once`, `harness.EvalCell`, and
+`--loop-cap`'s own argparse default, which also wrote the literal into its help text. NEXT.md
+recorded three; the argparse one was found while consolidating the other three. A sweep that
+changed one silently left the rest on the old value -- and `loop_cap` is a recorded condition on
+every results row, so a disagreement between them would not show up as a crash but as two cells
+that claim the same condition and did not run under it.
+"""
 
 BASELINE_MIN_SEPARATION = 1e-9
 """The smallest `unit - zero` that `baseline_normalised_score` will divide by.
@@ -287,7 +302,7 @@ class RunConfig(Contract):
     reviewer_enabled: bool = True
     reviewer_model: str = "haiku"
     default_model: str = "haiku"
-    loop_cap: int = Field(default=3, ge=0)
+    loop_cap: int = Field(default=DEFAULT_LOOP_CAP, ge=0)
     reviewer_sees_code: bool = Field(
         default=True,
         description="Whether the reviewer may read the feature engineering code, not just its "
@@ -576,6 +591,15 @@ class PipelineState(Contract):
         "empty the intersection and score every run as remediated.",
     )
     dropped_features: list[str] = Field(default_factory=list)
+    skipped_high_cardinality: list[str] = Field(
+        default_factory=list,
+        description="Columns dropped because they have more distinct values than the one-hot "
+        "encoder will expand. A recorded DECISION, not a `PipelineError`: it is what the node is "
+        "supposed to do at that cardinality, nothing downstream is degraded by it, and recording "
+        "it in `errors` made `errored` -- which is `bool(self.errors)` -- read true on four "
+        "completely healthy `adult` runs, so any table using `errored` as a rate scored that "
+        "cell as a 100% failure. SOURCE column names, and a subset of `dropped_features`.",
+    )
 
     # modeler
     candidates: list[ModelResult] = Field(default_factory=list)
@@ -738,6 +762,33 @@ class PipelineState(Contract):
 
     @computed_field
     @property
+    def baseline_separation(self) -> float | None:
+        """How long the baseline scale is: `unit - zero`, sign-corrected so bigger is always wider.
+
+        The denominator `baseline_normalised_score` divides by, published as its own column so a
+        reader can see it. Without it a normalised score is uncheckable: `numerai28_6` returns
+        2.089 not because the run was extraordinary but because the two reference points are
+        0.0101 apart on a near-chance dataset, and nothing on the row said so.
+
+        Deliberately NOT a suppression and NOT a `baseline_status` value. `BASELINE_MIN_SEPARATION`
+        already records why -- withholding a number on a statistical test is worse than publishing
+        an unstable one beside the inputs a reader can check it against -- and a status value would
+        overload a column whose job is why the two raw scores ARE or ARE NOT here, when on a narrow
+        scale both were measured perfectly well.
+
+        Not suppressed on a planted leak either, unlike the normalised score. The two raw points
+        stay on such a row because they are honest measurements, and the distance between them is a
+        property of the dataset and the recipe rather than of the run's grade.
+        """
+        if self.spec is None:
+            return None
+        if self.baseline_zero_score is None or self.baseline_unit_score is None:
+            return None
+        raw = self.baseline_unit_score - self.baseline_zero_score
+        return raw if self.spec.greater_is_better else -raw
+
+    @computed_field
+    @property
     def baseline_normalised_score(self) -> float | None:
         """Where this run sits on the scale from a constant predictor to a RandomForest.
 
@@ -759,6 +810,9 @@ class PipelineState(Contract):
         """
         if self.verified_holdout_score is None or self.spec is None:
             return None
+        # Implied by `baseline_separation` being None below, and restated because the numerator
+        # subtracts `baseline_zero_score` directly and a reader should not have to follow a
+        # property into another property to see that it cannot be None there.
         if self.baseline_zero_score is None or self.baseline_unit_score is None:
             return None
         # SUPPRESSED ON A PLANTED LEAK, and this is the pooling hazard's whole resolution. The
@@ -771,14 +825,13 @@ class PipelineState(Contract):
         # they are honest measurements, and a reader who knows about the trap can use them.
         if self.planted_leakage_columns:
             return None
-        raw = self.baseline_unit_score - self.baseline_zero_score
-        separation = raw if self.spec.greater_is_better else -raw
+        separation = self.baseline_separation
         # `<=`, not `abs(...) < eps`. A NEGATIVE separation means the RandomForest did worse than
         # the class prior, which inverts the scale: a run that beat the prior would come out
         # negative and a reader would take that for "worse than the prior". Reachable rather than
         # hypothetical -- f1 with a minority positive class has a zero point of exactly 0.0, and a
         # dataset with no signal at all separates the two points by noise in either direction.
-        if separation <= BASELINE_MIN_SEPARATION:
+        if separation is None or separation <= BASELINE_MIN_SEPARATION:
             return None
         numerator = self.verified_holdout_score - self.baseline_zero_score
         return (numerator if self.spec.greater_is_better else -numerator) / separation
@@ -981,6 +1034,7 @@ class PipelineState(Contract):
             "baseline_zero_score": self.baseline_zero_score,
             "baseline_unit_score": self.baseline_unit_score,
             "baseline_normalised_score": self.baseline_normalised_score,
+            "baseline_separation": self.baseline_separation,
             "baseline_status": self.baseline_status,
             "baseline_detail": self.baseline_detail[:ERROR_MESSAGE_LIMIT],
             "baseline_recipe": self.baseline_recipe,
@@ -1013,6 +1067,10 @@ class PipelineState(Contract):
             "n_final_features": (
                 len(self.final_features) if self.final_features is not None else None
             ),
+            # A routine decision, on the row as a count rather than as an error. `feature_summary`
+            # names the columns but never reaches a results row, so before this column the only
+            # trace a skip left in `evals/results/` was the `errored` flag it wrongly set.
+            "n_skipped_high_cardinality": len(self.skipped_high_cardinality),
             # the same comparison one node upstream. `None` rather than empty when the profiler
             # never ran: a node that crashed nominated nothing in a different sense than a node
             # that looked and declined, and averaging those together would be a lie.

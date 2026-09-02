@@ -1,7 +1,8 @@
 """feature_eng: turn the surviving columns into a fitted, re-appliable feature matrix.
 
 Reads `spec`, `profile`, `split_artifact`. Writes `feature_code_artifact`, `feature_summary`,
-`final_features`, `dropped_features`. Tools: `read_artifact` (the split manifest), `run_python`.
+`final_features`, `dropped_features`, `skipped_high_cardinality`. Tools: `read_artifact`
+(the split manifest), `run_python`.
 
 Like the profiler, this is split in two. The node computes a FORCED drop set -- the target, any
 column that is really just a row id, and any column under an open leakage-shaped reviewer objection
@@ -271,9 +272,13 @@ def _forced_drops(state: PipelineState) -> list[FeatureDrop]:
                 FeatureDrop(
                     column=column,
                     reason="leakage",
-                    # "not withdrawn" rather than "open": this string reaches both the snippet
-                    # the model reads and `dropped_features` on the results row, and a resolved
-                    # objection still binds, so calling it open here would be false.
+                    # "not withdrawn" rather than "open": a resolved objection still binds, so
+                    # calling it open here would be false. Where the string actually goes, since
+                    # this comment named two places it does not: the model's PROMPT, via the
+                    # `already_dropped` block of `_facts_json`, and `feature_summary`. It reaches
+                    # neither the snippet (which is handed a bare `drop` list of names) nor
+                    # `dropped_features` on the results row (column names only), and
+                    # `feature_summary` is not a results row column at all.
                     justification=(
                         f"reviewer objection {objection.id} ({objection.category}), "
                         f"not withdrawn: {objection.evidence}"
@@ -479,6 +484,17 @@ def feature_eng(state: PipelineState, *, tools: Tools, model: StructuredModel) -
             )
         )
 
+    # NOT a PipelineError, and this is the whole point of the field. Skipping a column with more
+    # levels than the encoder will expand is what this node is SUPPOSED to do at that cardinality:
+    # nothing downstream is degraded, no objection is warranted, and `_build_summary` already names
+    # every one of them in its `Dropped (...)` line with a `high_cardinality` reason. Recording it
+    # in `errors` as well made `errored` -- which is `bool(self.errors)` -- read true on four
+    # completely healthy `adult` runs, so a table using `errored` as a reliability rate scored that
+    # cell as a 100% failure. `halted_at` had already separated fatal from non-fatal; the fix for
+    # recoverable-and-not-a-problem is not a sixth companion column, it is not calling a routine
+    # decision an error in the first place.
+    skipped = result.get("skipped_high_cardinality") or []
+
     n_nan = result.get("n_nan_in_matrix", 0)
     if n_nan:
         # Refused, not reported alongside a "successful" write: the modeler would fit on a matrix
@@ -493,20 +509,16 @@ def feature_eng(state: PipelineState, *, tools: Tools, model: StructuredModel) -
                 ),
             )
         )
-        update: dict[str, Any] = {"node_trace": [run.event()], "errors": errors}
+        # `skipped` rides along even though this row failed. The snippet really did make that
+        # decision before it produced the NaN, and dropping it here would put a zero in
+        # `n_skipped_high_cardinality` on exactly the runs where the count is hardest to
+        # reconstruct from anything else.
+        update: dict[str, Any] = {
+            "node_trace": [run.event()],
+            "errors": errors,
+            "skipped_high_cardinality": skipped,
+        }
         return update
-
-    skipped = result.get("skipped_high_cardinality") or []
-    if skipped:
-        errors.append(
-            PipelineError(
-                node="feature_eng",
-                message=(
-                    f"columns skipped as too high-cardinality to one-hot encode at "
-                    f"{MAX_ONE_HOT_LEVELS} levels: {skipped}"
-                ),
-            )
-        )
 
     if len(feature_run.artifacts_written) != 1:
         # Zero means no feature_transform.py for the modeler to exec; more than one means the
@@ -524,6 +536,7 @@ def feature_eng(state: PipelineState, *, tools: Tools, model: StructuredModel) -
         "feature_summary": summary,
         "final_features": result.get("final_features", []),
         "dropped_features": result.get("dropped", []),
+        "skipped_high_cardinality": skipped,
         "node_trace": [run.event()],
     }
     if errors:

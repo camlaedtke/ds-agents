@@ -18,6 +18,7 @@ from ds_agents.evaldiff import (
     cell_key,
     compare,
     load_rows,
+    parse_metric,
     separating,
     tally,
     verdict,
@@ -308,6 +309,37 @@ class TestTheCommittedResultsFilesStillParseAndGroup:
                         "retiring it would lose a measurement"
                     )
 
+    def test_the_high_cardinality_skip_was_recorded_as_an_error_on_exactly_five_rows(self):
+        """The blast radius of the `errored` defect, pinned so it cannot grow.
+
+        `feature_eng` recorded a routine one-hot skip as a `PipelineError`, and `errored` is
+        `bool(self.errors)`, so healthy `adult` runs read as a 100% failure cell. The node no
+        longer does this. These rows are ground truth and are NOT edited -- this repo does not edit
+        committed results files -- so they stay wrong forever, and any table quoting `errored` for
+        `adult` needs this footnote.
+
+        FIVE, not the four NEXT.md recorded on 2026-09-02. The four `bench-tall` rows are the ones
+        that were looked at; `2026-09-01_adult-smoke.jsonl` carries a fifth from the day before,
+        and it was missed because the defect was found by reading the bench-tall cell rather than
+        by searching the corpus. Every row `adult` has ever produced here is affected.
+
+        A count rather than a ban, because a ban would require editing them. If this fails high,
+        the defect came back; if it fails low, someone edited `evals/results/`.
+        """
+        offenders = [
+            (path.name, i, row.get("dataset_id"))
+            for path in sorted(RESULTS_DIR.glob("*.jsonl"))
+            for i, row in enumerate(load_rows(path))
+            for error in row.get("errors") or []
+            if str(error.get("message", "")).startswith("columns skipped as too high-cardinality")
+        ]
+        assert len(offenders) == 5, offenders
+        assert {name for name, _, _ in offenders} == {
+            "2026-09-01_adult-smoke.jsonl",
+            "2026-09-02_bench-tall.jsonl",
+        }
+        assert {dataset for _, _, dataset in offenders} == {"adult"}
+
     def test_load_rows_never_writes_to_the_file_it_reads(self):
         path = sorted(RESULTS_DIR.glob("*.jsonl"))[0]
         before = path.read_bytes()
@@ -341,3 +373,63 @@ class TestRenderIsPlainText:
         assert "effect" not in text.lower()
         assert "p-value" not in text.lower() and "p value" not in text.lower()
         assert "underpowered" in text
+
+
+class TestAMetricMayCarryANullPredicate:
+    """`halted_at` names the node that ended a run and is null on every healthy one.
+
+    Under rule 1 a bare `halted_at` therefore EXCLUDES every healthy run from the denominator and
+    reports the halt rate over the halts alone -- 1/1 for a cell with one halt in ten runs. The
+    predicate makes the null test itself the success test, and switches rule 1 off for that call
+    because there is nothing left to exclude: every row has an answer.
+    """
+
+    def test_a_bare_column_still_obeys_rule_one(self):
+        """Unchanged, and this is the point: `leakage_remediated` is what rule 1 exists for."""
+        rows = [_row(leakage_remediated=v) for v in (True, False, None)]
+        count = tally(rows, "leakage_remediated")
+        assert (count.successes, count.n, count.excluded) == (1, 2, 1)
+
+    def test_a_bare_halted_at_is_the_dead_end_the_predicate_exists_for(self):
+        rows = [_row(halted_at=v) for v in ("profiler", None, None, None)]
+        count = tally(rows, "halted_at")
+        assert (count.successes, count.n, count.excluded) == (1, 1, 3)
+        assert count.successes / count.n == 1.0, "a 25% halt rate reading as 100%"
+
+    def test_notnull_counts_every_run_and_gets_the_rate_right(self):
+        rows = [_row(halted_at=v) for v in ("profiler", None, None, None)]
+        count = tally(rows, "halted_at:notnull")
+        assert (count.successes, count.n, count.excluded) == (1, 4, 0)
+
+    def test_isnull_is_the_complement(self):
+        rows = [_row(halted_at=v) for v in ("profiler", None, None, None)]
+        assert tally(rows, "halted_at:isnull").successes == 3
+
+    def test_a_false_value_is_not_a_null_value(self):
+        """The distinction the predicate turns on. `errored=False` is an observation of a healthy
+        run; under `notnull` it is a success, because the question asked is whether the column has
+        a value, not whether that value is truthy."""
+        rows = [_row(errored=False) for _ in range(3)]
+        assert tally(rows, "errored").successes == 0
+        assert tally(rows, "errored:notnull").successes == 3
+
+    def test_compare_accepts_a_predicate_metric_end_to_end(self):
+        before = [_row(halted_at=None) for _ in range(4)]
+        after = [_row(halted_at="profiler")] + [_row(halted_at=None) for _ in range(3)]
+        [comparison] = compare(before, after, ("halted_at:notnull",))
+        [metric] = comparison.metrics
+        assert metric.metric == "halted_at:notnull"
+        assert metric.before.n == 4 and metric.after.n == 4
+        assert metric.before.successes == 0 and metric.after.successes == 1
+
+    def test_a_flip_metric_is_still_recognised_through_its_predicate(self):
+        assert parse_metric("leakage_caught:notnull")[0] == "leakage_caught"
+
+    def test_an_unknown_predicate_raises_rather_than_reading_as_a_column_name(self):
+        """A column that does not exist tallies as n=0 and renders as an empty row, so a typo would
+        otherwise report 'no data' instead of an error."""
+        with pytest.raises(ValueError, match="unknown metric predicate"):
+            parse_metric("halted_at:notnul")
+
+    def test_a_bare_spec_parses_to_no_predicate(self):
+        assert parse_metric("errored") == ("errored", None)

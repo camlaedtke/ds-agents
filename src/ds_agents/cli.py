@@ -30,6 +30,7 @@ from ds_agents.naming import apply as apply_rename
 from ds_agents.provenance import git_commit
 from ds_agents.runnable import Runnable, available, resolve
 from ds_agents.state import (
+    DEFAULT_LOOP_CAP,
     FORCED_DROP_RELEASES,
     OBJECTION_CLOSURES,
     OBJECTION_ROUTINGS,
@@ -58,7 +59,7 @@ def _run_state(
     reviewer_model_name: str | None = None,
     naming: Naming = "descriptive",
     reviewer_prompt: ReviewerPrompt = "base",
-    loop_cap: int = 3,
+    loop_cap: int = DEFAULT_LOOP_CAP,
     objection_routing: ObjectionRouting = "as_addressed",
     objection_closure: ObjectionClosure = "off",
     forced_drop_release: ForcedDropRelease = "withdrawn_only",
@@ -540,14 +541,23 @@ def cmd_eval(args: argparse.Namespace) -> int:
 
 
 def cmd_eval_diff(args: argparse.Namespace) -> int:
-    from ds_agents.evaldiff import compare, load_rows, render
+    from ds_agents.evaldiff import DEFAULT_METRICS, compare, load_rows, parse_metric, render
 
     before, after = Path(args.before), Path(args.after)
     for path in (before, after):
         if not path.exists():
             print(f"no such results file: {path}", file=sys.stderr)
             return 2
-    print(render(compare(load_rows(before), load_rows(after))))
+    metrics = tuple(m.strip() for m in args.metrics.split(",") if m.strip()) or DEFAULT_METRICS
+    # Parsed here rather than left to `tally`, so a typo in the predicate is reported before two
+    # results files are read and not once per cell.
+    for metric in metrics:
+        try:
+            parse_metric(metric)
+        except ValueError as exc:
+            print(str(exc), file=sys.stderr)
+            return 2
+    print(render(compare(load_rows(before), load_rows(after), metrics)))
     return 0
 
 
@@ -621,6 +631,8 @@ def _build_parser() -> argparse.ArgumentParser:
     """Built here rather than inline in `main` so the flags can be tested without running a
     pipeline. `--naming`, `--repeat` and `--results` between them decide what a benchmark row
     means, and a typo in one of them is not something to discover from a wrong number later."""
+    from ds_agents.evaldiff import DEFAULT_METRICS
+
     parser = argparse.ArgumentParser(prog="ds-agents", description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
 
@@ -679,8 +691,9 @@ def _build_parser() -> argparse.ArgumentParser:
     run.add_argument(
         "--loop-cap",
         type=int,
-        default=3,
-        help="how many completed reviewer passes a run may have (default: 3). The cap permits "
+        default=DEFAULT_LOOP_CAP,
+        help=f"how many completed reviewer passes a run may have (default: {DEFAULT_LOOP_CAP}). "
+        "The cap permits "
         "N passes and N-1 returns upstream; a block at the cap becomes the `exhausted` verdict, "
         "never a pass. This is the Phase 5 loop-cap ablation lever.",
     )
@@ -774,6 +787,14 @@ def _build_parser() -> argparse.ArgumentParser:
     diff = sub.add_parser("eval-diff", help="compare two results files")
     diff.add_argument("before", help="the earlier results JSONL")
     diff.add_argument("after", help="the later results JSONL")
+    diff.add_argument(
+        "--metrics",
+        default=",".join(DEFAULT_METRICS),
+        help="comma-separated columns to compare (default: %(default)s). A column may carry a "
+        "predicate -- `halted_at:notnull` -- for columns where null IS the observation rather "
+        "than a missing one; without it a bare `halted_at` excludes every healthy run from the "
+        "denominator and reports the halt rate over the halts alone.",
+    )
     diff.set_defaults(func=cmd_eval_diff)
 
     ds = sub.add_parser("datasets", help="the external benchmark dataset registry")

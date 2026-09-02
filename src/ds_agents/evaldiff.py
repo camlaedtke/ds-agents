@@ -59,6 +59,39 @@ CONTINUOUS_COLUMNS = ("cost_usd", "review_loops", "n_final_features")
 # mechanism this project's whole thesis rests on.
 _FLIP_METRICS = frozenset({"leakage_remediated", "leakage_caught"})
 
+PREDICATES = ("notnull", "isnull")
+"""The suffixes a metric spec may carry, as `column:notnull`.
+
+For columns where `None` IS the observation rather than a missing one. `halted_at` is the case that
+forced this: it names the node that ended a run and is `None` on every healthy one, so under rule 1
+a bare `halted_at` excludes every healthy run from the denominator and reports the halt rate as
+100% of however many halts there were. `errored` reaches the same dead end from the other side --
+it is never null, so it can only ever be tallied over its truthiness, and a reader who wants "how
+many runs halted" cannot ask for it.
+
+A predicate turns the null test itself into the success test and switches rule 1 OFF, because there
+is nothing left to exclude: every row has an answer. The bare `column` form is untouched, so rule 1
+and its docstring stay exactly true for `leakage_remediated`, which is what rule 1 exists for.
+"""
+
+
+def parse_metric(spec: str) -> tuple[str, str | None]:
+    """Split `column:predicate` into its parts. A bare column returns `(column, None)`.
+
+    Raises on an unknown predicate rather than treating the whole spec as a column name: a column
+    that does not exist tallies as n=0 and renders as an empty row, so a typo like
+    `halted_at:notnul` would silently produce "no data" instead of an error.
+    """
+    if ":" not in spec:
+        return spec, None
+    column, _, predicate = spec.partition(":")
+    if predicate not in PREDICATES:
+        raise ValueError(
+            f"unknown metric predicate {predicate!r} in {spec!r}; "
+            f"expected one of {', '.join(PREDICATES)}"
+        )
+    return column, predicate
+
 
 def load_rows(path: Path) -> list[dict[str, Any]]:
     """One JSON object per line. Read-only, always -- `evals/results/` is ground truth per
@@ -141,7 +174,11 @@ def tally(rows: Sequence[dict[str, Any]], metric: str) -> Count:
     crash look like a downstream catch that got missed, silently inflating every "the reviewer
     failed" count with runs the reviewer never got to see. Excluded rows are reported on `Count`,
     never silently dropped, so a cell whose denominator shrank is visible rather than assumed clean.
+
+    `metric` may carry a predicate -- `halted_at:notnull` -- which replaces the truthiness test and
+    suspends rule 1 for that call only. See `PREDICATES` for why that is not a violation of it.
     """
+    column, predicate = parse_metric(metric)
     successes = 0
     n = 0
     excluded = 0
@@ -151,12 +188,15 @@ def tally(rows: Sequence[dict[str, Any]], metric: str) -> Count:
         replicate = row.get("replicate")
         if replicate is not None:
             saw_replicate_field = True
-        value = row.get(metric)
-        if value is None:
-            excluded += 1
-            continue
+        value = row.get(column)
+        if predicate is None:
+            if value is None:
+                excluded += 1
+                continue
+            success = 1 if value else 0
+        else:
+            success = 1 if ((value is not None) == (predicate == "notnull")) else 0
         n += 1
-        success = 1 if value else 0
         successes += success
         bucket = by_replicate.setdefault(replicate, [0, 0])
         bucket[0] += success
@@ -308,7 +348,9 @@ def compare(
             after_count = tally(after_rows, metric) if after_rows is not None else None
             if before_count is not None and after_count is not None:
                 metric_verdict = verdict(before_count, after_count)
-                flipped = metric in _FLIP_METRICS and _direction_flipped(before_count, after_count)
+                flipped = parse_metric(metric)[0] in _FLIP_METRICS and _direction_flipped(
+                    before_count, after_count
+                )
             else:
                 metric_verdict = "only in after" if before_count is None else "only in before"
                 flipped = False

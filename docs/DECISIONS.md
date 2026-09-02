@@ -2239,3 +2239,164 @@ be reading, rather than in an error message they will never see.
 One caveat inherited whole: all 16 runs raised zero objections and took the review loop exactly once.
 No manifest dataset has ever been observed looping, and a run that loops three times costs about
 2.5x, so `full`'s $1.10 is the price of 52 runs that all pass first time.
+
+## 2026-09-02 (second entry): a routine decision stops being an error, the baseline scale publishes
+## its own length, and a metric may ask whether a column is null
+
+Three defects, all found by the previous session, all fixed for no API spend beyond the toy run.
+None of them changed what the pipeline does. All three changed what a column MEANS, which is why
+they were worth doing before `--subset full` wrote 52 more rows under the old meanings.
+
+### `errored` was true on every healthy `adult` run, and the fix was upstream of `errored`
+
+`feature_eng` recorded "columns skipped as too high-cardinality to one-hot encode at 20 levels" as a
+`PipelineError`, and `errored` is `bool(self.errors)`. So every `adult` run came out `errored: true`
+with `halted_at: null`, no objection, verdict `pass`, and a `verified_holdout_score` of 0.9244 that
+nothing objected to. A table using `errored` as a reliability rate scored that cell as a 100%
+failure.
+
+The tempting fix -- a sixth companion column, or a filter inside `errored` -- was rejected. `errored`
+was never wrong about its own definition: it says the error list is non-empty, and it was. The wrong
+thing was calling a routine decision an error. Skipping a column with more levels than the encoder
+will expand is what the node is SUPPOSED to do at that cardinality; nothing downstream is degraded,
+and `_build_summary` already named every such column in its `Dropped (...)` line with a
+`high_cardinality` reason, so the `PipelineError` was **redundant with a string the node was already
+writing**. It is now a `skipped_high_cardinality` list on the state and an
+`n_skipped_high_cardinality` count on the row -- `feature_summary` never reaches a results row, so
+without the count the fact would have left `evals/results/` entirely along with the error. It also
+rides the NaN-refusal path, which returns early: the snippet really did make the skip before it
+produced the NaN, and a zero there would be a wrong number rather than a missing one, on exactly
+the rows where nothing downstream can reconstruct it.
+
+**The audit that had to come with it.** A fix of this shape is only safe if the skip is genuinely
+unusual, so all twenty-one other `PipelineError` construction sites were read: `router.py:99,121`;
+`modeler.py:435,448,469,487,498,525`; `reviewer.py:210,216,342,461,484,502`; `feature_eng.py:476,488`;
+`profiler.py:308,317,325`; and the generic `NodeRun.failure` at `_run.py:47`. **Every one is a
+genuine anomaly and none was touched.** A candidate that failed to fit, a metric that could not be
+logged, a `positive_class` that matched nothing observed, a reviewer that read a truncated artifact,
+a router whose reviewer wrote no claim -- each is something a reader should know happened. The skip
+was the only routine decision in the set, which is the evidence that "a routine decision should not
+be a `PipelineError`" is a rule about one site rather than a rule the codebase was breaking
+everywhere. `profiler.py:317` remains the only site anywhere that ever sets `recoverable=False`.
+
+**What is NOT fixed, and cannot be.** Five committed rows carry the error: four in
+`2026-09-02_bench-tall.jsonl` and a fifth in `2026-09-01_adult-smoke.jsonl` -- **not the four NEXT.md
+recorded**, because the defect was found by reading the bench-tall cell rather than by searching the
+corpus. Every row `adult` has ever produced here is affected. This repo does not edit committed
+results files, so they stay wrong forever and any table quoting `errored` for `adult` needs the
+footnote. `test_the_high_cardinality_skip_was_recorded_as_an_error_on_exactly_five_rows` pins the
+count rather than banning the string: a ban would require the edit the rule forbids. Checked against
+the rows themselves rather than asserted -- all four bench-tall rows carry that error and no other,
+so all four read `errored: false` under the new code, and the defect accounts for 100% of the wrong
+value rather than most of it.
+
+### `baseline_separation`: the scale publishes the number it divides by
+
+`numerai28_6` returned `baseline_normalised_score` 2.089, the largest value anywhere in
+`evals/results/`, and nothing on the row explained it. Not because the run was extraordinary: the
+dataset is near-chance (published reference 0.530), the zero point is 0.5, the unit point reaches
+only 0.5101, and the denominator is 0.0101. `baseline_status` read `ok`, correctly -- both points
+were measured perfectly well.
+
+A `narrow_scale` status was rejected, because `baseline_status`'s stated job is why the two raw
+scores ARE or ARE NOT on this row, and here they are and they are fine. Adding a value for "they are
+here but do not trust what was computed from them" would overload that column exactly the way
+`errored` was overloaded, one entry above, on the same day. Returning `None` below a minimum span
+was rejected for the reason `BASELINE_MIN_SEPARATION`'s docstring gave when that constant was
+written: withholding a number on a statistical test is worse than publishing an unstable one beside
+the two inputs a reader can check it against. Suppression would also have deleted the finding.
+
+So `baseline_separation` is `unit - zero`, sign-corrected so wider is always bigger, on the row.
+`baseline_normalised_score` now consumes it, so the sign correction happens in exactly one place and
+the two columns cannot drift. It is NOT suppressed on a planted leak, unlike the quotient -- the
+distance between the reference points is a property of the dataset and the recipe and says nothing
+about the run's grade -- and it does not require a `verified_holdout_score`, so a row whose re-scorer
+failed can still say how long the yardstick was.
+
+Computed across every committed baseline row, the column does what it was added for:
+
+| dataset | separation | normalised |
+|---|---|---|
+| `numerai28_6` | 0.0101 | 2.089 |
+| `credit_g` | 0.2660 | 0.931 |
+| `higgs` | 0.2914 | 1.031 |
+| `amazon_employee_access` | 0.3572 | 0.875 |
+| `jasmine` | 0.3870 | 0.933 |
+| `adult` | 0.4027 | 1.054 |
+| `bank_marketing` | 0.4279 | 1.019 |
+| `phoneme` | 0.4500 | 0.992 |
+| `nomao` | 0.4934 | 1.004 |
+
+`numerai28_6` is 26x narrower than the next narrowest. That is the useful shape: the narrowness is a
+visible singleton rather than one end of a spectrum, so 2.089 can be quoted with its explanation
+attached instead of being quietly dropped from a table for looking wrong.
+
+### A metric may carry a null predicate, and `errored` is now askable
+
+`tally`'s rule 1 excludes a `None` metric value from the denominator, which is right for
+`leakage_remediated` and a dead end for `halted_at`: that column names the node that ended a run and
+is null on every healthy one, so a bare `halted_at` excludes every healthy run and reports a cell
+with one halt in ten runs as 1/1. `errored` fails from the other side -- never null, so only ever
+tallied on truthiness, and "how many runs halted" could not be asked at all.
+
+A metric spec may now carry `:notnull` or `:isnull`. The predicate replaces the truthiness test and
+switches rule 1 off for that call, which is not a violation of it: under a null predicate every row
+has an answer, so there is nothing left to exclude. The bare form is untouched and rule 1's docstring
+stays exactly true for the column it exists for. `--metrics` is now exposed on `eval-diff`, which
+had accepted the argument in `compare()` for its whole life without any way to pass one. An unknown
+predicate raises rather than falling through as a column name, because a column that does not exist
+tallies as n=0 and renders as an empty row -- a typo would have reported "no data" instead of an
+error.
+
+Run against the two most recent results files, this puts the first defect on screen next to its
+own diagnosis: `adult` reads `errored: 4/4` and `halted_at:notnull: 0/4`.
+
+### `register_dataset` is still unbounded, and that is now pinned rather than promised
+
+Not fixed. `register_dataset` copies and parses the whole CSV, and only the graph's registration is
+bounded, and only under `--tools mcp`, where `_select_tools` builds `MCPTools` and
+`_CONNECT_TIMEOUT_S = 60.0` covers the handshake it happens inside. `rescore.rescore` and
+`rescore.baseline` construct `LocalTools` directly, so two of the three calls are unbounded under
+either transport and all three are under `--tools local`. A hang there does not raise, does not
+abort, and appears in no column.
+
+A real guard on a synchronous in-process call means a watchdog thread or a signal, which is a design
+question and not a thing to bolt on during a session about column semantics. The exposure is 1.2% of
+budget at the largest shape in the manifest. So what landed is
+`test_only_one_of_the_three_registrations_is_bounded_by_anything`, which asserts `rescore.py` builds
+exactly two tool surfaces and routes through no `_select_tools` -- it fails if a fourth unbounded
+site appears, or if someone bounds one of the two without bounding both. A small live defect is the
+kind that survives by never being written down; this writes it down in a form that cannot go stale.
+
+The `SystemExit` path turned out to be covered already, by
+`test_a_systemexit_propagates_instead_of_counting_as_a_failure` in `tests/test_harness.py` -- the
+previous session's note that nothing tested it was wrong.
+
+### Two small things, and one that was left alone
+
+`DEFAULT_LOOP_CAP` now lives in `state.py` and is imported by `cli.py` and `harness.py`. It was
+written out in **four** places, not the three NEXT.md recorded -- the fourth was `--loop-cap`'s own
+argparse default, including the literal `3` in its help text. `loop_cap` is a recorded condition on
+every results row, so a disagreement between the four would not have crashed: it would have produced
+two cells claiming the same condition that did not run under it.
+
+`--metrics` also gained CLI-level tests on the reviewer's insistence: the flag's default is read
+from `evaldiff.DEFAULT_METRICS` rather than copied into the parser, a predicate metric is exercised
+end to end through argv, and a bad predicate is checked to exit 2 with the typo named. Only
+`parse_metric`'s `ValueError` had been tested directly, which left the wiring between argv and it
+unpinned -- the same class of gap as a `--metrics` that `compare()` accepted for its whole life
+with no way to pass one.
+
+`feature_eng.py`'s comment on the forced-drop justification string named two places the string does
+not go. It reaches the model's PROMPT via the `already_dropped` block of `_facts_json`, and
+`feature_summary`. It reaches neither the snippet (handed a bare list of names) nor
+`dropped_features` on the results row (column names only), and `feature_summary` is not a results
+row column at all.
+
+`store.path_of` was NOT deleted, though NEXT.md has carried it as dead code and it has no caller in
+`src/` or `mcp_server/`. Its docstring is the record of why the split manifest is reachable through
+`read_artifact` rather than behind `sandbox_path` -- that the reviewer and any future generalist arm
+reach artifact content through `read_artifact`, so anything only reachable through a filesystem path
+is invisible to them. Deleting three lines of code would have deleted that, and its three test
+callers are the only exercise `_paths` gets. It stays, and the parking-lot item is closed as a
+decision rather than left open as an oversight.

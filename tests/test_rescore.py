@@ -761,3 +761,29 @@ class TestTheDatasetIsRegisteredOncePerToolSurface:
         assert len(set(calls)) == 1, (
             f"all three registrations must read the same agent CSV, got {set(calls)}"
         )
+
+    def test_only_one_of_the_three_registrations_is_bounded_by_anything(self):
+        """The exposure, in executable form rather than as a sentence that can go stale.
+
+        `register_dataset` copies and parses the whole CSV, and a hang in it does not raise, does
+        not abort, and appears in no results column. Only the graph's registration is bounded, and
+        only under `--tools mcp`: `_select_tools` builds `MCPTools`, whose `_CONNECT_TIMEOUT_S`
+        covers the handshake the registration happens inside. `rescore.rescore` and
+        `rescore.baseline` construct `LocalTools` directly, and `--tools local` does too, so two of
+        the three calls are unbounded under either transport and all three are under `local`.
+
+        Measured at 1.2% of budget at the largest shape in the manifest (`higgs`, 0.25s a call,
+        0.75s a run, `tests/test_register_dataset_cost.py`), so this is a documented exposure and
+        not an emergency -- which is exactly why it is worth pinning: a small live defect is the
+        kind that survives by never being written down. This test fails if someone adds a fourth
+        unbounded construction site, or bounds one of these two without bounding both.
+        """
+        source = (Path(rescore.__file__)).read_text()
+        assert source.count("LocalTools(") == 2, (
+            "rescore.py builds exactly two tool surfaces, one for the re-scorer and one for the "
+            "baseline; a third would be a third unbounded registration"
+        )
+        assert "_select_tools" not in source, (
+            "if rescore.py ever routes through cli._select_tools, this asymmetry is closed and "
+            "this test should be replaced by one asserting the timeout applies"
+        )

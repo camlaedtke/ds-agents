@@ -70,7 +70,7 @@ forced to mislabel it.
 |---|---|---|---|---|
 | intake | dataset_id, task_description | spec | read_artifact | profiler |
 | profiler | spec, dataset_id, config.random_seed | profile, split_artifact | run_python | feature_eng |
-| feature_eng | spec, profile, split_artifact, task_description, binding objections (`config.forced_drop_release`) for the forced drops, open objections for what the model is shown | feature_code_artifact, feature_summary, final_features, dropped_features | read_artifact, run_python | modeler |
+| feature_eng | spec, profile, split_artifact, task_description, binding objections (`config.forced_drop_release`) for the forced drops, open objections for what the model is shown | feature_code_artifact, feature_summary, final_features, dropped_features, skipped_high_cardinality | read_artifact, run_python | modeler |
 | modeler | spec, feature_code_artifact, split_artifact, final_features, task_description, config.random_seed, config.run_id, open objections | candidates, chosen_model, importance_artifact, top_importances | read_artifact, run_python, log_metric | reviewer |
 | reviewer | everything above; feature code only if `config.reviewer_sees_code` | objections, reviewer_claim, reviewer_dispositions | read_artifact | router decides |
 | router | reviewer_claim, reviewer_dispositions, review_iterations, config.loop_cap, config.reviewer_enabled, open objections | review_iterations, review_verdict, review_passes | none | feature_eng / modeler / reporter |
@@ -309,7 +309,14 @@ Scores: `claimed_holdout_score`, `verified_holdout_score`, `holdout_claim_gap`, 
 scale they are read against — `baseline_zero_score` (a constant class-prior predictor),
 `baseline_unit_score` (our RandomForest on the raw columns), `baseline_normalised_score`
 (`(verified − zero) / (unit − zero)`, direction-aware, and `None` on a dataset with a planted leak
-because the baseline kept the trap), plus `baseline_status` / `baseline_detail` / `baseline_recipe`.
+because the baseline kept the trap), plus `baseline_status` / `baseline_detail` /
+`baseline_recipe`. `baseline_separation` is the denominator itself, published so the quotient can
+be checked: `numerai28_6` reads 2.089 not because the run was extraordinary but because its two
+reference points are 0.0101 apart on a near-chance dataset. It is NOT suppressed on a planted
+leak — the distance between the reference points is a property of the dataset and the recipe,
+not of the run's grade — and it needs no `verified_holdout_score`, so a row whose re-scorer
+failed can still say how long the yardstick was. A narrow scale is deliberately not a
+`baseline_status` value: both points were measured perfectly well.
 
 Leakage, as a set comparison against ground truth rather than two booleans: `leakage_planted`,
 `leakage_flagged`, `leakage_caught`, `leakage_remediated`, `leakage_recall`, `leakage_precision`,
@@ -357,8 +364,17 @@ whether each pass re-raised the same objection or found a new one). All four are
 `objections`, `review_passes` and `final_features` -- no node records its own remediation.
 
 Cost and reliability: `wall_seconds` (real elapsed, not the sum of node events), `cost_usd`,
-`errored`. The harness must emit a row for every dataset even on hard failure, or the hardest
-datasets disappear and every table biases upward.
+`errored`, `halted_at`, `n_skipped_high_cardinality`. The harness must emit a row for every dataset
+even on hard failure, or the hardest datasets disappear and every table biases upward.
+
+`errored` is `bool(errors)` and `halted_at` names the node whose unrecoverable refusal ended the
+run, so the two answer different questions and neither is a drop-in for the other. Keeping `errored`
+honest is a rule about what may be appended to `errors`, not a filter applied when reading it: a
+routine decision is not an error. `feature_eng`'s one-hot cardinality skip broke that rule until
+2026-09-02 and made every `adult` run read as a failure; it is now
+`n_skipped_high_cardinality`, a count of a decision. Neither column can be tallied as a rate by
+`eval-diff` without help — `halted_at` is null on every healthy run and would exclude them all,
+`errored` is never null — which is what `--metrics halted_at:notnull` exists for.
 
 Where that time and money went: `node_seconds` (a `{node: seconds}` map summed over repeats, so a
 node the review loop visited three times shows all three), plus `rescore_seconds` and

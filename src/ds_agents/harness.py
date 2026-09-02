@@ -37,7 +37,13 @@ from typing import Any
 
 from ds_agents.holdout import PreparedDataset
 from ds_agents.naming import Naming
-from ds_agents.state import ObjectionClosure, ObjectionRouting, PipelineState, ReviewerPrompt
+from ds_agents.state import (
+    DEFAULT_LOOP_CAP,
+    ObjectionClosure,
+    ObjectionRouting,
+    PipelineState,
+    ReviewerPrompt,
+)
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 # Where results land unless a caller says otherwise. Named so the CLI can pass the same default
@@ -78,7 +84,7 @@ class Cell:
     reviewer_model: str | None = None
     naming: Naming = "descriptive"
     reviewer_prompt: ReviewerPrompt = "base"
-    loop_cap: int = 3
+    loop_cap: int = DEFAULT_LOOP_CAP
     objection_routing: ObjectionRouting = "as_addressed"
     objection_closure: ObjectionClosure = "off"
     est_cost_usd: float = 0.03

@@ -163,7 +163,7 @@ def empty_plan_model() -> ScriptedModel:
     return ScriptedModel({FeaturePlan: FeaturePlan(drops=[], kept_despite_flag=[])})
 
 
-def test_writes_the_four_feature_fields_and_nothing_else():
+def test_writes_the_five_feature_fields_and_nothing_else():
     tools = tools_for()
     model = empty_plan_model()
 
@@ -174,6 +174,7 @@ def test_writes_the_four_feature_fields_and_nothing_else():
         "feature_summary",
         "final_features",
         "dropped_features",
+        "skipped_high_cardinality",
         "node_trace",
     }
     assert update["feature_code_artifact"] == "art-011-feature-transform"
@@ -601,9 +602,10 @@ def test_nan_in_the_matrix_is_an_error_not_a_silent_pass():
 
     update = feature_eng(state(), tools=tools, model=model)
 
-    assert set(update) == {"node_trace", "errors"}
+    assert set(update) == {"node_trace", "errors", "skipped_high_cardinality"}
     assert "3" in update["errors"][0].message
     assert "NaN" in update["errors"][0].message
+    assert update["skipped_high_cardinality"] == [], "nothing was skipped on this fixture"
 
 
 def test_a_skipped_high_cardinality_column_is_reported_and_counted_as_dropped():
@@ -619,7 +621,54 @@ def test_a_skipped_high_cardinality_column_is_reported_and_counted_as_dropped():
 
     assert "some_free_text_column" in update["dropped_features"]
     assert "feature_code_artifact" in update
-    assert any("some_free_text_column" in e.message for e in update["errors"])
+    assert update["skipped_high_cardinality"] == ["some_free_text_column"]
+    assert "some_free_text_column" in update["feature_summary"]
+    assert "high_cardinality" in update["feature_summary"]
+
+
+def test_a_skip_is_a_decision_not_an_error_so_the_run_is_not_errored():
+    """The `adult` defect, on a fixture. All four `adult` rows in `2026-09-02_bench-tall.jsonl`
+    carry `errored: true` with `halted_at: null`, no objection, verdict `pass` and a
+    `verified_holdout_score` of 0.9244 nothing objected to -- because `feature_eng` recorded a
+    routine one-hot skip as a `PipelineError` and `errored` is `bool(self.errors)`. A table using
+    `errored` as a reliability rate therefore scored `adult` as a 100% failure cell."""
+    snippet_out = {
+        **SNIPPET_OUT,
+        "dropped": ["customer_id", "some_free_text_column"],
+        "skipped_high_cardinality": ["some_free_text_column"],
+    }
+    update = feature_eng(
+        state(), tools=tools_for(snippet_out=snippet_out), model=empty_plan_model()
+    )
+
+    assert "errors" not in update
+
+    applied = state().model_copy(update={k: v for k, v in update.items() if k != "node_trace"})
+    assert applied.results_row()["errored"] is False
+    assert applied.results_row()["halted_at"] is None
+    # The fact still leaves the run, in a countable form. `feature_summary` names the column but
+    # never reaches a results row, so without this column a reader of `evals/results/` would have
+    # no trace of the skip at all once the error was gone.
+    assert applied.results_row()["n_skipped_high_cardinality"] == 1
+
+
+def test_a_nan_refusal_still_records_the_skip_it_made_on_the_way():
+    """The two facts are independent. The snippet decided the skip before it produced the NaN, and
+    a zero in `n_skipped_high_cardinality` on a failed row would be a wrong number rather than a
+    missing one -- on exactly the runs where nothing downstream can reconstruct it."""
+    snippet_out = {
+        **SNIPPET_OUT,
+        "n_nan_in_matrix": 3,
+        "dropped": ["customer_id", "some_free_text_column"],
+        "skipped_high_cardinality": ["some_free_text_column"],
+    }
+    update = feature_eng(
+        state(), tools=tools_for(snippet_out=snippet_out), model=empty_plan_model()
+    )
+
+    assert "feature_code_artifact" not in update, "a NaN matrix is still refused"
+    assert any("NaN" in e.message for e in update["errors"])
+    assert update["skipped_high_cardinality"] == ["some_free_text_column"]
 
 
 def test_a_model_client_error_leaves_the_forced_drops_and_an_error():
