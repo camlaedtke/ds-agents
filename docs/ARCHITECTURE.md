@@ -364,15 +364,27 @@ whether each pass re-raised the same objection or found a new one). All four are
 `objections`, `review_passes` and `final_features` -- no node records its own remediation.
 
 Cost and reliability: `wall_seconds` (real elapsed, not the sum of node events), `cost_usd`,
-`errored`, `halted_at`, `n_skipped_high_cardinality`. The harness must emit a row for every dataset
-even on hard failure, or the hardest datasets disappear and every table biases upward.
+`errored`, `halted_at`, `n_skipped_high_cardinality`, and `n_candidates` /
+`n_candidates_failed_to_fit` / `candidates_failed_to_fit`. The harness must emit a row for every
+dataset even on hard failure, or the hardest datasets disappear and every table biases upward.
 
 `errored` is `bool(errors)` and `halted_at` names the node whose unrecoverable refusal ended the
 run, so the two answer different questions and neither is a drop-in for the other. Keeping `errored`
 honest is a rule about what may be appended to `errors`, not a filter applied when reading it: a
 routine decision is not an error. `feature_eng`'s one-hot cardinality skip broke that rule until
 2026-09-02 and made every `adult` run read as a failure; it is now
-`n_skipped_high_cardinality`, a count of a decision. Neither column can be tallied as a rate by
+`n_skipped_high_cardinality`, a count of a decision.
+
+The candidate-fit columns are the same rule read from the other side, and the pair is worth holding
+together because they look identical and are not. A candidate that will not fit IS an anomaly, so
+`modeler` keeps raising a `PipelineError` for it and `errored` stays true; what was missing was any
+way to ask WHICH of the twenty-two error sites fired, since the text reached a results file only as
+prose inside `errors`. So this one gets a companion column and not a reclassification -- the
+opposite repair to the cardinality skip, from the same symptom. `n_candidates` is the denominator
+and is not optional: a run halted at `feature_eng` has no candidates at all, and without it a zero
+numerator reads as "every candidate fit fine" on a run where none was ever attempted.
+
+Neither `errored` nor `halted_at` can be tallied as a rate by
 `eval-diff` without help — `halted_at` is null on every healthy run and would exclude them all,
 `errored` is never null — which is what `--metrics halted_at:notnull` exists for.
 

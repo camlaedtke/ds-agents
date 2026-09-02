@@ -647,6 +647,17 @@ Priority: **load-bearing** means the thesis breaks if this is wrong and you cann
   make the list complete, and pretending it does would turn every other suspicious column into a
   scored mistake. Related: [[eval-baselines]], [[caught-vs-remediated]], [[fixture-difficulty]],
   [[measurement-independence]].
+- Sharpened 2026-09-02: this repo has now paid for the rule three times, and the third payment
+  named the cheap version of it. `leakage_graded` was the gate on an empty answer key;
+  `baseline_separation` was the denominator behind a quotient that could approach zero;
+  `n_candidates` is the denominator behind `n_candidates_failed_to_fit`, because a run halted at
+  `feature_eng` writes a row with no candidates at all and its zero numerator would otherwise read
+  as "every candidate fit fine" on a run where none was ever attempted. The compressed rule:
+  **whenever a numerator can be zero, put the denominator on the row next to it.** It costs one
+  integer, it is derived from state that already exists, and it is the difference between "measured
+  as none" and "never measured". Note what the three have in common -- each failure is invisible,
+  because each produces a perfectly plausible number rather than a missing one. Related:
+  [[is-it-an-error-or-a-decision]].
 
 ### withheld-holdout-vs-cv-fold — who drew the partition decides what it can grade
 - Priority: load-bearing
@@ -914,3 +925,30 @@ Priority: **load-bearing** means the thesis breaks if this is wrong and you cann
   true. The confound is a reason to run the experiment, not a substitute for running it.
   Related: [[two-axes-treated-as-one]], [[a-fit-is-not-a-model]], [[encoding-as-a-contract]],
   [[replication-before-attribution]].
+
+### is-it-an-error-or-a-decision — two identical-looking defects, one session apart, took opposite fixes
+- Priority: load-bearing
+- Came up: 2026-09-02, adding `ModelResult.fit_error` before `--subset full`
+- Status: flagged
+- Why it matters here: both defects arrive wearing the same sentence -- "`errored` is uninformative"
+  -- and the repair is opposite in each case, so the sentence is not the diagnosis. On 2026-09-02
+  `feature_eng` was recording a routine one-hot cardinality skip as a `PipelineError`, and the fix
+  was to move the fact **out** of `errors` entirely: the skip became `n_skipped_high_cardinality`, a
+  count of a decision, and `errored`'s definition (`bool(self.errors)`) never changed. Hours later
+  the same sentence pointed at `modeler.py`, where a candidate that will not fit raises a
+  `PipelineError` whose text never reaches a column -- and there the fix was to leave the error
+  exactly where it is and add the column **beside** it. Doing either repair to the other defect is a
+  published wrong number in a predictable direction: reclassify a real fit failure as a decision and
+  a genuine anomaly silently leaves every failure rate this project reports; add a companion column
+  to the cardinality skip and `errored` stays true on four healthy `adult` runs while looking
+  better-instrumented than before.
+  The general shape: **"the column is uninformative" is a symptom, and it has two causes with two
+  cures.** Ask what the underlying EVENT is before touching the column. If the event is a routine
+  decision the code makes on purpose, it was never an error and belongs in its own count. If the
+  event is a real anomaly, the error is correct and what is missing is a way to ask which anomaly
+  fired. The tell is a question: would a reader who saw this event want the run's failure rate to go
+  up? The audit that made this decidable is worth as much as the rule -- all twenty-two
+  `PipelineError` sites were read, exactly one was reclassified, and that ratio is what makes this a
+  rule about a site rather than a licence to sweep errors into counts.
+  Related: [[complete-list-or-nothing]], [[silent-refusal-looks-like-a-result]],
+  [[instrument-contaminates-measurement]], [[caught-vs-remediated]].

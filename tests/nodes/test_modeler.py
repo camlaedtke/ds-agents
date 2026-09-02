@@ -367,8 +367,45 @@ def test_a_candidate_that_failed_to_fit_is_recorded_but_not_chosen():
     failed = next(c for c in update["candidates"] if c.name == "hist_gbdt")
     assert failed.cv_scores == []
     assert failed.claimed_holdout_score is None
+    assert failed.fit_error == "ValueError: could not fit"
     assert update["chosen_model"].name == "logistic_l2"
     assert any("hist_gbdt failed to fit" in e.message for e in update["errors"])
+
+
+def test_a_failed_fit_is_still_an_error_as_well_as_a_column():
+    """The column is a companion to the `PipelineError`, not a replacement for it.
+
+    The 2026-09-02 fix to `n_skipped_high_cardinality` looked identical and went the other way:
+    it moved a fact OUT of `errors`, because a one-hot cardinality skip is a routine decision that
+    was misfiled as an error. A candidate that will not fit is a genuine anomaly -- one of the
+    twenty-one `PipelineError` sites that audit read and deliberately left alone -- so `errored`
+    must stay true here. Reclassifying it to match the earlier fix would drop a real failure out
+    of every rate this project publishes, which is why the rule is a test rather than a comment.
+    """
+    snippet_out = {
+        **SNIPPET_OUT,
+        "candidates": [
+            SNIPPET_OUT["candidates"][0],
+            {
+                "name": "hist_gbdt",
+                "params": {},
+                "cv_scores": [],
+                "cv_mean": None,
+                "holdout_score": None,
+                "importances": [],
+                "fit_error": "ValueError: could not fit",
+            },
+        ],
+        "best_by_cv": "logistic_l2",
+    }
+    update = modeler(
+        state(),
+        tools=tools_for(snippet_out),
+        model=ScriptedModel({ModelChoice: choice("logistic_l2")}),
+    )
+
+    assert any("hist_gbdt failed to fit" in e.message for e in update["errors"])
+    assert all(e.recoverable for e in update["errors"])
 
 
 def test_all_candidates_failing_leaves_no_chosen_model_but_still_a_row():

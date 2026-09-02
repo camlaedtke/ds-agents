@@ -1722,3 +1722,65 @@ class TestTheLeakageGate:
         assert row["profiler_nominated"] == ["a"]
         assert row["reviewer_nominated"] == ["a"]
         assert row["leakage_planted"] == []
+
+
+class TestTheCandidateFitColumns:
+    """A candidate that would not fit reaches the results file as a number, not only as prose.
+
+    The snippet records a per-candidate failure and the node turns it into a `PipelineError`, so
+    before these columns the only trace in `evals/results/` was free text inside `errors` plus an
+    `errored` flag that says nothing about which of twenty-two error sites fired.
+    """
+
+    def _state(self, candidates: list[ModelResult]) -> PipelineState:
+        state = populated_state()
+        state.candidates = candidates
+        return state
+
+    def test_a_fit_error_survives_onto_the_model_result(self):
+        assert ModelResult(name="m").fit_error is None
+        assert ModelResult(name="m", fit_error="ValueError: x").fit_error == "ValueError: x"
+
+    def test_the_row_carries_the_count_and_the_names(self):
+        row = self._state(
+            [
+                ModelResult(name="logistic_l2", cv_scores=[0.8, 0.82]),
+                ModelResult(name="hist_gbdt", fit_error="ValueError: could not fit"),
+            ]
+        ).results_row()
+        assert row["n_candidates"] == 2
+        assert row["n_candidates_failed_to_fit"] == 1
+        assert row["candidates_failed_to_fit"] == ["hist_gbdt"]
+
+    def test_a_healthy_run_reads_zero_out_of_a_real_denominator(self):
+        row = self._state([ModelResult(name="logistic_l2", cv_scores=[0.8])]).results_row()
+        assert row["n_candidates"] == 1
+        assert row["n_candidates_failed_to_fit"] == 0
+        assert row["candidates_failed_to_fit"] == []
+
+    def test_none_attempted_is_distinguishable_from_none_failed(self):
+        """`n_candidates` is the denominator, and it is not optional.
+
+        A run halted at `feature_eng` writes a row with no candidates at all. Without the
+        denominator, its `n_candidates_failed_to_fit: 0` reads as "every candidate fit fine" on a
+        run where none was ever attempted -- the same defect `leakage_graded` and
+        `baseline_separation` were each built to close. An empty numerator is not an answer of
+        zero.
+        """
+        halted = self._state([]).results_row()
+        healthy = self._state([ModelResult(name="logistic_l2", cv_scores=[0.8])]).results_row()
+        assert halted["n_candidates_failed_to_fit"] == healthy["n_candidates_failed_to_fit"] == 0
+        assert halted["n_candidates"] == 0
+        assert healthy["n_candidates"] == 1
+
+    def test_the_names_are_sorted_so_two_rows_can_be_compared(self):
+        row = self._state(
+            [
+                ModelResult(name="rf", fit_error="MemoryError: "),
+                ModelResult(name="hist_gbdt", fit_error="ValueError: could not fit"),
+            ]
+        ).results_row()
+        assert row["candidates_failed_to_fit"] == ["hist_gbdt", "rf"]
+
+    def test_the_row_stays_json_serialisable_with_the_new_columns(self):
+        json.dumps(self._state([ModelResult(name="m", fit_error="ValueError: x")]).results_row())

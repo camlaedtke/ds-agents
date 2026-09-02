@@ -13,7 +13,7 @@ from datetime import UTC, datetime
 import pytest
 from conftest import FakeTools, ScriptedModel
 
-from ds_agents.nodes.reporter import reporter
+from ds_agents.nodes.reporter import _model_note, _model_section, reporter
 from ds_agents.state import (
     ColumnProfile,
     LeakageCandidate,
@@ -248,3 +248,50 @@ def test_the_report_says_the_score_is_a_claim():
     content = tools.artifacts[update["report_artifact"]].content
     assert "Nothing here is a grade" in content
     assert "a claim, not a verified score" in content
+
+
+class TestTheModelNoteSeparatesTwoFailures:
+    """ "Could not be fit" and "was fit and scored nothing" are different events.
+
+    They rendered as the same string while `ModelResult` had no field for the first one, which is
+    what `_model_note`'s old comment recorded. The note now names the error when there is one.
+    """
+
+    def test_a_fit_error_is_named_in_the_note(self):
+        note = _model_note(ModelResult(name="hist_gbdt", fit_error="ValueError: could not fit"))
+        assert "ValueError: could not fit" in note
+
+    def test_a_scoreless_fit_with_no_error_still_reads_as_before(self):
+        assert _model_note(ModelResult(name="m")) == "no successful fit"
+
+    def test_a_healthy_candidate_has_no_note(self):
+        assert _model_note(ModelResult(name="m", cv_scores=[0.8])) == "-"
+
+    def test_a_long_error_is_truncated_so_the_table_stays_readable(self):
+        note = _model_note(ModelResult(name="m", fit_error="E: " + "x" * 500))
+        assert len(note) < 200
+
+    def test_a_multiline_error_cannot_break_the_markdown_row_it_lands_in(self):
+        """This is the one report cell whose content comes from an exception.
+
+        `_table` joins cells on `|` and `_fmt` escapes nothing, so a newline or a bare pipe in a
+        sklearn message breaks the table row. Truncation does not help: a newline inside the first
+        120 characters breaks it just as thoroughly as one after them.
+        """
+        note = _model_note(
+            ModelResult(name="m", fit_error="ValueError: bad shape\n  (3, 4) | (5, 6)\n")
+        )
+        assert "\n" not in note
+        assert "|" not in note.replace("\\|", "")
+
+    def test_a_multiline_error_renders_inside_a_single_table_row(self):
+        """The property the escaping exists for, asserted on the rendered report rather than on
+        the helper -- a note that is clean in isolation is not the claim."""
+        state = PipelineState(
+            dataset_id="toy",
+            task_description="x",
+            candidates=[ModelResult(name="hist_gbdt", fit_error="ValueError: a\nb\nc")],
+        )
+        report = "\n".join(_model_section(state))
+        rows = [line for line in report.splitlines() if line.startswith("|")]
+        assert any("hist_gbdt" in r and "ValueError" in r for r in rows)

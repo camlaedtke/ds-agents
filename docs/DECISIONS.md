@@ -2400,3 +2400,125 @@ reach artifact content through `read_artifact`, so anything only reachable throu
 is invisible to them. Deleting three lines of code would have deleted that, and its three test
 callers are the only exercise `_paths` gets. It stays, and the parking-lot item is closed as a
 decision rather than left open as an oversight.
+
+## 2026-09-02 (third entry): a fit failure gets a companion column, not a reclassification, and
+## the two repairs to "`errored` is uninformative" are opposite
+
+`ModelResult` had no field for a per-candidate `fit_error`, so the fact that an estimator could not
+be fit at all reached `evals/results/` only as free text inside `errors`. `modeler.py` raises a
+`PipelineError` naming the candidate and the exception; nothing carried it onto the row, and
+`reporter._model_note` had to infer a failed fit from empty `cv_scores` -- with a comment saying so,
+which is the same stale-prose defect this file recorded against `feature_eng.py` earlier the same
+day.
+
+The tempting repair was the one that had just worked. Hours earlier `feature_eng`'s one-hot
+cardinality skip was fixed by moving it OUT of `errors` and into `n_skipped_high_cardinality`, a
+count of a decision, leaving `bool(self.errors)` untouched. Applied here that would have been a
+published wrong number: a candidate that will not fit is a genuine anomaly -- one of the twenty-one
+`PipelineError` sites that audit read and deliberately left alone -- and reclassifying it would drop
+a real failure out of every rate this project reports, while looking better-instrumented than
+before. The two defects arrive wearing the same sentence and the sentence is not the diagnosis. So
+the error stays exactly where it is and gains `fit_error` beside it, pinned by
+`test_a_failed_fit_is_still_an_error_as_well_as_a_column` with the reasoning in its docstring, so
+that nobody later "tidies" it into consistency with the cardinality fix.
+
+Three columns, not one, following the `false_alarm` / `false_alarm_columns` shape:
+`n_candidates_failed_to_fit`, `candidates_failed_to_fit`, and `n_candidates`. The third is the
+argument. A run halted at `feature_eng` writes a row with no candidates at all, so without a
+denominator its zero numerator reads as "every candidate fit fine" on a run where none was ever
+attempted -- the third time this repo has paid for that rule after `leakage_graded` and
+`baseline_separation`, and the first time it was cheap because the shape was already known. The
+error text itself is not duplicated onto the row: `errors` already carries it, and a second copy
+would be two things to keep in agreement.
+
+One defect the change introduced and the reviewer caught. `_model_note` truncated the message to
+120 characters with a comment claiming that protected the markdown table. It does not: `_table`
+joins cells on `|` and `_fmt` escapes nothing, so a newline inside the first 120 characters breaks
+the row exactly as well as one after them -- and multi-line sklearn messages are routine. This is
+the one report cell whose content comes from an exception rather than from a field this repo
+shapes, so it is flattened and pipe-escaped before truncation, asserted on the rendered report and
+not only on the helper.
+
+`ModelResult.rationale` was NOT added, and that is a decision rather than an omission. The modeler's
+prose about its own choice is precisely what `measurement-independence` says no number may be
+derived from, and nothing reads it. A field exists to be read.
+
+## 2026-09-02 (fourth entry): `--subset full` is a coverage run, and the thing being pre-registered
+## is what would make it uninterpretable rather than what would make it interesting
+
+Every prior arm in this project tested a hypothesis, and the pre-registration existed to stop a
+threshold being chosen after the numbers. `full` is not that. It runs all 13 manifest datasets once
+each at n=2 x 2 replicates so that Phase 5 has a table with 13 rows in it instead of 9, and there is
+no arm, no control cell and no comparand -- so a pre-registration of the usual shape would be
+theatre. What is worth fixing in advance is the opposite thing: the conditions under which the file
+this produces must NOT be quoted, because those are exactly the ones a writeup discovers too late.
+
+The invocation is `--subset full --name full --replicates 2 --n 2 --max-cost-usd 1.60`, 52 runs,
+$1.1040 estimated. Nine of the thirteen `est_cost_usd` values are measured means; four
+(`australian`, `sylvine`, `kc1`, `kr_vs_kp`) are modelled from the nine-dataset refit plus one
+residual sd and have never been run live. The cap at 1.45x is what protects the budget from those
+four, per the rule this file adopted on 2026-09-02: with a modelled estimate the cap does the work,
+not the estimate.
+
+### Why the money was spendable at all
+
+This is recorded because the decision has a history. `full` waited on the manifest, then on a
+run-and-grade path, then on the split manifest read cap, then on cost -- and the honest content of
+the blocker as of 2026-09-02 was that spending $1.10 had never been put to a person. It was put to
+Cameron on 2026-09-02 and the answer was yes. The order was fixed at the same time and it is not
+cosmetic: `commit` is an `evaldiff.CONDITION_FIELDS` member, so the `ModelResult.fit_error` column
+landed and was committed FIRST. Running `full` before it would have produced 52 rows one column
+short of the schema this repo ships, in a file that cannot be edited afterwards.
+
+### Pre-registered endpoints
+
+These carry forward from `bench-tall` unchanged, and they are assertions rather than predictions --
+each is a property of the grading chain, and any of them missing means the file is not a
+measurement.
+
+1. **Grader correctness, no tolerance.** `rescore_status` and `baseline_status` `ok` 52/52;
+   `baseline_zero_score` **exactly 0.5** 52/52 (a constant class-prior predictor scores exactly 0.5
+   under roc_auc by construction, so this asserts positive class, scorer sign and row selection all
+   at once); `refit_claim_gap` **exactly 0.0** 52/52; `baseline_recipe` `rf-v1` 52/52.
+2. **Feasibility, primary for the four never-run datasets.** `halted_at` null 52/52 and
+   `runs_failed` 0. Proved offline at this commit for $0 before anything was funded, all 13 cells.
+   Any non-null `halted_at` means the offline pass missed something live introduces; the response is
+   to stop the invocation rather than fund replicate 2.
+3. **`baseline_separation` on `numerai28_6` reproduces near 0.0101.** If it does, the 2.089 in
+   `bench-tall` is a property of a near-chance dataset meeting the normalisation's definition, and
+   it may be quoted with its denominator beside it. If the separation moves materially, it is a
+   property of the run and the column needs re-opening rather than quoting.
+4. **`n_candidates_failed_to_fit`, first live exercise, no prediction.** The column shipped hours
+   before this run and has never seen a live estimator. Whatever it reads is information; a zero
+   across 52 rows is the expected and least interesting outcome, and is NOT evidence the column
+   works -- `n_candidates` being uniformly non-zero is what shows the denominator is populated.
+
+### What this file may not be used for, fixed in advance
+
+- **No count from it may be quoted as an effect.** n=2 per cell per replicate. `Count.per_replicate`
+  cannot test the binomial independence assumption at n=2, so the pooled Wilson interval is not
+  earned; this is `replication-before-attribution` applied before the fact rather than after it.
+  The file is coverage and per-dataset description, not comparison.
+- **No `eval-diff` against any earlier file.** `dataset_id` and `commit` are both
+  `CONDITION_FIELDS`. This is a new commit and four datasets are new, so a comparison renders a
+  table of empty cells. Same call and the same reason as `bench-tall`.
+- **`adult`'s five permanently-wrong `errored` rows are not in this file, but they are in the
+  corpus.** Any table pooling `errored` across `evals/results/` still needs that footnote.
+
+### Failure endpoints
+
+- **`kr_vs_kp` overruns its $0.022.** It is 36 columns, all categorical, 73 one-hot levels -- more
+  than any dataset run here, against an H_categorical refuted only at 7 to 13 categorical columns.
+  Its price is the softest number in `SUBSETS` and it is named here so that an overrun is a recorded
+  prediction rather than a surprise. Response: record the measured mean, do not re-fit the cost
+  model on one point.
+- **A run that loops.** Nothing in this project has ever been observed looping on a manifest
+  dataset; all 16 `bench-tall` runs raised zero objections and looped once. A run that loops three
+  times costs about 2.5x, and every price in `SUBSETS` assumes it away. If any cell loops, its cost
+  overrun is explained and the estimate is not wrong.
+- **A modeler timeout cannot surface as `halted_at`**, for the reason recorded on 2026-09-02: it
+  reports through `run.failure(...)`, which defaults `recoverable=True`. It appears as
+  `errored: true` with `halted_at: null` and no `chosen_model`. Unchanged and still the one known
+  gap in `halted_at`'s coverage.
+- **What will not fire.** `MAX_CONSECUTIVE_FAILURES = 3` counts only runs that RAISE, and a node
+  timeout does not raise.

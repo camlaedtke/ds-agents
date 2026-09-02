@@ -87,14 +87,22 @@ are reviewer on/off and single-agent-vs-team.
 - **The AMLB self-signed certificate** still blocks vendoring AMLB's own per-dataset numbers.
 - **Two AMLB candidates could not be fetched at all** (`guillermo`, `Robert`). Unchanged.
 - **LangSmith is wired but never exercised.** Unverified until a key exists.
-- `ModelResult` has no field for the modeler's `rationale` or a per-candidate `fit_error`. The
-  `fit_error` half is a real gap: `modeler.py:448` raises a `PipelineError` naming it, so the fact
-  reaches `errors` as prose but never reaches a column.
+- ~~**`ModelResult` has no field for a per-candidate `fit_error`.**~~ **CLOSED 2026-09-02** -- see
+  below. The `rationale` half is NOT closed and is not a gap: the modeler's prose about its own
+  choice is exactly the thing `measurement-independence` says no number may come from, and nothing
+  reads it.
 - ~~**`errored` needs a companion column.**~~ **CLOSED 2026-09-02** -- and the answer was that it
   needed no column. See below.
 
 ## Closed on 2026-09-02
 
+- ~~**`ModelResult` has no field for a per-candidate `fit_error`.**~~ Closed by adding the field and
+  three columns -- `n_candidates`, `n_candidates_failed_to_fit`, `candidates_failed_to_fit`. The
+  `PipelineError` was deliberately LEFT IN PLACE: a candidate that will not fit is a genuine
+  anomaly, so this is a companion column and not the reclassification the cardinality skip got.
+  `reporter._model_note` reads the field instead of inferring from empty `cv_scores`, and escapes it
+  before rendering -- it is the one report cell whose content comes from an exception, and `_table`
+  escapes nothing.
 - ~~**`errored` is TRUE on four completely healthy runs.**~~ Closed by making the skip a decision
   rather than an error. Five committed rows stay wrong permanently and cannot be edited: four in
   `2026-09-02_bench-tall.jsonl` and one in `2026-09-01_adult-smoke.jsonl` -- **every row `adult` has

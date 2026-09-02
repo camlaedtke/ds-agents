@@ -465,6 +465,14 @@ class ModelResult(Contract):
         description="What the modeler says it scored. A claim, not a measurement. The harness "
         "writes the independent number to PipelineState.verified_holdout_score.",
     )
+    fit_error: str | None = Field(
+        default=None,
+        description="Why this candidate could not be fit at all, as 'Type: message'. NOT "
+        "derivable from cv_scores: an empty list also means fit-but-scored-nothing, which is a "
+        "different event with a different cause. The snippet records this per candidate and the "
+        "node also raises a PipelineError for it -- the field is a companion to that error, not "
+        "a replacement, because a candidate that will not fit is a genuine anomaly.",
+    )
     model_artifact: ArtifactId | None = None
 
     @computed_field
@@ -1071,6 +1079,19 @@ class PipelineState(Contract):
             # names the columns but never reaches a results row, so before this column the only
             # trace a skip left in `evals/results/` was the `errored` flag it wrongly set.
             "n_skipped_high_cardinality": len(self.skipped_high_cardinality),
+            # Which candidates could not be fit at all, as a count and its names beside the
+            # denominator that makes them readable -- the `false_alarm` / `false_alarm_columns`
+            # shape. Before these columns the fact reached `evals/results/` only as prose inside
+            # `errors`, so "an estimator would not fit" and any of the other twenty-one
+            # `PipelineError` sites were the same `errored: true`.
+            #
+            # `n_candidates` is not decoration. A run halted at `feature_eng` writes a row with no
+            # candidates at all, and without the denominator its zero numerator reads as "every
+            # candidate fit fine" on a run where none was ever attempted. Third time this repo has
+            # paid for that rule, after `leakage_graded` and `baseline_separation`.
+            "n_candidates": len(self.candidates),
+            "n_candidates_failed_to_fit": sum(1 for c in self.candidates if c.fit_error),
+            "candidates_failed_to_fit": sorted(c.name for c in self.candidates if c.fit_error),
             # the same comparison one node upstream. `None` rather than empty when the profiler
             # never ran: a node that crashed nominated nothing in a different sense than a node
             # that looked and declined, and averaging those together would be a lie.

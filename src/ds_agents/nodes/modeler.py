@@ -456,6 +456,7 @@ def modeler(state: PipelineState, *, tools: Tools, model: StructuredModel) -> di
             params=c.get("params", {}),
             cv_scores=c.get("cv_scores", []),
             claimed_holdout_score=c.get("holdout_score"),
+            fit_error=c.get("fit_error"),
         )
         for c in raw_candidates
     ]

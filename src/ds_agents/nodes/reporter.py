@@ -29,6 +29,10 @@ from ds_agents.state import ModelResult, NodeEvent, Objection, PipelineState
 from ds_agents.tools.llm import StructuredModel
 from ds_agents.tools.protocol import ToolError, Tools
 
+# A fit error rendered whole turns one markdown table cell into a paragraph. The full text is
+# never lost: it is on `ModelResult.fit_error` and in the `PipelineError` the modeler raised.
+MODEL_NOTE_LIMIT = 120
+
 REPORT_HEADER = (
     "Written by the reporter node. Nothing here is a grade: `claimed_holdout_score` is what the "
     "system said about itself, scored on a holdout the system chose. The independent number is "
@@ -147,8 +151,19 @@ def _feature_section(state: PipelineState) -> list[str]:
 
 
 def _model_note(candidate: ModelResult) -> str:
-    # `ModelResult` carries no `fit_error` field (nothing reads it), so a failed fit is only
-    # visible as an empty `cv_scores`. Derived from a real field rather than inventing one here.
+    # Two different facts that used to render as one string, because `ModelResult` had nowhere to
+    # put the first. `fit_error` is why the estimator could not be fit at all; empty `cv_scores`
+    # with no error is a fit that produced no score, which has a different cause.
+    #
+    # Flattened and escaped BEFORE truncating, because this is the one cell in the report whose
+    # content comes from an exception rather than from a field this repo shapes. `_table` joins
+    # cells on `|` and `_fmt` escapes nothing, so a multi-line sklearn message -- a convergence
+    # warning or a shape mismatch, both routine -- would silently break the row it is rendered
+    # into. Truncation alone does not fix that: a newline inside the first 120 characters breaks
+    # the table just as thoroughly as one after them.
+    if candidate.fit_error:
+        flat = " ".join(candidate.fit_error.split()).replace("|", "\\|")
+        return f"no successful fit: {flat[:MODEL_NOTE_LIMIT]}"
     return "no successful fit" if not candidate.cv_scores else "-"
 
 
