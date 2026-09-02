@@ -183,25 +183,75 @@ class TestSubsetsPointAtRealFixtures:
                 f"bench-tall cell {cell.name!r} changes a condition; only the dataset may vary"
             )
 
-    def test_bench_tall_estimates_are_the_pre_registered_cost_model(self):
-        """These four `est_cost_usd` values ARE the pre-registration, so a typo in one is not a
-        planning nuisance -- it silently rewrites the prediction the arm is measured against.
+    def test_bench_tall_estimates_are_the_measured_means(self):
+        """The arm has RUN, so these four stopped being predictions on 2026-09-02.
 
-        Pinned against the `bench-mid` fit rather than as four literals, so the numbers stay
-        traceable to the four measurements they came from: OLS of `cost ~ a + b * n_features` on
-        (5, $0.011), (9, $0.013), (118, $0.041), (144, $0.042) gives a = $0.010621 and
-        b = $0.00023375 per column. See docs/DECISIONS.md 2026-09-02.
+        They are now the per-cell means of `evals/results/2026-09-02_bench-tall.jsonl` (n=4 a cell),
+        rounded UP to the nearest $0.001 per the rule the `ci` comment states. Pinned as literals
+        because that is what they now are -- a measurement, traceable to one file. The predictions
+        they replaced were $0.014 / $0.014 / $0.016 / $0.017 and every one was low.
         """
-        a, b = 0.010621, 0.00023375
-        entries = {entry.dataset_id: entry for entry in load_manifest().datasets}
+        measured = {
+            "adult": 0.016,
+            "bank_marketing": 0.018,
+            "numerai28_6": 0.018,
+            "higgs": 0.025,
+        }
         for cell in SUBSETS["bench-tall"]:
-            predicted = a + b * entries[cell.dataset].n_features
-            assert cell.est_cost_usd == pytest.approx(round(predicted, 3), abs=1e-9), (
-                f"bench-tall cell {cell.name!r} carries est_cost_usd {cell.est_cost_usd}, which is "
-                f"not the pre-registered prediction {round(predicted, 3)} for "
-                f"{entries[cell.dataset].n_features} columns. Once the arm has RUN these become "
-                "measured means and this test is what should be updated to say so."
+            assert cell.est_cost_usd == measured[cell.dataset], (
+                f"bench-tall cell {cell.name!r} carries est_cost_usd {cell.est_cost_usd}, not the "
+                f"measured mean {measured[cell.dataset]} from the 2026-09-02 run. These are a "
+                "measurement now; change them only by running the arm again."
             )
+
+    def test_full_prices_every_manifest_dataset_and_says_which_were_measured(self):
+        """`full` is only honest if every dataset in the manifest is in it exactly once.
+
+        Nine cells carry measured means; four carry a modelled price and have never been run. The
+        split is asserted rather than described, because the comment claiming it is the only thing
+        a reader has to go on when deciding whether to trust the total.
+        """
+        entries = {entry.dataset_id for entry in load_manifest().datasets}
+        cells = SUBSETS["full"]
+        assert {cell.dataset for cell in cells} == entries
+        assert len(cells) == len(entries), "a dataset appears twice in `full`"
+
+        never_run = {"australian", "kc1", "sylvine", "kr_vs_kp"}
+        assert never_run < entries
+        measured = {
+            "phoneme": 0.011,
+            "amazon_employee_access": 0.014,
+            "adult": 0.016,
+            "credit_g": 0.017,
+            "bank_marketing": 0.018,
+            "numerai28_6": 0.018,
+            "higgs": 0.025,
+            "nomao": 0.041,
+            "jasmine": 0.042,
+        }
+        for cell in cells:
+            if cell.dataset in measured:
+                assert cell.est_cost_usd == measured[cell.dataset], (
+                    f"`full` cell {cell.name!r} disagrees with the measured mean this repo has for "
+                    f"{cell.dataset}; `full` and the subset that measured it must not drift apart"
+                )
+
+    def test_full_varies_nothing_but_the_dataset(self):
+        """Thirteen datasets, one condition set. Same reason as `bench-mid` and `bench-tall`."""
+        reference = Cell(name="reference", dataset="adult")
+        for cell in SUBSETS["full"]:
+            assert cell.conditions() == reference.conditions(), (
+                f"full cell {cell.name!r} changes a condition; only the dataset may vary"
+            )
+
+    def test_full_resolves_rather_than_raising(self):
+        """It raised a bespoke ValueError for four sessions while its blocker moved. It does not
+        any more, and nothing should quietly reintroduce the special case."""
+        from ds_agents.harness import _resolve_subset
+
+        assert _resolve_subset("full") == SUBSETS["full"]
+        with pytest.raises(ValueError, match="unknown eval subset"):
+            _resolve_subset("fulll")
 
     def test_bench_tall_anti_correlates_rows_with_categoricals(self):
         """The property that makes the arm interpretable, pinned so it cannot quietly stop holding.
@@ -260,56 +310,34 @@ class TestForcedDropReleaseIsAClosedAxis:
         assert "forced_drop_release" not in names
 
 
-class TestTheFullSubsetIsNotYetRunnable:
-    """`full` no longer waits on anything that has to be built. It waits on money.
+class TestTheFullSubsetIsRunnableNow:
+    """`full` raised a bespoke error for four sessions while its blocker moved, and this class
+    existed to keep that error honest as each blocker was retired: first a missing manifest, then a
+    missing run path, then a missing `baseline_score`, then the split manifest, then cost.
 
-    This message has now been wrong THREE times, every time because the blocker moved rather than
-    because anyone mistyped it: first it named a missing manifest that had landed, then a missing
-    run path that `bench-smoke` exercises, then a missing `baseline_score` that now ships as
-    `baseline_zero_score` / `baseline_unit_score`. Each of those assertions was written to fail the
-    moment the thing it named arrived, which is the only reason the message was ever corrected. So
-    the pattern continues: the positive assertion is on the CURRENT blocker, and the negative ones
-    keep every retired blocker out, because a message that still names a shipped feature as missing
-    is not stale, it is false.
+    On 2026-09-02 the last four datasets were priced and the special case was deleted. The
+    assertions invert accordingly. What is asserted now is the property that made the special case
+    removable -- `full` covers the manifest exactly, and its price is real -- plus the one thing
+    worth defending: nobody should reintroduce a bespoke branch for the name. If `full` becomes
+    unrunnable again, that is a subset definition problem with its own test, not a message to edit.
     """
 
-    def test_full_raises_pointing_at_the_only_remaining_blocker(self):
+    def test_full_runs_the_whole_manifest_and_is_priced(self):
+        report = run_eval(subset="full", name="probe", dry_run=True)
+        assert len(SUBSETS["full"]) == len(load_manifest().datasets)
+        assert report.rows_written == 0, "dry run writes nothing"
+        assert all(cell.est_cost_usd > 0 for cell in SUBSETS["full"])
+
+    def test_an_unknown_subset_still_gets_the_ordinary_message(self):
+        """`full` used to be the reason this branch had a sibling. It no longer does, and a typo
+        should not get a lecture about datasets it did not ask for."""
         with pytest.raises(ValueError) as excinfo:
-            run_eval(subset="full", name="probe", dry_run=True)
-
+            run_eval(subset="fulll", name="probe", dry_run=True)
         message = str(excinfo.value)
-        assert "cost" in message, "the one remaining blocker is a measured cost per dataset"
-        # "split" is deliberately NOT asserted either way. It named the second blocker (the split
-        # manifest outgrowing the read cap above ~36k rows) until the 2026-09-01 fix
-        # (ds_agents/split_manifest.py), so it used to belong in the positive list below. Asserting
-        # its absence now would be just as fragile in the other direction: the fixed message is
-        # free to still say the word while describing the history ("the split manifest fix
-        # landed"), and that mention isn't a false claim the way naming a shipped feature as
-        # missing would be -- it's not claiming anything is still broken. So it belongs in neither
-        # list; the four dataset names below are the ones that actually still need pinning.
-        for dataset in ("adult", "bank_marketing", "higgs", "numerai28_6"):
-            # These are NOT unrunnable any more -- the split fix means all four are runnable. They
-            # still belong in the positive list because the message still needs to name them, for a
-            # different reason: they are runnable but UNPRICED, which is the actual remaining
-            # blocker. A message that dropped them silently would stop telling the next session
-            # which four datasets to price.
-            assert dataset in message, f"{dataset} is unpriced and the message must say so"
-        assert "bench-smoke" in message, "the message must point at what DOES work"
-        assert "bench-mid" in message, "and at how the measuring is being done"
-        for shipped in ("baseline_score", "score_ratio", "verified_holdout_score"):
-            assert shipped not in message, (
-                f"{shipped} shipped or was retired; a message still naming it as missing is false"
-            )
-        assert "toy" in message
-        assert "ci" in message
-
-    def test_an_unknown_subset_also_lists_what_is_available(self):
-        with pytest.raises(ValueError) as excinfo:
-            run_eval(subset="not-a-real-subset", name="probe", dry_run=True)
-
-        message = str(excinfo.value)
-        assert "toy" in message
-        assert "ci" in message
+        assert "unknown eval subset" in message
+        assert "full" in message, "the available list must include what they probably meant"
+        for retired in ("baseline_score", "score_ratio", "not runnable yet"):
+            assert retired not in message
 
 
 class TestFailureHandling:

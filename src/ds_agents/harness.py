@@ -173,13 +173,21 @@ SUBSETS: dict[str, tuple[Cell, ...]] = {
     # `bench-smoke`'s error and it is the safe direction to be wrong in, but it is still a 40% miss.
     #
     # One caveat that a mean cannot carry: all 8 runs took the review loop exactly once and none
-    # raised an objection, so these are the cost of a run that passes first time. The `ci` comment
+    # raised an objection, so these are the cost of a run that passes first time.
+    #
+    # `amazon_employee_access` was $0.013 until 2026-09-02 and is $0.014 now. Not a re-measurement:
+    # its mean is $0.013007, and rounding that UP -- the rule this comment has always stated, for
+    # the stated reason that an estimate must never be optimistic -- gives $0.014. It had been
+    # rounded to nearest instead, which put it $0.000007 below the mean. Found by
+    # `tests/test_cost_model.py`, which derives every price here from the results files rather than
+    # trusting the literal, on the first run of that test. `est_cost_usd` never reaches a results
+    # row, so no published number moves. The `ci` comment
     # above records that a run looping three times costs about 2.5x one that does not, and nothing
     # here has been observed looping.
     "bench-mid": (
         Cell(name="phoneme-narrow-short", dataset="phoneme", est_cost_usd=0.011),
         Cell(name="jasmine-wide-short", dataset="jasmine", est_cost_usd=0.042),
-        Cell(name="amazon-narrow-tall", dataset="amazon_employee_access", est_cost_usd=0.013),
+        Cell(name="amazon-narrow-tall", dataset="amazon_employee_access", est_cost_usd=0.014),
         Cell(name="nomao-wide-tall", dataset="nomao", est_cost_usd=0.041),
     ),
     # The subset that prices the last four datasets, and the one that tests the cost model rather
@@ -228,74 +236,102 @@ SUBSETS: dict[str, tuple[Cell, ...]] = {
     # field, and `eval-diff` will refuse the comparison. It is a table you may draw by hand with the
     # boundary named, never one the tooling blesses.
     #
-    # The four numbers below are PREDICTIONS, not measurements -- the only ones in this dict that
-    # are. They are `a + b * n_features` from the `bench-mid` fit (a=$0.010621, b=$0.00023375 per
-    # column): $0.0139, $0.0144, $0.0155, $0.0172, which round to the $0.001 the field carries as
-    # $0.014, $0.014, $0.016, $0.017. Shipping them here
-    # IS the pre-registration, and the commit that replaces them with measured means is the
-    # permanent record of how wrong they were, which is what `bench-mid` and `ci` both did.
+    # MEASURED means from the 2026-09-02 run (n=4 a cell, 16 rows, $0.3021,
+    # `evals/results/2026-09-02_bench-tall.jsonl`), rounded up to the nearest $0.001, replacing the
+    # four predictions they shipped with. The predictions were $0.014 / $0.014 / $0.016 / $0.017
+    # from `a + b * n_features`; measured $0.0159 / $0.0178 / $0.0172 / $0.0246.
     #
-    # Register the band with them: the fit has 4 points and 2 parameters, and its own in-sample
-    # residual sd is $0.0026. A residual inside +/-$0.0026 is consistent with the model. (A textbook
-    # 95% interval on 2 dof carries t=4.30 and would accept anything, which is why the band and not
-    # the interval is the pre-registered rule.) Note the `adult` smoke run's +$0.0019 is SMALLER
-    # than the error the fit already makes on its own training data -- it never was evidence
-    # against the model, and `docs/NEXT.md` calling it "13% high" was reading noise as a finding.
+    # WHAT THE ARM SETTLED, and it is not either pre-registered hypothesis.
+    #
+    #   cell               cols  rows   cat  predicted  measured   residual   band +/-$0.0026
+    #   adult                14  48.8k    7    $0.0139   $0.0159    +$0.0020  inside
+    #   bank_marketing       16  45.2k    9    $0.0144   $0.0178    +$0.0034  ABOVE
+    #   numerai28_6          21  96.3k    0    $0.0155   $0.0172    +$0.0017  inside
+    #   higgs                28  98.1k    0    $0.0172   $0.0246    +$0.0074  ABOVE
+    #
+    # H_categorical predicted the two categorical cells high; one was and one was not.
+    # H_rows predicted the two tall cells high; one was and one was not, and `bank_marketing` at
+    # 45k ran higher than `numerai28_6` at 96k, which a row term cannot order. So neither
+    # pre-registered ordering appeared.
+    #
+    # What DID appear is simpler and was not one of the two options: **all four residuals are
+    # positive**, as is `credit_g`'s +$0.0015, so the column-only model has under-predicted 5 of 5
+    # datasets outside the four it was fitted on (sign test p=0.031). Refitting on all nine measured
+    # datasets, a row term cuts the residual sd from $0.00296 to $0.00224 while a categorical-count
+    # term makes it WORSE ($0.00320) and adds nothing once rows are in ($0.00206 for both).
+    # **H_categorical is refuted**: the mechanism was plausible -- the reviewer reads a transform
+    # artifact whose `LEVELS` grow with one-hot count -- and the data says it is not worth a term.
+    # H_rows survives as a term but not as the clean ordering it was registered as.
+    #
+    # The nine-dataset refit, which is what `full` below is priced from for the datasets that have
+    # never been run:  cost ~= $0.010163 + $0.000230 * n_features + $0.005609 * (n_rows / 1e5).
+    #
+    # The caveat a mean cannot carry, and it is the same one `bench-mid` recorded: all 16 runs
+    # raised ZERO objections, took the review loop exactly once and returned `pass`. Nothing in this
+    # project has ever been observed looping on a manifest dataset, and the `ci` comment above
+    # records that a run that loops three times costs about 2.5x. Every number in this dict is the
+    # cost of a run that passes first time.
     "bench-tall": (
-        Cell(name="adult-categorical-tall", dataset="adult", est_cost_usd=0.014),
-        Cell(name="bank-categorical-tall", dataset="bank_marketing", est_cost_usd=0.014),
-        Cell(name="numerai-numeric-tall", dataset="numerai28_6", est_cost_usd=0.016),
-        Cell(name="higgs-numeric-tall", dataset="higgs", est_cost_usd=0.017),
+        Cell(name="adult-categorical-tall", dataset="adult", est_cost_usd=0.016),
+        Cell(name="bank-categorical-tall", dataset="bank_marketing", est_cost_usd=0.018),
+        Cell(name="numerai-numeric-tall", dataset="numerai28_6", est_cost_usd=0.018),
+        Cell(name="higgs-numeric-tall", dataset="higgs", est_cost_usd=0.025),
     ),
-    # "full" is deliberately absent. See `_resolve_subset`.
+    # Every binary dataset in the manifest, one cell each. This entry exists as of 2026-09-02,
+    # when the last four datasets were priced; before that `_resolve_subset` raised a bespoke error
+    # for the name, and the blocker that error described moved four times.
+    #
+    # It does NOT move a fifth time, because it is no longer a code or a costing problem. Nine of
+    # the thirteen numbers below are measured means from real invocations. The other four are
+    # modelled, and they are the four SMALLEST shapes in the manifest -- `australian` (690 rows),
+    # `kc1` (2,109), `sylvine` (5,124), `kr_vs_kp` (3,196) -- priced from the nine-dataset refit
+    # recorded in the `bench-tall` comment plus one residual sd ($0.0022) and rounded up, because
+    # the one thing that arm established about this model is that it under-predicts out of sample.
+    # The cap, not the estimate, is what protects the budget from them being wrong.
+    #
+    # `kr_vs_kp` is the one to watch: 36 columns, ALL categorical, 73 one-hot levels, which is more
+    # than any dataset anyone has run. H_categorical was refuted as a cost term at 7 to 13
+    # categorical columns and that is not the same as refuted at 36, so its $0.022 is the softest
+    # number here.
+    #
+    # WHAT RUNNING THIS COSTS, which is the thing that was never written down while the blocker was
+    # always something else: 13 cells at $0.276 a full pass. At the `--replicates 2 --n 2` that
+    # /run-eval requires for anything comparative, that is 52 runs, about **$1.10 and 45-70
+    # minutes**. Nothing technical stands in the way of that. It is a budget decision and it has
+    # never been put to anyone, which is now the honest content of the blocker.
+    "full": (
+        # measured
+        Cell(name="phoneme", dataset="phoneme", est_cost_usd=0.011),
+        Cell(name="amazon-employee-access", dataset="amazon_employee_access", est_cost_usd=0.014),
+        Cell(name="adult", dataset="adult", est_cost_usd=0.016),
+        Cell(name="credit-g", dataset="credit_g", est_cost_usd=0.017),
+        Cell(name="bank-marketing", dataset="bank_marketing", est_cost_usd=0.018),
+        Cell(name="numerai28-6", dataset="numerai28_6", est_cost_usd=0.018),
+        Cell(name="higgs", dataset="higgs", est_cost_usd=0.025),
+        Cell(name="nomao", dataset="nomao", est_cost_usd=0.041),
+        Cell(name="jasmine", dataset="jasmine", est_cost_usd=0.042),
+        # modelled, never run
+        Cell(name="australian", dataset="australian", est_cost_usd=0.016),
+        Cell(name="sylvine", dataset="sylvine", est_cost_usd=0.018),
+        Cell(name="kc1", dataset="kc1", est_cost_usd=0.018),
+        Cell(name="kr-vs-kp", dataset="kr_vs_kp", est_cost_usd=0.022),
+    ),
 }
 
 
 def _resolve_subset(subset: str) -> tuple[Cell, ...]:
-    """`SUBSETS[subset]`, or a `ValueError` that says why the name did not resolve.
+    """`SUBSETS[subset]`, or a `ValueError` listing what would have resolved.
 
-    `full` gets its own message because it is not a typo -- it is real Phase 4 scope that has not
-    finished. The blocker has MOVED AGAIN, and the message says where to. Everything about the
-    GRADING is now built: the manifest exists, a `Cell` can name a manifest dataset, a holdout is
-    withheld before the graph starts, `verified_holdout_score` is measured on it, and the scale it
-    is read against -- a constant class-prior predictor and a RandomForest, both on the same rows
-    -- is measured beside it. `bench-smoke` proves all of that on `credit_g`. The split manifest
-    that used to block four datasets from completing a run at all (2026-09-01,
-    `ds_agents/split_manifest.py`) is fixed too, so it is back down to ONE blocker rather than two.
-
-    What is left is money. `adult`, `bank_marketing`, `higgs` and `numerai28_6` are runnable now but
-    are not priced -- `bench-mid`'s four cells measured a cost model of roughly `a + b * n_features`
-    (5 columns $0.011, 9 columns $0.013, 118 columns $0.041, 144 columns $0.042; see
-    `evals/results/2026-09-01_bench-mid.jsonl`), and the only evidence on any of the four is a
-    single `adult` smoke run at $0.0158 against a $0.014 prediction
-    (`evals/results/2026-09-01_adult-smoke.jsonl`, n=1, not a cell). `bench-smoke`'s own guess was
-    wrong by more than a factor of two in the cheap direction -- which is the argument for measuring
-    these four rather than extrapolating the model onto them, and `higgs` in particular carries a
-    `MODEL_TIMEOUT_S` risk and a 46 MB `register_dataset` read that no measurement has touched.
-
-    Any other unknown name is more likely a typo, so it gets the shorter message -- but both list
-    what IS runnable, because that is what the caller needs next either way.
+    `full` used to get a bespoke message of its own, rewritten four times as its blocker moved --
+    the manifest, then the run-and-grade path, then the split manifest, then cost. As of 2026-09-02
+    it is an ordinary entry in `SUBSETS` and needs no special case, because the last four datasets
+    are priced. What is left is not a blocker this function can describe: running `full` properly is
+    52 runs at about $1.10, and whether to spend that is a decision for a person. The comment on the
+    entry itself says so, which is where a reader who is about to spend the money will be looking.
     """
     if subset in SUBSETS:
         return SUBSETS[subset]
     available = ", ".join(sorted(SUBSETS))
-    if subset == "full":
-        raise ValueError(
-            "subset 'full' is not runnable yet, and it now waits on one thing: cost. adult, "
-            "bank_marketing, higgs and numerai28_6 are runnable -- the split manifest fix landed "
-            "2026-09-01 -- but they are not priced. `--subset bench-mid` measured a cost model of "
-            "roughly a + b * n_features on the other nine datasets (5 columns $0.011, 9 columns "
-            "$0.013, 118 columns $0.041, 144 columns $0.042; see "
-            "evals/results/2026-09-01_bench-mid.jsonl). The only evidence on these four is one "
-            "adult smoke run at $0.0158 against a $0.014 prediction (n=1, not a cell), and higgs "
-            "carries a MODEL_TIMEOUT_S risk and a 46 MB register_dataset read that nothing has "
-            "measured. Checking the model on all four is what the next session does. The GRADING "
-            "is done: see "
-            "`--subset bench-smoke`, which runs and scores credit_g end to end. Also note "
-            "dataset_id is an eval-diff condition field, so 13 datasets is 13 cells. See "
-            "docs/PLAN.md Phase 4 and docs/NEXT.md. "
-            f"Available subsets: {available}."
-        )
     raise ValueError(f"unknown eval subset {subset!r}. Available subsets: {available}.")
 
 

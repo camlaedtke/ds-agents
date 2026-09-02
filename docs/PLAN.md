@@ -376,6 +376,36 @@ is the one row-driven term and is never more than 4% of a run.
       "`errored` needs a companion column" item. `publishable()` is unchanged. See DECISIONS.md
       2026-09-01 (third entry).
 
+- [x] **The last four datasets priced, and `--subset full` built. The phase closes on money being a
+      decision rather than a blocker.** `bench-tall` -- `adult`, `bank_marketing`, `numerai28_6`,
+      `higgs` -- 16 rows at n=4 a cell, $0.3021, `evals/results/2026-09-02_bench-tall.jsonl`.
+      Measured $0.0159 / $0.0178 / $0.0172 / $0.0246. `SUBSETS["full"]` now exists with 13 cells (9
+      measured, 4 modelled) and `_resolve_subset`'s bespoke message is deleted after four
+      corrections. Endpoints: `rescore_status` and `baseline_status` ok 16/16, `baseline_zero_score`
+      exactly 0.5 16/16, `refit_claim_gap` exactly 0.0 16/16, `halted_at` null 16/16, every timing
+      inside its budget with room (`higgs` modeler 23.6s of 240s).
+      **The arm was pre-registered as a hypothesis test and it returned the null option.** Neither
+      "the model needs a row term" nor "the model was fitted on datasets with no categorical
+      columns" produced its predicted ordering; what happened instead is that all four residuals
+      were positive, making 5 of 5 out-of-sample datasets under-predicted. Refitting on nine
+      datasets, a row term helps and a categorical term makes things worse, so **H_categorical is
+      refuted despite a real mechanism**. Two defects found that nobody was looking for: `errored` is
+      `true` on four completely healthy `adult` runs because `feature_eng` logs a routine
+      high-cardinality skip as a `PipelineError`, which means the 2026-09-01 claim that `halted_at`
+      CLOSED the "`errored` needs a companion column" item was too strong; and
+      `baseline_normalised_score` returns 2.089 on `numerai28_6` because it divides by the unit
+      point's span, which on a near-chance dataset is 0.0101. Both reopened in NEXT.md rather than
+      patched. See DECISIONS.md 2026-09-02.
+
+Scope note (2026-09-02): Phase 4 closes. Two boxes stay `[~]` and both for reasons outside the
+code: the manifest, because AMLB's raw-results store presents a self-signed certificate and a number
+this repo cannot re-fetch is one it will not publish; and the `ci` subset, because a GitHub Actions
+job that spends real API money on every push needs a policy nobody has written, there is no
+`.github/` here, and no key is available to Actions. `--subset full` is runnable and priced at about
+$1.10 for 52 runs; it has not been run, because that is a budget decision and it has never been put
+to anyone. That is the phase's actual exit state and it is not a blocker of the kind the previous
+four scope notes described.
+
 ## Phase 5: Ablations and writeup (3 to 4 sessions)
 - [~] reviewer on/off, Haiku/Sonnet reviewer, single agent vs team, loop cap 1/3. Two of these ran
       early, in Phase 3. The Haiku/Sonnet reviewer arm ran crossed with a prompt condition --

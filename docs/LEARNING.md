@@ -857,3 +857,60 @@ Priority: **load-bearing** means the thesis breaks if this is wrong and you cann
   replacement deliberate: `decode_split` takes the frame length as a required argument, so no caller
   can forget to prove it is decoding against the frame it actually read.
   Related: [[silent-refusal-looks-like-a-result]], [[encoding-as-a-contract]].
+
+### a-fit-is-not-a-model — four points, two parameters, and the residual nobody looked at
+- Priority: load-bearing
+- Came up: 2026-09-02, deciding whether `adult`'s $0.0158 refuted the `bench-mid` cost model
+- Status: flagged
+- Why it matters here: `bench-mid` fitted `cost ~= a + b * n_features` on four measurements, and
+  this project immediately began quoting new runs against it — `docs/NEXT.md` recorded the one
+  `adult` smoke run as "**13% high**", and that phrasing is what set the next session's agenda. The
+  fit has 4 points and 2 parameters — OLS of cost on `n_features` over the four `est_cost_usd`
+  values `bench-mid` shipped, which is what the pre-registration actually used, and is now
+  re-derived every run by `tests/test_cost_model.py` rather than quoted. Its own in-sample residuals
+  are −$0.0008 / +$0.0003 / +$0.0028 / −$0.0023, a residual sd of **$0.0026 on 2 degrees of
+  freedom**, and `adult`'s residual is
+  **+$0.0019** — *smaller than the error the model already makes on the data it was fitted to*. A
+  textbook 95% prediction interval at 14 columns is `[$0.0004, $0.0274]`, a span wider than any cost
+  this project has ever measured. So the honest report was never "the model missed"; it was "the
+  model is under-determined and this point constrains nothing."
+  The general shape: **before calling a new observation a miss, compute what the fit already fails
+  to explain.** A model quoted without its residual scale converts noise into findings, and it does
+  so in the direction people want, because a discrepancy is a story and agreement is not. The cheap
+  tell is degrees of freedom: at `n − p ≤ 2` the interval is set by the `t` multiplier (4.30 here)
+  rather than by the data, and the right output is a band and a decision rule stated in advance, not
+  an interval nobody can act on. This is [[replication-before-attribution]] applied to a continuous
+  quantity instead of a count — and note the eventual finding needed *five* points and a sign test
+  to become real, not a sharper reading of the first one.
+  One practical corollary this project had to learn twice: a residual scale that lives in prose is
+  not checkable, and the first thing `tests/test_cost_model.py` did on being written was find that
+  `amazon_employee_access` was priced $0.000007 *below* its own measured mean, against a rule the
+  comment above it had stated correctly for two sessions.
+  Related: [[replication-before-attribution]], [[two-axes-treated-as-one]],
+  [[cost-hides-in-the-cheapest-case]].
+
+### confounded-by-what-you-did-not-vary — the fitted set had one dtype, and nobody chose that
+- Priority: load-bearing
+- Came up: 2026-09-02, pricing four datasets outside the cost model's fitted range
+- Status: flagged
+- Why it matters here: `bench-mid` was designed as a careful 2x2 crossing rows with columns, and it
+  did separate those two axes — that part worked. But all four datasets it selected (`phoneme`,
+  `jasmine`, `amazon_employee_access`, `nomao`) have **zero categorical columns**, so `feature_eng`
+  one-hot encodes nothing on any of them and `LEVELS` in the emitted transform is empty in all four.
+  Nobody controlled for that, because dtype was not one of the two axes anyone was thinking about.
+  Both out-of-sample points measured since were categorical and both ran high, and there was a real
+  mechanism to explain it: the reviewer reads the transform artifact into its prompt, and that
+  artifact grows with one-hot level count rather than with rows.
+  The general shape: **a designed experiment controls the axes you named and silently confounds
+  every axis you did not**, and "we ran a crossed design" is no protection against a factor that
+  never entered the design. The defence is a pre-run inventory — list what else varies across the
+  cells, and check whether it is correlated or anti-correlated with what you are testing. Here it
+  was anti-correlated by luck, which is what made the arm interpretable at all; had rows and
+  categoricals moved together, the same $0.30 would have settled nothing.
+  **And the ending is the part worth keeping.** The hypothesis was refuted: adding a
+  categorical-count term to the refit made the residual *worse*. A plausible mechanism, a real
+  confound in the fitted set, and prior evidence pointing the same way — and it was still not the
+  missing term. Finding a confound tells you a result is *unproven*, never that the alternative is
+  true. The confound is a reason to run the experiment, not a substitute for running it.
+  Related: [[two-axes-treated-as-one]], [[a-fit-is-not-a-model]], [[encoding-as-a-contract]],
+  [[replication-before-attribution]].

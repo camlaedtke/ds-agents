@@ -2167,3 +2167,75 @@ that replaces them with measured means is the permanent record of the miss.
   to 1.2% of its only bound in advance; see above.
 - **What will NOT fire.** `MAX_CONSECUTIVE_FAILURES = 3` counts only runs that RAISE. A node timeout
   does not raise, and per the first bullet a modeler timeout does not even halt.
+
+### Outcome, appended after the runs
+
+`evals/results/2026-09-02_bench-tall.jsonl`, 16 rows, one commit (`558548e`), **$0.3021** against a
+$0.2440 estimate and a $0.40 cap. 0 refused, 0 failed. Full numbers in `evals/results/LOG.md`.
+
+**The four measured means are the deliverable and they are in.** $0.0159 / $0.0178 / $0.0172 /
+$0.0246 against predictions of $0.0139 / $0.0144 / $0.0155 / $0.0172. `SUBSETS["bench-tall"]` now
+carries them rounded up, and `SUBSETS["full"]` exists.
+
+**The model check returned the fourth pre-registered option: neither.** H_categorical predicted
+`adult` and `bank_marketing` above the band; one was. H_rows predicted `numerai28_6` and `higgs`
+above it; one was. And `bank_marketing` (45k rows) ran dearer than `numerai28_6` (96k), which no row
+term orders. What the four have in common is only that **all four residuals are positive**, as is
+`credit_g`'s -- 5 of 5 out-of-sample datasets under-predicted, sign test p=0.031.
+
+Refitting on all nine measured datasets settles the secondary question against the hypothesis this
+entry pre-registered as the one with prior support. A row term cuts the residual sd from $0.00296 to
+$0.00224; a categorical-count term makes it **worse** ($0.00320) and adds nothing once rows are in
+($0.00206 for both). **H_categorical is refuted as a cost term.** The mechanism was real -- the
+reviewer does read a transform artifact whose `LEVELS` grow with one-hot count -- and it is not
+worth a parameter at 7 to 13 categorical columns. That is the useful shape of the result: a
+mechanism can be true and still not be the term you are missing. `kr_vs_kp` at 36 fully categorical
+columns is not covered by that refutation and is flagged in `full`'s comment as the softest price.
+
+The retained model, and what `full` prices unrun datasets from:
+`cost ~= $0.010163 + $0.000230 * n_features + $0.005609 * (n_rows / 1e5)`, residual sd $0.0022 on 9
+datasets and 3 parameters. It is offered as a planning number, not a finding: the row term's
+improvement rests heavily on `higgs`, and `est_cost_usd` never reaches a results row.
+
+### Two defects the arm found that it was not looking for
+
+**`errored` is still not a companion column, and the 2026-09-01 entry claiming otherwise was too
+strong.** All four `adult` rows carry `errored: true` with `halted_at: null`, no objection, verdict
+`pass`, and a `verified_holdout_score` of 0.9244 that nothing objected to. The cause is that `feature_eng` records
+"columns skipped as too high-cardinality to one-hot encode at 20 levels: ['native-country']" as a
+`PipelineError` with `recoverable=True`. That is an informational note about a routine decision, not
+an error, and `errored` is `bool(self.errors)`. `halted_at` fixed the fatal-versus-non-fatal
+distinction, which was the fix it was designed for; it did nothing about
+recoverable-and-not-a-problem. So a table using `errored` as a rate reports `adult` as a 100%
+failure cell today. The fix is not another column -- it is that a routine decision should not be a
+`PipelineError` at all -- and that is a node change, so it is recorded here and reopened in NEXT.md
+rather than done in a pricing session. Fifth instance of the same family, and the first one where
+the previous fix was announced as closing it.
+
+**`baseline_normalised_score` divides by a quantity that can approach zero.** `numerai28_6` returns
+**2.089**, the largest value in the project. Zero is 0.5, the unit point reaches 0.5101, the
+denominator is 0.0101. The arithmetic is exactly AMLB's `(x - zero) / (unit - zero)` and it is
+working correctly; the dataset is near-chance (published reference 0.530) and a normalisation whose
+denominator is the yardstick's own span becomes unbounded as that span vanishes. Three of four cells
+are now above 1.0. The standing parking-lot note framed this as "the unit point is a floor, not a
+ceiling", which is about values slightly above 1; that framing does not cover 2.089. Nothing warns,
+and `baseline_status` is `ok` because nothing went wrong. This wants a guard -- a status value, or a
+`None` below some minimum span, the way `baseline_normalised_score` already returns `None` on a
+planted leak -- and choosing which is a design decision, so it is reopened rather than patched.
+
+### What `--subset full` waits on now, which is nothing this repo can fix
+
+`SUBSETS["full"]` ships with 13 cells: 9 measured means, 4 modelled from the refit plus one residual
+sd and rounded up (`australian`, `kc1`, `sylvine`, `kr_vs_kp` -- the four smallest shapes). The
+bespoke `ValueError` in `_resolve_subset` is deleted, and with it the pattern of rewriting that
+message each time a blocker moved; it had been corrected four times.
+
+The blocker does not move a fifth time. Running `full` properly is 13 cells at `--replicates 2 --n
+2` -- 52 runs, about **$1.10 and 45 to 70 minutes**. Nothing technical stands in the way. Whether to
+spend it is a decision for a person, it has never been put to anyone, and that is the honest content
+of what remains. Recorded in the entry's own comment, where someone about to spend the money will
+be reading, rather than in an error message they will never see.
+
+One caveat inherited whole: all 16 runs raised zero objections and took the review loop exactly once.
+No manifest dataset has ever been observed looping, and a run that loops three times costs about
+2.5x, so `full`'s $1.10 is the price of 52 runs that all pass first time.

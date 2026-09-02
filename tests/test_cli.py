@@ -433,11 +433,30 @@ class TestTheEvalCommands:
         assert cmd_eval(args) == 2
         assert "must be at least 1" in capsys.readouterr().err
 
-    def test_an_unrunnable_subset_exits_2_and_says_why(self, capsys):
-        args = self.parse("eval", "--subset", "full", "--name", "x")
+    def test_an_unknown_subset_exits_2_and_lists_what_would_have_worked(self, capsys):
+        """`full` used to be the case this covered, because it raised on purpose. It runs as of
+        2026-09-02, so what is left to defend is that a typo is a clean exit rather than a
+        traceback -- and that the message names the subsets that DO resolve, `full` included."""
+        args = self.parse("eval", "--subset", "fulll", "--name", "x")
 
         assert cmd_eval(args) == 2
-        assert "cost" in capsys.readouterr().err
+        err = capsys.readouterr().err
+        assert "unknown eval subset" in err
+        assert "full" in err and "bench-tall" in err
+
+    def test_the_subset_help_names_every_runnable_subset(self):
+        """The help text named "toy, ci, or full (full is not implemented yet)" for four sessions
+        after `bench-smoke`, `bench-mid` and `bench-tall` shipped, and after `full` became
+        runnable. A flag whose help omits most of its values is how a subset goes unused."""
+        from ds_agents.harness import SUBSETS
+
+        eval_parser = _build_parser()._subparsers._group_actions[0].choices["eval"]
+        action = next(
+            a for a in eval_parser._actions if "--subset" in getattr(a, "option_strings", [])
+        )
+        for subset in SUBSETS:
+            assert subset in action.help, f"--subset help does not mention {subset!r}"
+        assert "not implemented" not in action.help
 
     def test_a_dry_run_exits_0_without_writing(self, tmp_path):
         """Zero rows is only an error when something was supposed to run. A dry run writing no

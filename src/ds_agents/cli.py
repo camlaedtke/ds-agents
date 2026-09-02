@@ -727,7 +727,15 @@ def _build_parser() -> argparse.ArgumentParser:
     run.set_defaults(func=cmd_run)
 
     ev = sub.add_parser("eval", help="run the benchmark harness")
-    ev.add_argument("--subset", default="ci", help="toy, ci, or full (full is not implemented yet)")
+    ev.add_argument(
+        "--subset",
+        default="ci",
+        help=(
+            "which cells to run: toy, ci, bench-smoke, bench-mid, bench-tall, or full. `full` is "
+            "all 13 manifest datasets and costs about $1.10 at --replicates 2 --n 2; --dry-run "
+            "first. See harness.SUBSETS."
+        ),
+    )
     ev.add_argument(
         "--name",
         required=True,

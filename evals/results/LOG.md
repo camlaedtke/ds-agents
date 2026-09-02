@@ -1096,3 +1096,106 @@ still **unpriced** -- `bank_marketing`, `numerai28_6` and `higgs` have never had
 `higgs` carries a `MODEL_TIMEOUT_S` risk and a 46 MB `register_dataset` read that this session
 deliberately did not confound with a correctness change. Pricing them is what `--subset full` now
 waits on, and it is money again rather than code.
+
+## 2026-09-02: bench-tall -- the last four datasets priced, and the cost model tested
+
+`evals/results/2026-09-02_bench-tall.jsonl`, 16 rows, 4 cells x n=4 (2 replicates x 2), one commit
+(`558548e`), **$0.3021 against a $0.40 cap and a $0.2440 estimate**. 0 refused, 0 failed, no early
+stop. Pre-registration: `docs/DECISIONS.md` 2026-09-02, committed before the runner was called.
+
+**Headline: neither pre-registered hypothesis appeared, and the thing that did is simpler.** The
+column-only cost model under-predicted **all four** cells. Combined with `credit_g`, it has now
+under-predicted 5 of 5 datasets outside the four it was fitted on (sign test p=0.031).
+
+| cell | cols | rows | cat | predicted | measured (n=4) | residual | band +/-$0.0026 |
+|---|---|---|---|---|---|---|---|
+| adult-categorical-tall | 14 | 48,842 | 7 | $0.0139 | **$0.0159** | +$0.0020 | inside |
+| bank-categorical-tall | 16 | 45,211 | 9 | $0.0144 | **$0.0178** | +$0.0034 | ABOVE |
+| numerai-numeric-tall | 21 | 96,320 | 0 | $0.0155 | **$0.0172** | +$0.0017 | inside |
+| higgs-numeric-tall | 28 | 98,050 | 0 | $0.0172 | **$0.0246** | +$0.0074 | ABOVE |
+
+H_categorical predicted `adult` and `bank_marketing` high: one was, one was not. H_rows predicted
+`numerai28_6` and `higgs` high: one was, one was not -- and `bank_marketing` at 45k ran higher than
+`numerai28_6` at 96k, an ordering no row term produces. Refitting on all nine measured datasets, a
+row term cuts residual sd from $0.00296 to $0.00224; a categorical-count term makes it **worse**
+($0.00320) and adds nothing once rows are in ($0.00206). **H_categorical is refuted as a cost term**
+at 7-13 categorical columns, despite a plausible mechanism. The nine-dataset refit, which is what
+`SUBSETS["full"]` prices unrun datasets from, is
+`cost ~= $0.010163 + $0.000230 * n_features + $0.005609 * (n_rows/1e5)`.
+
+`higgs`'s residual is not an artifact of its one odd run: dropping that run leaves the mean at
+$0.0240, still +$0.0068.
+
+### Endpoints, including the ones that were not interesting
+
+1. **Feasibility: passed on substance, FAILED as written.** 16/16 rows written, `halted_at` null
+   16/16, `rescore_status` and `baseline_status` `ok` 16/16. But `errored: false` did **not** hold:
+   all four `adult` rows carry `errored: true`, from a *recoverable* `feature_eng` note that
+   `native-country` was skipped as too high-cardinality at `MAX_ONE_HOT_LEVELS = 20`. Those runs
+   were healthy by every other measure: verified 0.9244, no objection, verdict `pass`. (The best
+   verified score in the arm is `bank_marketing`'s 0.9359; the point is only that nothing about
+   these four runs went wrong.) See the finding below.
+2. **Grader correctness: 16/16 on every assertion, no tolerance used.** `baseline_zero_score`
+   exactly 0.5, `baseline_recipe` `rf-v1`, `refit_claim_gap` exactly 0.0. That is nine datasets on
+   which positive class, scorer sign and row selection are now jointly asserted.
+3. **Four measured means**, replacing four predictions. No cell exceeded its estimate by 2x; the
+   worst miss was `higgs` at 1.43x. The invocation came in 24% over its estimate -- the opposite
+   direction to `bench-mid`'s 40% under, and the dear direction.
+4. **The model check.** Above. Reported as "neither", per the pre-registered fourth option.
+5. **Timing: every prediction held with room.** `node_seconds["modeler"]` max 23.6s against 240s
+   (`higgs`, pre-registered under 40s); `profiler` max 16.4s against 60s. `baseline_seconds` on
+   `higgs` was 36.2-36.8s against `tests/test_baseline_cost.py`'s 57.18s synthetic bound -- so that
+   deliberately-worst-case bound is loose by about 1.6x on real data, which is the first evidence
+   either way.
+6. **Determinism: the pre-registration was wrong in BOTH directions.** Predicted variation on the
+   categorical cells and none on the numeric ones. Observed: `adult` varied (3 distinct outcomes in
+   4 runs, `n_final_features` 11 or 12), `bank_marketing` did **not** (4 identical), `numerai28_6`
+   did not (4 identical), and **`higgs` did** -- one run of four kept 24 of 28 features instead of
+   28, with no objection raised, so `feature_eng` proposed the drops itself. That refutes the stated
+   mechanism ("a fully numeric dataset has no decision available"). It was also expensive: that run
+   scored **0.7085 verified against 0.8006** for the other three, and `baseline_normalised_score`
+   0.716 against 1.031. One in four runs on `higgs` gave up 0.09 roc_auc to an unforced drop.
+7. **`bank_marketing`'s `V12` observation.** `rescore_status` ok, 9,042 rows withheld,
+   `baseline_normalised_score` 1.019, `n_final_features` 16 in all four runs -- so the documented
+   `recorded_after_outcome` column was kept by every run and objected to by none. Recorded, not
+   scored: it remains outside `planted_leakage_columns` deliberately.
+8. **Not endpoints**, and not quoted as results: absolute `verified_holdout_score`,
+   `holdout_claim_gap`, `baseline_normalised_score`.
+
+### The two findings that were not endpoints
+
+**`errored` is true for four completely successful runs.** `docs/NEXT.md` recorded the standing
+"`errored` needs a companion column" item as CLOSED by `halted_at` on 2026-09-01. It is not. All
+four `adult` rows have `halted_at: null`, `errored: true`, no objection, `pass`, and a verified
+score of 0.9244 that nothing complained about -- because `feature_eng` records an informational "column skipped" note as
+a `PipelineError` with `recoverable=True`. `halted_at` distinguishes fatal from non-fatal, which was
+the fix; it does nothing about *recoverable-and-not-actually-a-problem*, so `errored` still cannot be
+read as "this run went wrong". Any table using `errored` as a rate will report `adult` as a 100%
+failure cell. Reopened in NEXT.md.
+
+**`baseline_normalised_score` is unstable when the unit point has no span.** `numerai28_6` returns
+**2.089**, by far the largest value anywhere in this project. The arithmetic is sound and that is the
+problem: zero is 0.5, the RandomForest unit point reaches only 0.5101, so the denominator is 0.0101
+and the pipeline's 0.5211 divides by almost nothing. `numerai28_6`'s published reference is 0.530 --
+it is a near-chance dataset, so this is a property of the dataset meeting the metric's definition,
+not a pipeline result. Three of four cells now sit above 1.0 (1.054, 1.019, 1.031). The standing note
+that "the unit point is a floor, not a ceiling" is no longer the interesting half; the interesting
+half is that the normalisation divides by a quantity that can approach zero, and nothing warns.
+
+### Not a comparand
+
+No `eval-diff` was run and none should be. All four `dataset_id` values are new, at a new commit,
+and `dataset_id` and `commit` are both `evaldiff.CONDITION_FIELDS` members -- there is nothing on the
+other side to compare to, and running it would produce a table of empty cells.
+
+### What it does not settle
+
+- **The cost of a run that loops.** All 16 runs raised zero objections, took the review loop exactly
+  once and returned `pass`. Nothing in this project has ever been observed looping on a manifest
+  dataset, and a run that loops three times costs about 2.5x. Every price in `SUBSETS` is the cost
+  of a run that passes first time, and `full`'s $1.10 inherits that assumption whole.
+- **The four cheapest datasets.** `australian`, `kc1`, `sylvine` and `kr_vs_kp` have still never
+  been run. `kr_vs_kp` is 36 columns, all categorical, 73 one-hot levels -- H_categorical was
+  refuted at 7-13 categorical columns, which is not the same as refuted at 36.
+- **Whether the row term is real or is `higgs`.** The refit's improvement rests heavily on one cell.
+  n=9 datasets, 3 parameters.
