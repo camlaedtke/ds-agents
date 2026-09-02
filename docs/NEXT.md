@@ -28,7 +28,10 @@ code. `tests/test_register_dataset_cost.py` now prints a re-derivable table for 
 `higgs` is worst at 0.25s a call, 0.75s a run, 1.2% of budget.
 
 The floor: **799 tests pass** (up from 783, plus two new modules), ruff clean, toy pipeline green
-live at $0.0304. Every number in the cost model is now derived from the committed results files by
+live -- twice, at **$0.0304 and $0.0135**. That spread is not noise to shrug at: the dear run looped
+to the cap and the cheap one passed first time, on the same fixture at the same commit. It is the
+same 2.5x that the `ci` comment records and that every price in `SUBSETS` assumes away, measured
+here by accident. Every number in the cost model is now derived from the committed results files by
 `tests/test_cost_model.py` rather than quoted in prose -- which caught, on its first run, that
 `amazon_employee_access` was priced $0.000007 BELOW its own measured mean against a rounding rule
 `harness.py` had stated correctly for two sessions.
