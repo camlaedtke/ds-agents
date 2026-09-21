@@ -1,0 +1,770 @@
+{
+  "schema_version": 1,
+  "captured_at": "2026-09-09T15:12:38.080140Z",
+  "dataset_id": "kc1",
+  "note": "single run: kept for the claim gap, 0.8107 claimed vs 0.7675 verified",
+  "state": {
+    "config": {
+      "run_id": "f66a69e8ea334a15bd3c8ecc93be1dfe",
+      "arm": "team",
+      "reviewer_enabled": true,
+      "reviewer_model": "haiku",
+      "default_model": "haiku",
+      "loop_cap": 3,
+      "reviewer_sees_code": true,
+      "naming": "descriptive",
+      "reviewer_prompt": "base",
+      "objection_routing": "as_addressed",
+      "objection_closure": "off",
+      "forced_drop_release": "withdrawn_only",
+      "holdout_fraction": 0.2,
+      "dataset_source": "benchmark",
+      "random_seed": 20260822,
+      "dataset_hash": "ae5fcabc6851ffa1e8fdb1221926c4a9d462b079cfcd5b3c25772bf48d3657a1",
+      "commit": "d8c72ff-dirty"
+    },
+    "started_at": "2026-09-09T15:11:51.273726Z",
+    "ended_at": "2026-09-09T15:12:36.692545Z",
+    "dataset_id": "kc1",
+    "task_description": "Predict defects and report roc_auc.",
+    "spec": {
+      "target": "defects",
+      "task_type": "binary",
+      "metric": "roc_auc",
+      "split_strategy": "stratified",
+      "split_key": null,
+      "positive_class": null,
+      "greater_is_better": true
+    },
+    "profile": {
+      "n_rows": 1688,
+      "n_columns": 22,
+      "columns": [
+        {
+          "name": "loc",
+          "dtype": "float64",
+          "missing_fraction": 0.0,
+          "n_unique": 135,
+          "sample_values": [
+            "1.0",
+            "83.0",
+            "48.0",
+            "69.0",
+            "58.0"
+          ]
+        },
+        {
+          "name": "v(g)",
+          "dtype": "float64",
+          "missing_fraction": 0.0,
+          "n_unique": 30,
+          "sample_values": [
+            "1.0",
+            "11.0",
+            "6.0",
+            "12.0",
+            "9.0"
+          ]
+        },
+        {
+          "name": "ev(g)",
+          "dtype": "float64",
+          "missing_fraction": 0.0,
+          "n_unique": 19,
+          "sample_values": [
+            "1.0",
+            "4.0",
+            "12.0",
+            "3.0",
+            "7.0"
+          ]
+        },
+        {
+          "name": "iv(g)",
+          "dtype": "float64",
+          "missing_fraction": 0.0,
+          "n_unique": 25,
+          "sample_values": [
+            "1.0",
+            "11.0",
+            "6.0",
+            "12.0",
+            "9.0"
+          ]
+        },
+        {
+          "name": "n",
+          "dtype": "float64",
+          "missing_fraction": 0.0,
+          "n_unique": 262,
+          "sample_values": [
+            "1.0",
+            "171.0",
+            "149.0",
+            "231.0",
+            "193.0"
+          ]
+        },
+        {
+          "name": "v",
+          "dtype": "float64",
+          "missing_fraction": 0.0,
+          "n_unique": 627,
+          "sample_values": [
+            "1.0",
+            "927.89",
+            "751.61",
+            "1212.27",
+            "1027.13"
+          ]
+        },
+        {
+          "name": "l",
+          "dtype": "float64",
+          "missing_fraction": 0.0,
+          "n_unique": 49,
+          "sample_values": [
+            "1.0",
+            "0.04",
+            "0.06",
+            "0.05",
+            "0.03"
+          ]
+        },
+        {
+          "name": "d",
+          "dtype": "float64",
+          "missing_fraction": 0.0,
+          "n_unique": 476,
+          "sample_values": [
+            "1.0",
+            "23.04",
+            "15.43",
+            "27.27",
+            "20.7"
+          ]
+        },
+        {
+          "name": "i",
+          "dtype": "float64",
+          "missing_fraction": 0.0,
+          "n_unique": 748,
+          "sample_values": [
+            "1.0",
+            "40.27",
+            "48.72",
+            "44.45",
+            "49.62"
+          ]
+        },
+        {
+          "name": "e",
+          "dtype": "float64",
+          "missing_fraction": 0.0,
+          "n_unique": 797,
+          "sample_values": [
+            "1.0",
+            "21378.61",
+            "11596.34",
+            "33061.94",
+            "21261.63"
+          ]
+        },
+        {
+          "name": "b",
+          "dtype": "float64",
+          "missing_fraction": 0.0,
+          "n_unique": 86,
+          "sample_values": [
+            "1.0",
+            "0.31",
+            "0.25",
+            "0.4",
+            "0.34"
+          ]
+        },
+        {
+          "name": "t",
+          "dtype": "float64",
+          "missing_fraction": 0.0,
+          "n_unique": 786,
+          "sample_values": [
+            "1.0",
+            "1187.7",
+            "644.24",
+            "1836.77",
+            "1181.2"
+          ]
+        },
+        {
+          "name": "lOCode",
+          "dtype": "int64",
+          "missing_fraction": 0.0,
+          "n_unique": 117,
+          "sample_values": [
+            "1",
+            "65",
+            "41",
+            "62",
+            "50"
+          ]
+        },
+        {
+          "name": "lOComment",
+          "dtype": "int64",
+          "missing_fraction": 0.0,
+          "n_unique": 27,
+          "sample_values": [
+            "1",
+            "10",
+            "2",
+            "3",
+            "4"
+          ]
+        },
+        {
+          "name": "lOBlank",
+          "dtype": "int64",
+          "missing_fraction": 0.0,
+          "n_unique": 30,
+          "sample_values": [
+            "1",
+            "6",
+            "2",
+            "5",
+            "12"
+          ]
+        },
+        {
+          "name": "locCodeAndComment",
+          "dtype": "int64",
+          "missing_fraction": 0.0,
+          "n_unique": 12,
+          "sample_values": [
+            "1",
+            "0",
+            "2",
+            "3",
+            "4"
+          ]
+        },
+        {
+          "name": "uniq_Op",
+          "dtype": "float64",
+          "missing_fraction": 0.0,
+          "n_unique": 33,
+          "sample_values": [
+            "1.0",
+            "18.0",
+            "12.0",
+            "16.0",
+            "15.0"
+          ]
+        },
+        {
+          "name": "uniq_Opnd",
+          "dtype": "float64",
+          "missing_fraction": 0.0,
+          "n_unique": 71,
+          "sample_values": [
+            "1.0",
+            "25.0",
+            "21.0",
+            "22.0",
+            "40.0"
+          ]
+        },
+        {
+          "name": "total_Op",
+          "dtype": "float64",
+          "missing_fraction": 0.0,
+          "n_unique": 194,
+          "sample_values": [
+            "1.0",
+            "107.0",
+            "95.0",
+            "156.0",
+            "124.0"
+          ]
+        },
+        {
+          "name": "total_Opnd",
+          "dtype": "float64",
+          "missing_fraction": 0.0,
+          "n_unique": 144,
+          "sample_values": [
+            "1.0",
+            "64.0",
+            "54.0",
+            "75.0",
+            "69.0"
+          ]
+        },
+        {
+          "name": "branchCount",
+          "dtype": "float64",
+          "missing_fraction": 0.0,
+          "n_unique": 43,
+          "sample_values": [
+            "1.0",
+            "21.0",
+            "11.0",
+            "23.0",
+            "17.0"
+          ]
+        },
+        {
+          "name": "defects",
+          "dtype": "bool",
+          "missing_fraction": 0.0,
+          "n_unique": 2,
+          "sample_values": [
+            "True",
+            "False"
+          ]
+        }
+      ],
+      "leakage_candidates": [
+        {
+          "column": "ev(g)",
+          "reason": "Exceptionally high mutual information with target relative to other features",
+          "evidence": "Mutual information of 0.2247, which is 2.4x higher than the second-best predictor (lOComment at 0.1653) and 3.9x the median feature association",
+          "suspicion": "medium"
+        },
+        {
+          "column": "lOComment",
+          "reason": "Elevated mutual information suggesting strong predictive relationship with defects",
+          "evidence": "Mutual information of 0.1653, second highest in dataset, with only 27 unique values across 1688 rows",
+          "suspicion": "low"
+        }
+      ],
+      "target_balance": {
+        "False": 0.8454,
+        "True": 0.1546
+      }
+    },
+    "split_artifact": "art-001-split-manifest",
+    "feature_code_artifact": "art-002-feature-transform",
+    "feature_summary": "21 source columns -> 21 matrix columns, fitted on 1350 train rows from split art-001-split-manifest.\nDropped (0): none.\nNumeric, median-imputed on train rows (21): loc, v(g), ev(g), iv(g), n, v, l, d, i, e, b, t, lOCode, lOComment, lOBlank, locCodeAndComment, uniq_Op, uniq_Opnd, total_Op, total_Opnd, branchCount.\nKept despite a profiler flag (2): ev(g) -- ev(g) (essential vocabulary regarding cyclomatic complexity) is a legitimate code complexity metric that measures vocabulary diversity in the code structure. High mutual information with defects reflects a genuine causal relationship: more complex, harder-to-understand code is more prone to defects. This is a standard Halstead metric used in software quality prediction and is not data leakage\u2014it is measured at code development time before defects manifest.; lOComment -- lOComment (lines of comments) is a standard source code metric that is available at code review/commit time. High mutual information reflects a legitimate relationship: code with more commentary may indicate complexity or areas developers felt needed explanation, making it a valid predictive signal for defect risk. This is not leakage as it is extracted directly from source code artifacts, not from defect data..",
+    "final_features": [
+      "loc",
+      "v(g)",
+      "ev(g)",
+      "iv(g)",
+      "n",
+      "v",
+      "l",
+      "d",
+      "i",
+      "e",
+      "b",
+      "t",
+      "lOCode",
+      "lOComment",
+      "lOBlank",
+      "locCodeAndComment",
+      "uniq_Op",
+      "uniq_Opnd",
+      "total_Op",
+      "total_Opnd",
+      "branchCount"
+    ],
+    "dropped_features": [],
+    "skipped_high_cardinality": [],
+    "candidates": [
+      {
+        "name": "logistic_l2",
+        "params": {
+          "max_iter": 2000,
+          "C": 1.0,
+          "random_state": 20260822
+        },
+        "cv_scores": [
+          0.7454573934837093,
+          0.7912489557226399,
+          0.8531746031746031,
+          0.8275898078529659,
+          0.8083928000852062
+        ],
+        "claimed_holdout_score": 0.8107181280258202,
+        "fit_error": null,
+        "model_artifact": null,
+        "cv_mean": 0.8051727120638249
+      },
+      {
+        "name": "hist_gbdt",
+        "params": {
+          "max_iter": 200,
+          "learning_rate": 0.1,
+          "random_state": 20260822
+        },
+        "cv_scores": [
+          0.7352234753550544,
+          0.7580409356725146,
+          0.822263993316625,
+          0.7780910609857978,
+          0.7644051549685802
+        ],
+        "claimed_holdout_score": 0.774677245831092,
+        "fit_error": null,
+        "model_artifact": null,
+        "cv_mean": 0.7716049240597144
+      }
+    ],
+    "chosen_model": {
+      "name": "logistic_l2",
+      "params": {
+        "max_iter": 2000,
+        "C": 1.0,
+        "random_state": 20260822
+      },
+      "cv_scores": [
+        0.7454573934837093,
+        0.7912489557226399,
+        0.8531746031746031,
+        0.8275898078529659,
+        0.8083928000852062
+      ],
+      "claimed_holdout_score": 0.8107181280258202,
+      "fit_error": null,
+      "model_artifact": null,
+      "cv_mean": 0.8051727120638249
+    },
+    "importance_artifact": "art-003-feature-importance",
+    "top_importances": [
+      [
+        "b",
+        0.11589564281871967
+      ],
+      [
+        "d",
+        0.10235005379236135
+      ],
+      [
+        "i",
+        0.08759413663259805
+      ],
+      [
+        "total_Op",
+        0.04356508875739634
+      ],
+      [
+        "iv(g)",
+        0.04122175901022044
+      ],
+      [
+        "uniq_Op",
+        0.04109400215169433
+      ],
+      [
+        "v(g)",
+        0.028382194728348485
+      ],
+      [
+        "v",
+        0.02477138246369004
+      ],
+      [
+        "locCodeAndComment",
+        0.021157208176438836
+      ],
+      [
+        "lOCode",
+        0.020827729962345255
+      ],
+      [
+        "n",
+        0.02020239376008596
+      ],
+      [
+        "ev(g)",
+        0.013071543840774491
+      ],
+      [
+        "loc",
+        0.01224448628294772
+      ],
+      [
+        "branchCount",
+        0.0049926035502957265
+      ],
+      [
+        "total_Opnd",
+        0.004548816568047264
+      ]
+    ],
+    "review_iterations": 1,
+    "objections": [],
+    "review_passes": [
+      {
+        "iteration": 1,
+        "claim": "pass",
+        "routed_to": "reporter",
+        "dispositions": {},
+        "new_objection_ids": []
+      }
+    ],
+    "reviewer_claim": "pass",
+    "reviewer_dispositions": {},
+    "review_verdict": "pass",
+    "report_artifact": "art-004-report-kc1-md",
+    "planted_leakage_columns": [],
+    "verified_holdout_score": 0.767523768366465,
+    "rescore_status": "ok",
+    "rescore_detail": "",
+    "refit_claim_gap": 0.0,
+    "n_withheld_rows": 421,
+    "baseline_zero_score": 0.5,
+    "baseline_unit_score": 0.8055099394987036,
+    "baseline_status": "ok",
+    "baseline_detail": "",
+    "baseline_recipe": "rf-v1",
+    "rescore_seconds": 0.894,
+    "baseline_seconds": 0.277,
+    "errors": [],
+    "node_trace": [
+      {
+        "node": "intake",
+        "started": "2026-09-09T15:11:51.505538Z",
+        "ended": "2026-09-09T15:11:54.554532Z",
+        "input_tokens": 1858,
+        "output_tokens": 72,
+        "cost_usd": 0.002218,
+        "model": "claude-haiku-4-5",
+        "wall_seconds": 3.048994
+      },
+      {
+        "node": "profiler",
+        "started": "2026-09-09T15:11:54.555297Z",
+        "ended": "2026-09-09T15:12:04.788676Z",
+        "input_tokens": 3088,
+        "output_tokens": 308,
+        "cost_usd": 0.004628,
+        "model": "claude-haiku-4-5",
+        "wall_seconds": 10.233379
+      },
+      {
+        "node": "feature_eng",
+        "started": "2026-09-09T15:12:04.789624Z",
+        "ended": "2026-09-09T15:12:11.744412Z",
+        "input_tokens": 2111,
+        "output_tokens": 224,
+        "cost_usd": 0.003231,
+        "model": "claude-haiku-4-5",
+        "wall_seconds": 6.954788
+      },
+      {
+        "node": "modeler",
+        "started": "2026-09-09T15:12:11.744917Z",
+        "ended": "2026-09-09T15:12:30.274685Z",
+        "input_tokens": 2220,
+        "output_tokens": 190,
+        "cost_usd": 0.00317,
+        "model": "claude-haiku-4-5",
+        "wall_seconds": 18.529768
+      },
+      {
+        "node": "reviewer",
+        "started": "2026-09-09T15:12:30.275522Z",
+        "ended": "2026-09-09T15:12:36.679463Z",
+        "input_tokens": 3967,
+        "output_tokens": 197,
+        "cost_usd": 0.004952,
+        "model": "claude-haiku-4-5",
+        "wall_seconds": 6.403941
+      },
+      {
+        "node": "router",
+        "started": "2026-09-09T15:12:36.681311Z",
+        "ended": "2026-09-09T15:12:36.681349Z",
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cost_usd": 0.0,
+        "model": null,
+        "wall_seconds": 3.8e-05
+      },
+      {
+        "node": "reporter",
+        "started": "2026-09-09T15:12:36.682048Z",
+        "ended": "2026-09-09T15:12:36.691856Z",
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cost_usd": 0.0,
+        "model": null,
+        "wall_seconds": 0.009808
+      }
+    ],
+    "total_cost_usd": 0.018199,
+    "loop_exhausted": false,
+    "wall_seconds": 45.418819,
+    "baseline_separation": 0.30550993949870364,
+    "baseline_normalised_score": 0.8756630596223208
+  },
+  "results_row": {
+    "run_id": "f66a69e8ea334a15bd3c8ecc93be1dfe",
+    "dataset_id": "kc1",
+    "arm": "team",
+    "reviewer_enabled": true,
+    "default_model": "haiku",
+    "reviewer_model": "haiku",
+    "reviewer_prompt": "base",
+    "reviewer_sees_code": true,
+    "naming": "descriptive",
+    "loop_cap": 3,
+    "objection_routing": "as_addressed",
+    "objection_closure": "off",
+    "forced_drop_release": "withdrawn_only",
+    "random_seed": 20260822,
+    "commit": "d8c72ff-dirty",
+    "dataset_source": "benchmark",
+    "holdout_fraction": 0.2,
+    "dataset_hash": "ae5fcabc6851ffa1e8fdb1221926c4a9d462b079cfcd5b3c25772bf48d3657a1",
+    "claimed_holdout_score": 0.8107181280258202,
+    "verified_holdout_score": 0.767523768366465,
+    "holdout_claim_gap": 0.04319435965935525,
+    "metric": "roc_auc",
+    "rescore_status": "ok",
+    "rescore_detail": "",
+    "refit_claim_gap": 0.0,
+    "n_withheld_rows": 421,
+    "baseline_zero_score": 0.5,
+    "baseline_unit_score": 0.8055099394987036,
+    "baseline_normalised_score": 0.8756630596223208,
+    "baseline_separation": 0.30550993949870364,
+    "baseline_status": "ok",
+    "baseline_detail": "",
+    "baseline_recipe": "rf-v1",
+    "leakage_graded": false,
+    "leakage_planted": [],
+    "leakage_flagged": [],
+    "leakage_caught": null,
+    "leakage_remediated": null,
+    "leakage_recall": null,
+    "leakage_precision": null,
+    "false_alarm_columns": null,
+    "false_alarm": null,
+    "leakage_flagged_standing": [],
+    "false_alarm_standing": null,
+    "n_final_features": 21,
+    "n_skipped_high_cardinality": 0,
+    "n_candidates": 2,
+    "n_candidates_failed_to_fit": 0,
+    "candidates_failed_to_fit": [],
+    "profiler_nominated": [
+      "ev(g)",
+      "lOComment"
+    ],
+    "profiler_caught": null,
+    "profiler_recall": null,
+    "profiler_false_alarm": null,
+    "reviewer_nominated": [],
+    "reviewer_caught": null,
+    "reviewer_recall": null,
+    "reviewer_false_alarm": null,
+    "review_verdict": "pass",
+    "review_loops": 1,
+    "objections_raised": 0,
+    "objections_by_category": {
+      "leakage": 0,
+      "contamination": 0,
+      "overfit": 0,
+      "metric_mismatch": 0,
+      "implausible_importance": 0,
+      "spec_violation": 0,
+      "other": 0
+    },
+    "objections_open_at_end": 0,
+    "objections_resolved": 0,
+    "objections_withdrawn": 0,
+    "objections_falsely_resolved": 0,
+    "objections_by_target_node": {
+      "feature_eng": 0,
+      "modeler": 0
+    },
+    "objections_rerouted": 0,
+    "objected_columns_unremediated": [],
+    "route_sequence": [
+      "reporter"
+    ],
+    "new_objections_per_pass": [
+      0
+    ],
+    "wall_seconds": 45.418819,
+    "rescore_seconds": 0.894,
+    "baseline_seconds": 0.277,
+    "node_seconds": {
+      "intake": 3.049,
+      "profiler": 10.233,
+      "feature_eng": 6.955,
+      "modeler": 18.53,
+      "reviewer": 6.404,
+      "router": 0.0,
+      "reporter": 0.01
+    },
+    "cost_usd": 0.018199,
+    "errored": false,
+    "halted_at": null,
+    "errors": []
+  },
+  "node_seconds": {
+    "intake": 3.049,
+    "profiler": 10.233,
+    "feature_eng": 6.955,
+    "modeler": 18.53,
+    "reviewer": 6.404,
+    "router": 0.0,
+    "reporter": 0.01
+  },
+  "artifacts": [
+    {
+      "artifact_id": "art-001-split-manifest",
+      "filename": "art-001-split-manifest-split_manifest.json",
+      "text": "{\"version\": 1, \"encoding\": \"assignment-v1\", \"fold_train\": \"complement\", \"strategy\": \"stratified\", \"seed\": 20260822, \"target\": \"defects\", \"n_rows\": 1688, \"n_folds\": 5, \"holdout_fraction\": 0.2, \"assignment\": \"041hh1h103222hh00h21343414334hh3hh301113h210h3h132h3432344041103320h204140hh214004420314h002h2hh0121443410323h030h3h30402h4324h2h133341hh3224011200hh041h202401h2h0034244h23313324322121h402h1031h3h030411121014220h221h314440h2h40h202111h2h201h4002334hh1h4443h33h14241011h44140314030h4323424h0143h02231013134311202h40h0h34h22h1h0h0h4h3hh213431204hh31h132222h3h20h332h431h1h14h010411h4h0hhh01103324111431142h24h2h4hh444340134012h2011000hh140311h43104104034234h2hh1242141332202h411102123h101h344h4303h334024413222341010hh43103hh200433023124034h1233hhh0133214323h3231h1234h0444h122h34h2414h3h12h1h34h4404234hh24hhh22012432h321h102h03h001310022214h341344h410h0h03h12243320hh3224230h201h203h14010h02004333h214310244h21000420hh1h3h14111213h0h222221304h010h304222002h4h4443hhh21h23h4143323302hh3331132412h343411142h423hh3013h2242401133h1342h430h043h0h2202212h14421h03h32111314201h113034103h3h22304h103424033h01h233h40302h301341124132422110h14h1311141h232h040233003431221342h0040433021130h11444241130h440h2h331hh34211h01104010144hh3024401h3h221344410h41223h24320022hh43hh044311242004414014h0h02331h214202001h24443h2h44h1h44hh13h3h0h10h10200333034h11h34403h30401hh331h33234h11232h04242h0hh0h1h300100311421h30323020014h0032h3h041h0001h14240123h11h00134h4011h102h3h021h2003412434h3142h2hhh00211014301h22223004h030h4410021342h2133012h41304431h3441142h30h221h41h20h004044h2h20003hhhh322300021230h22223h30322h0342103232hh4343214022h32142h34101231h004134011h444h213h002h0430h02h14h10133142hh44h44h023h31h1322h3404hhh200h3344h30043h202411h1243h342042h4h2h202h1h0h134h22hhh243242140401h4h10hh0403h313h1hh0004h214402h1hh44h1230h0223hh0h20431hhh2443h0hhh4h30h0100331242001313h13h2h232210343hh0hhh42232h412h3033\", \"counts\": {\"train\": 1350, \"holdout\": 338, \"folds\": [270, 270, 270, 270, 270]}, \"assignment_sha256\": \"a55d55af1d4187165f686502886ca141448bbb3ffd6843dda03fc29d81317e2a\"}",
+      "truncated": false,
+      "binary": false
+    },
+    {
+      "artifact_id": "art-002-feature-transform",
+      "filename": "art-002-feature-transform-feature_transform.py",
+      "text": "\"\"\"Fitted feature transform emitted by feature_eng. Generated -- do not edit.\n\nConstants below were fitted on the pinned train rows only. `transform` reads no data at\nimport time, so re-applying it to a withheld holdout yields the same columns in the same\norder. That property is what makes verified_holdout_score comparable to the claimed one.\n\"\"\"\nimport pandas as pd\n\nTARGET = 'defects'\nDROPPED = ['defects']\nNUMERIC = ['loc', 'v(g)', 'ev(g)', 'iv(g)', 'n', 'v', 'l', 'd', 'i', 'e', 'b', 't', 'lOCode', 'lOComment', 'lOBlank', 'locCodeAndComment', 'uniq_Op', 'uniq_Opnd', 'total_Op', 'total_Opnd', 'branchCount']\nCATEGORICAL = []\nMEDIANS = {'loc': 9.0, 'v(g)': 1.0, 'ev(g)': 1.0, 'iv(g)': 1.0, 'n': 16.0, 'v': 55.51, 'l': 0.19, 'd': 3.5, 'i': 14.41, 'e': 212.72, 'b': 0.02, 't': 11.815, 'lOCode': 5.0, 'lOComment': 0.0, 'lOBlank': 0.0, 'locCodeAndComment': 0.0, 'uniq_Op': 6.0, 'uniq_Opnd': 5.0, 'total_Op': 10.0, 'total_Opnd': 6.0, 'branchCount': 1.0}\nLEVELS = {}\nFEATURE_ORDER = ['loc', 'v(g)', 'ev(g)', 'iv(g)', 'n', 'v', 'l', 'd', 'i', 'e', 'b', 't', 'lOCode', 'lOComment', 'lOBlank', 'locCodeAndComment', 'uniq_Op', 'uniq_Opnd', 'total_Op', 'total_Opnd', 'branchCount']\nSOURCE_COLUMNS = ['loc', 'v(g)', 'ev(g)', 'iv(g)', 'n', 'v', 'l', 'd', 'i', 'e', 'b', 't', 'lOCode', 'lOComment', 'lOBlank', 'locCodeAndComment', 'uniq_Op', 'uniq_Opnd', 'total_Op', 'total_Opnd', 'branchCount']\nCOLUMN_SOURCE = {'loc': 'loc', 'v(g)': 'v(g)', 'ev(g)': 'ev(g)', 'iv(g)': 'iv(g)', 'n': 'n', 'v': 'v', 'l': 'l', 'd': 'd', 'i': 'i', 'e': 'e', 'b': 'b', 't': 't', 'lOCode': 'lOCode', 'lOComment': 'lOComment', 'lOBlank': 'lOBlank', 'locCodeAndComment': 'locCodeAndComment', 'uniq_Op': 'uniq_Op', 'uniq_Opnd': 'uniq_Opnd', 'total_Op': 'total_Op', 'total_Opnd': 'total_Opnd', 'branchCount': 'branchCount'}\n\n\ndef transform(df):\n    \"\"\"Raw frame -> model matrix, float64, no NaN, columns exactly FEATURE_ORDER.\"\"\"\n    out = pd.DataFrame(index=df.index)\n    for c in NUMERIC:\n        col = df[c] if c in df.columns else pd.Series(MEDIANS[c], index=df.index)\n        out[c] = pd.to_numeric(col, errors='coerce').astype('float64').fillna(MEDIANS[c])\n    for c in CATEGORICAL:\n        if c in df.columns:\n            col = df[c].astype('string')\n        else:\n            col = pd.Series(pd.NA, index=df.index, dtype='string')\n        for level in LEVELS[c]:\n            out[c + '=' + level] = (col == level).fillna(False).astype('float64')\n    for name in FEATURE_ORDER:\n        if name not in out.columns:\n            out[name] = 0.0\n    return out[FEATURE_ORDER]\n\n",
+      "truncated": false,
+      "binary": false
+    },
+    {
+      "artifact_id": "art-003-feature-importance",
+      "filename": "art-003-feature-importance-feature_importance.json",
+      "text": "{\n  \"method\": \"permutation_importance\",\n  \"scoring\": \"roc_auc\",\n  \"n_repeats\": 10,\n  \"evaluated_on\": \"agent_holdout\",\n  \"random_state\": 20260822,\n  \"note\": \"Source-column importances: the feature transform is inside the estimator pipeline, so sklearn permuted raw columns, not one-hot expansions.\",\n  \"matrix_columns\": [\n    \"loc\",\n    \"v(g)\",\n    \"ev(g)\",\n    \"iv(g)\",\n    \"n\",\n    \"v\",\n    \"l\",\n    \"d\",\n    \"i\",\n    \"e\",\n    \"b\",\n    \"t\",\n    \"lOCode\",\n    \"lOComment\",\n    \"lOBlank\",\n    \"locCodeAndComment\",\n    \"uniq_Op\",\n    \"uniq_Opnd\",\n    \"total_Op\",\n    \"total_Opnd\",\n    \"branchCount\"\n  ],\n  \"candidates\": {\n    \"logistic_l2\": [\n      [\n        \"b\",\n        0.11589564281871967,\n        0.018277179351158346\n      ],\n      [\n        \"d\",\n        0.10235005379236135,\n        0.024835313687620382\n      ],\n      [\n        \"i\",\n        0.08759413663259805,\n        0.01426963904004241\n      ],\n      [\n        \"total_Op\",\n        0.04356508875739634,\n        0.015869001636794732\n      ],\n      [\n        \"iv(g)\",\n        0.04122175901022044,\n        0.009038533095585185\n      ],\n      [\n        \"uniq_Op\",\n        0.04109400215169433,\n        0.020249917560293713\n      ],\n      [\n        \"v(g)\",\n        0.028382194728348485,\n        0.0094858476955578\n      ],\n      [\n        \"v\",\n        0.02477138246369004,\n        0.012485800546486299\n      ],\n      [\n        \"locCodeAndComment\",\n        0.021157208176438836,\n        0.00964565453716016\n      ],\n      [\n        \"lOCode\",\n        0.020827729962345255,\n        0.009246262015663118\n      ],\n      [\n        \"n\",\n        0.02020239376008596,\n        0.010187665744333989\n      ],\n      [\n        \"ev(g)\",\n        0.013071543840774491,\n        0.007904254543263812\n      ],\n      [\n        \"loc\",\n        0.01224448628294772,\n        0.0078020194740272795\n      ],\n      [\n        \"branchCount\",\n        0.0049926035502957265,\n        0.003128677704380368\n      ],\n      [\n        \"total_Opnd\",\n        0.004548816568047264,\n        0.006364887727222676\n      ],\n      [\n        \"l\",\n        0.0031804733727809785,\n        0.005766534251479168\n      ],\n      [\n        \"t\",\n        0.00043706293706282653,\n        0.005770997715652696\n      ],\n      [\n        \"e\",\n        0.00041689080150605353,\n        0.00576939534141602\n      ],\n      [\n        \"lOBlank\",\n        -0.0011161915008069956,\n        0.0018210124668973453\n      ],\n      [\n        \"uniq_Opnd\",\n        -0.0011262775685853543,\n        0.003805900158493336\n      ],\n      [\n        \"lOComment\",\n        -0.0018491124260356262,\n        0.001827283249287432\n      ]\n    ],\n    \"hist_gbdt\": [\n      [\n        \"lOCode\",\n        0.031693786982248486,\n        0.01981038285008879\n      ],\n      [\n        \"b\",\n        0.027605567509413665,\n        0.009467069386751216\n      ],\n      [\n        \"loc\",\n        0.02676842388380849,\n        0.01946969780053314\n      ],\n      [\n        \"uniq_Opnd\",\n        0.019123184507799894,\n        0.004467059083398535\n      ],\n      [\n        \"i\",\n        0.013192576654115117,\n        0.00848720213076764\n      ],\n      [\n        \"v\",\n        0.008337816030123735,\n        0.004425652939902133\n      ],\n      [\n        \"lOComment\",\n        0.008015061861215722,\n        0.006244900630484847\n      ],\n      [\n        \"total_Op\",\n        0.0064080150618612605,\n        0.010924206306262963\n      ],\n      [\n        \"uniq_Op\",\n        0.005816299085529863,\n        0.011679145817101862\n      ],\n      [\n        \"d\",\n        0.004192442173211441,\n        0.007013908388453941\n      ],\n      [\n        \"branchCount\",\n        0.0018760086067778348,\n        0.005442382525436495\n      ],\n      [\n        \"iv(g)\",\n        0.0012506724045185601,\n        0.007650707729761927\n      ],\n      [\n        \"locCodeAndComment\",\n        0.0010388649811726492,\n        0.006459974843679123\n      ],\n      [\n        \"t\",\n        0.000312668101129665,\n        0.0013334181716692203\n      ],\n      [\n        \"ev(g)\",\n        0.00018827326519635924,\n        0.0070820541073915435\n      ],\n      [\n        \"lOBlank\",\n        -0.0010086067778375396,\n        0.004585434007817186\n      ],\n      [\n        \"v(g)\",\n        -0.0019062668101129331,\n        0.005221060884745617\n      ],\n      [\n        \"e\",\n        -0.004498386229155471,\n        0.010033965299326814\n      ],\n      [\n        \"total_Opnd\",\n        -0.0071577461000537634,\n        0.00927505748005487\n      ],\n      [\n        \"n\",\n        -0.007857046799354473,\n        0.008947491778943169\n      ],\n      [\n        \"l\",\n        -0.008428590640129064,\n        0.0051393230414433656\n      ]\n    ]\n  }\n}",
+      "truncated": false,
+      "binary": false
+    },
+    {
+      "artifact_id": "art-004-report-kc1-md",
+      "filename": "art-004-report-kc1-md-report-kc1.md",
+      "text": "# ds-agents run report -- kc1\n\nWritten by the reporter node. Nothing here is a grade: `claimed_holdout_score` is what the system said about itself, scored on a holdout the system chose. The independent number is written by the harness after the graph ends and is deliberately not in this file.\n\n## Run\n\n| field | value |\n| --- | --- |\n| run_id | f66a69e8ea334a15bd3c8ecc93be1dfe |\n| dataset_id | kc1 |\n| arm | team |\n| reviewer_enabled | True |\n| reviewer_model | haiku |\n| reviewer_prompt | base |\n| reviewer_sees_code | True |\n| naming | descriptive |\n| loop_cap | 3 |\n| random_seed | 20260822 |\n| started_at | 2026-09-09 15:11:51.273726+00:00 |\n\n## Task\n\n| field | value |\n| --- | --- |\n| target | defects |\n| task_type | binary |\n| metric | roc_auc |\n| greater_is_better | True |\n| split_strategy | stratified |\n| split_key | - |\n| positive_class | - |\n\n## Data profile\n\n1688 rows x 22 columns.\n\nTarget balance: False: 84.5%, True: 15.5%.\n\n| column | dtype | missing | distinct |\n| --- | --- | --- | --- |\n| loc | float64 | 0.0% | 135 |\n| v(g) | float64 | 0.0% | 30 |\n| ev(g) | float64 | 0.0% | 19 |\n| iv(g) | float64 | 0.0% | 25 |\n| n | float64 | 0.0% | 262 |\n| v | float64 | 0.0% | 627 |\n| l | float64 | 0.0% | 49 |\n| d | float64 | 0.0% | 476 |\n| i | float64 | 0.0% | 748 |\n| e | float64 | 0.0% | 797 |\n| b | float64 | 0.0% | 86 |\n| t | float64 | 0.0% | 786 |\n| lOCode | int64 | 0.0% | 117 |\n| lOComment | int64 | 0.0% | 27 |\n| lOBlank | int64 | 0.0% | 30 |\n| locCodeAndComment | int64 | 0.0% | 12 |\n| uniq_Op | float64 | 0.0% | 33 |\n| uniq_Opnd | float64 | 0.0% | 71 |\n| total_Op | float64 | 0.0% | 194 |\n| total_Opnd | float64 | 0.0% | 144 |\n| branchCount | float64 | 0.0% | 43 |\n| defects | bool | 0.0% | 2 |\n\n## Leakage candidates (profiler)\n\n| column | suspicion | evidence | reason |\n| --- | --- | --- | --- |\n| ev(g) | medium | Mutual information of 0.2247, which is 2.4x higher than the second-best predictor (lOComment at 0.1653) and 3.9x the median feature association | Exceptionally high mutual information with target relative to other features |\n| lOComment | low | Mutual information of 0.1653, second highest in dataset, with only 27 unique values across 1688 rows | Elevated mutual information suggesting strong predictive relationship with defects |\n\n## Feature engineering\n\nfeature_code_artifact: art-002-feature-transform\n\n21 source columns -> 21 matrix columns, fitted on 1350 train rows from split art-001-split-manifest.\nDropped (0): none.\nNumeric, median-imputed on train rows (21): loc, v(g), ev(g), iv(g), n, v, l, d, i, e, b, t, lOCode, lOComment, lOBlank, locCodeAndComment, uniq_Op, uniq_Opnd, total_Op, total_Opnd, branchCount.\nKept despite a profiler flag (2): ev(g) -- ev(g) (essential vocabulary regarding cyclomatic complexity) is a legitimate code complexity metric that measures vocabulary diversity in the code structure. High mutual information with defects reflects a genuine causal relationship: more complex, harder-to-understand code is more prone to defects. This is a standard Halstead metric used in software quality prediction and is not data leakage\u2014it is measured at code development time before defects manifest.; lOComment -- lOComment (lines of comments) is a standard source code metric that is available at code review/commit time. High mutual information reflects a legitimate relationship: code with more commentary may indicate complexity or areas developers felt needed explanation, making it a valid predictive signal for defect risk. This is not leakage as it is extracted directly from source code artifacts, not from defect data..\n\nKept (21): loc, v(g), ev(g), iv(g), n, v, l, d, i, e, b, t, lOCode, lOComment, lOBlank, locCodeAndComment, uniq_Op, uniq_Opnd, total_Op, total_Opnd, branchCount\nDropped (0): -\n\n## Modelling\n\n| candidate | cv mean | cv scores | claimed holdout | note |\n| --- | --- | --- | --- | --- |\n| logistic_l2 | 0.8052 | 0.7455, 0.7912, 0.8532, 0.8276, 0.8084 | 0.8107 | - |\n| hist_gbdt | 0.7716 | 0.7352, 0.7580, 0.8223, 0.7781, 0.7644 | 0.7747 | - |\n\nChosen: logistic_l2.\nClaimed roc_auc on the agents' holdout (a claim, not a verified score): 0.8107.\n\nPermutation importance (source columns, agents' holdout):\n\n| column | importance |\n| --- | --- |\n| b | 0.1159 |\n| d | 0.1024 |\n| i | 0.0876 |\n| total_Op | 0.0436 |\n| iv(g) | 0.0412 |\n| uniq_Op | 0.0411 |\n| v(g) | 0.0284 |\n| v | 0.0248 |\n| locCodeAndComment | 0.0212 |\n| lOCode | 0.0208 |\n| n | 0.0202 |\n| ev(g) | 0.0131 |\n| loc | 0.0122 |\n| branchCount | 0.0050 |\n| total_Opnd | 0.0045 |\n\nimportance_artifact: art-003-feature-importance\n\n## Review\n\nVerdict: pass. Iterations: 1 of 3. Last claim: pass.\n\nNo objections raised.\n\n| iteration | claim | routed_to | dispositions |\n| --- | --- | --- | --- |\n| 1 | pass | reporter | - |\n\n## Errors\n\nNone.\n\n## Node trace\n\n| node | seconds | model | in/out tokens | cost |\n| --- | --- | --- | --- | --- |\n| intake | 3.0490 | claude-haiku-4-5 | 1858/72 | 0.0022 |\n| profiler | 10.2334 | claude-haiku-4-5 | 3088/308 | 0.0046 |\n| feature_eng | 6.9548 | claude-haiku-4-5 | 2111/224 | 0.0032 |\n| modeler | 18.5298 | claude-haiku-4-5 | 2220/190 | 0.0032 |\n| reviewer | 6.4039 | claude-haiku-4-5 | 3967/197 | 0.0050 |\n| router | 0.0000 | - | 0/0 | 0.0000 |\n| total | 45.1709 | - | - | 0.0182 |\n\n_The reporter's own event is not in this table: it is minted after the report is written. The harness's results row is built from the finished state and includes it._\n",
+      "truncated": false,
+      "binary": false
+    },
+    {
+      "artifact_id": "feature_importance.json",
+      "filename": "feature_importance.json",
+      "text": "{\n  \"method\": \"permutation_importance\",\n  \"scoring\": \"roc_auc\",\n  \"n_repeats\": 10,\n  \"evaluated_on\": \"agent_holdout\",\n  \"random_state\": 20260822,\n  \"note\": \"Source-column importances: the feature transform is inside the estimator pipeline, so sklearn permuted raw columns, not one-hot expansions.\",\n  \"matrix_columns\": [\n    \"loc\",\n    \"v(g)\",\n    \"ev(g)\",\n    \"iv(g)\",\n    \"n\",\n    \"v\",\n    \"l\",\n    \"d\",\n    \"i\",\n    \"e\",\n    \"b\",\n    \"t\",\n    \"lOCode\",\n    \"lOComment\",\n    \"lOBlank\",\n    \"locCodeAndComment\",\n    \"uniq_Op\",\n    \"uniq_Opnd\",\n    \"total_Op\",\n    \"total_Opnd\",\n    \"branchCount\"\n  ],\n  \"candidates\": {\n    \"logistic_l2\": [\n      [\n        \"b\",\n        0.11589564281871967,\n        0.018277179351158346\n      ],\n      [\n        \"d\",\n        0.10235005379236135,\n        0.024835313687620382\n      ],\n      [\n        \"i\",\n        0.08759413663259805,\n        0.01426963904004241\n      ],\n      [\n        \"total_Op\",\n        0.04356508875739634,\n        0.015869001636794732\n      ],\n      [\n        \"iv(g)\",\n        0.04122175901022044,\n        0.009038533095585185\n      ],\n      [\n        \"uniq_Op\",\n        0.04109400215169433,\n        0.020249917560293713\n      ],\n      [\n        \"v(g)\",\n        0.028382194728348485,\n        0.0094858476955578\n      ],\n      [\n        \"v\",\n        0.02477138246369004,\n        0.012485800546486299\n      ],\n      [\n        \"locCodeAndComment\",\n        0.021157208176438836,\n        0.00964565453716016\n      ],\n      [\n        \"lOCode\",\n        0.020827729962345255,\n        0.009246262015663118\n      ],\n      [\n        \"n\",\n        0.02020239376008596,\n        0.010187665744333989\n      ],\n      [\n        \"ev(g)\",\n        0.013071543840774491,\n        0.007904254543263812\n      ],\n      [\n        \"loc\",\n        0.01224448628294772,\n        0.0078020194740272795\n      ],\n      [\n        \"branchCount\",\n        0.0049926035502957265,\n        0.003128677704380368\n      ],\n      [\n        \"total_Opnd\",\n        0.004548816568047264,\n        0.006364887727222676\n      ],\n      [\n        \"l\",\n        0.0031804733727809785,\n        0.005766534251479168\n      ],\n      [\n        \"t\",\n        0.00043706293706282653,\n        0.005770997715652696\n      ],\n      [\n        \"e\",\n        0.00041689080150605353,\n        0.00576939534141602\n      ],\n      [\n        \"lOBlank\",\n        -0.0011161915008069956,\n        0.0018210124668973453\n      ],\n      [\n        \"uniq_Opnd\",\n        -0.0011262775685853543,\n        0.003805900158493336\n      ],\n      [\n        \"lOComment\",\n        -0.0018491124260356262,\n        0.001827283249287432\n      ]\n    ],\n    \"hist_gbdt\": [\n      [\n        \"lOCode\",\n        0.031693786982248486,\n        0.01981038285008879\n      ],\n      [\n        \"b\",\n        0.027605567509413665,\n        0.009467069386751216\n      ],\n      [\n        \"loc\",\n        0.02676842388380849,\n        0.01946969780053314\n      ],\n      [\n        \"uniq_Opnd\",\n        0.019123184507799894,\n        0.004467059083398535\n      ],\n      [\n        \"i\",\n        0.013192576654115117,\n        0.00848720213076764\n      ],\n      [\n        \"v\",\n        0.008337816030123735,\n        0.004425652939902133\n      ],\n      [\n        \"lOComment\",\n        0.008015061861215722,\n        0.006244900630484847\n      ],\n      [\n        \"total_Op\",\n        0.0064080150618612605,\n        0.010924206306262963\n      ],\n      [\n        \"uniq_Op\",\n        0.005816299085529863,\n        0.011679145817101862\n      ],\n      [\n        \"d\",\n        0.004192442173211441,\n        0.007013908388453941\n      ],\n      [\n        \"branchCount\",\n        0.0018760086067778348,\n        0.005442382525436495\n      ],\n      [\n        \"iv(g)\",\n        0.0012506724045185601,\n        0.007650707729761927\n      ],\n      [\n        \"locCodeAndComment\",\n        0.0010388649811726492,\n        0.006459974843679123\n      ],\n      [\n        \"t\",\n        0.000312668101129665,\n        0.0013334181716692203\n      ],\n      [\n        \"ev(g)\",\n        0.00018827326519635924,\n        0.0070820541073915435\n      ],\n      [\n        \"lOBlank\",\n        -0.0010086067778375396,\n        0.004585434007817186\n      ],\n      [\n        \"v(g)\",\n        -0.0019062668101129331,\n        0.005221060884745617\n      ],\n      [\n        \"e\",\n        -0.004498386229155471,\n        0.010033965299326814\n      ],\n      [\n        \"total_Opnd\",\n        -0.0071577461000537634,\n        0.00927505748005487\n      ],\n      [\n        \"n\",\n        -0.007857046799354473,\n        0.008947491778943169\n      ],\n      [\n        \"l\",\n        -0.008428590640129064,\n        0.0051393230414433656\n      ]\n    ]\n  }\n}",
+      "truncated": false,
+      "binary": false
+    },
+    {
+      "artifact_id": "feature_transform.py",
+      "filename": "feature_transform.py",
+      "text": "\"\"\"Fitted feature transform emitted by feature_eng. Generated -- do not edit.\n\nConstants below were fitted on the pinned train rows only. `transform` reads no data at\nimport time, so re-applying it to a withheld holdout yields the same columns in the same\norder. That property is what makes verified_holdout_score comparable to the claimed one.\n\"\"\"\nimport pandas as pd\n\nTARGET = 'defects'\nDROPPED = ['defects']\nNUMERIC = ['loc', 'v(g)', 'ev(g)', 'iv(g)', 'n', 'v', 'l', 'd', 'i', 'e', 'b', 't', 'lOCode', 'lOComment', 'lOBlank', 'locCodeAndComment', 'uniq_Op', 'uniq_Opnd', 'total_Op', 'total_Opnd', 'branchCount']\nCATEGORICAL = []\nMEDIANS = {'loc': 9.0, 'v(g)': 1.0, 'ev(g)': 1.0, 'iv(g)': 1.0, 'n': 16.0, 'v': 55.51, 'l': 0.19, 'd': 3.5, 'i': 14.41, 'e': 212.72, 'b': 0.02, 't': 11.815, 'lOCode': 5.0, 'lOComment': 0.0, 'lOBlank': 0.0, 'locCodeAndComment': 0.0, 'uniq_Op': 6.0, 'uniq_Opnd': 5.0, 'total_Op': 10.0, 'total_Opnd': 6.0, 'branchCount': 1.0}\nLEVELS = {}\nFEATURE_ORDER = ['loc', 'v(g)', 'ev(g)', 'iv(g)', 'n', 'v', 'l', 'd', 'i', 'e', 'b', 't', 'lOCode', 'lOComment', 'lOBlank', 'locCodeAndComment', 'uniq_Op', 'uniq_Opnd', 'total_Op', 'total_Opnd', 'branchCount']\nSOURCE_COLUMNS = ['loc', 'v(g)', 'ev(g)', 'iv(g)', 'n', 'v', 'l', 'd', 'i', 'e', 'b', 't', 'lOCode', 'lOComment', 'lOBlank', 'locCodeAndComment', 'uniq_Op', 'uniq_Opnd', 'total_Op', 'total_Opnd', 'branchCount']\nCOLUMN_SOURCE = {'loc': 'loc', 'v(g)': 'v(g)', 'ev(g)': 'ev(g)', 'iv(g)': 'iv(g)', 'n': 'n', 'v': 'v', 'l': 'l', 'd': 'd', 'i': 'i', 'e': 'e', 'b': 'b', 't': 't', 'lOCode': 'lOCode', 'lOComment': 'lOComment', 'lOBlank': 'lOBlank', 'locCodeAndComment': 'locCodeAndComment', 'uniq_Op': 'uniq_Op', 'uniq_Opnd': 'uniq_Opnd', 'total_Op': 'total_Op', 'total_Opnd': 'total_Opnd', 'branchCount': 'branchCount'}\n\n\ndef transform(df):\n    \"\"\"Raw frame -> model matrix, float64, no NaN, columns exactly FEATURE_ORDER.\"\"\"\n    out = pd.DataFrame(index=df.index)\n    for c in NUMERIC:\n        col = df[c] if c in df.columns else pd.Series(MEDIANS[c], index=df.index)\n        out[c] = pd.to_numeric(col, errors='coerce').astype('float64').fillna(MEDIANS[c])\n    for c in CATEGORICAL:\n        if c in df.columns:\n            col = df[c].astype('string')\n        else:\n            col = pd.Series(pd.NA, index=df.index, dtype='string')\n        for level in LEVELS[c]:\n            out[c + '=' + level] = (col == level).fillna(False).astype('float64')\n    for name in FEATURE_ORDER:\n        if name not in out.columns:\n            out[name] = 0.0\n    return out[FEATURE_ORDER]\n\n",
+      "truncated": false,
+      "binary": false
+    },
+    {
+      "artifact_id": "split_manifest.json",
+      "filename": "split_manifest.json",
+      "text": "{\"version\": 1, \"encoding\": \"assignment-v1\", \"fold_train\": \"complement\", \"strategy\": \"stratified\", \"seed\": 20260822, \"target\": \"defects\", \"n_rows\": 1688, \"n_folds\": 5, \"holdout_fraction\": 0.2, \"assignment\": \"041hh1h103222hh00h21343414334hh3hh301113h210h3h132h3432344041103320h204140hh214004420314h002h2hh0121443410323h030h3h30402h4324h2h133341hh3224011200hh041h202401h2h0034244h23313324322121h402h1031h3h030411121014220h221h314440h2h40h202111h2h201h4002334hh1h4443h33h14241011h44140314030h4323424h0143h02231013134311202h40h0h34h22h1h0h0h4h3hh213431204hh31h132222h3h20h332h431h1h14h010411h4h0hhh01103324111431142h24h2h4hh444340134012h2011000hh140311h43104104034234h2hh1242141332202h411102123h101h344h4303h334024413222341010hh43103hh200433023124034h1233hhh0133214323h3231h1234h0444h122h34h2414h3h12h1h34h4404234hh24hhh22012432h321h102h03h001310022214h341344h410h0h03h12243320hh3224230h201h203h14010h02004333h214310244h21000420hh1h3h14111213h0h222221304h010h304222002h4h4443hhh21h23h4143323302hh3331132412h343411142h423hh3013h2242401133h1342h430h043h0h2202212h14421h03h32111314201h113034103h3h22304h103424033h01h233h40302h301341124132422110h14h1311141h232h040233003431221342h0040433021130h11444241130h440h2h331hh34211h01104010144hh3024401h3h221344410h41223h24320022hh43hh044311242004414014h0h02331h214202001h24443h2h44h1h44hh13h3h0h10h10200333034h11h34403h30401hh331h33234h11232h04242h0hh0h1h300100311421h30323020014h0032h3h041h0001h14240123h11h00134h4011h102h3h021h2003412434h3142h2hhh00211014301h22223004h030h4410021342h2133012h41304431h3441142h30h221h41h20h004044h2h20003hhhh322300021230h22223h30322h0342103232hh4343214022h32142h34101231h004134011h444h213h002h0430h02h14h10133142hh44h44h023h31h1322h3404hhh200h3344h30043h202411h1243h342042h4h2h202h1h0h134h22hhh243242140401h4h10hh0403h313h1hh0004h214402h1hh44h1230h0223hh0h20431hhh2443h0hhh4h30h0100331242001313h13h2h232210343hh0hhh42232h412h3033\", \"counts\": {\"train\": 1350, \"holdout\": 338, \"folds\": [270, 270, 270, 270, 270]}, \"assignment_sha256\": \"a55d55af1d4187165f686502886ca141448bbb3ffd6843dda03fc29d81317e2a\"}",
+      "truncated": false,
+      "binary": false
+    }
+  ],
+  "fixture_manifest": null
+}

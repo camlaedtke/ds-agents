@@ -128,3 +128,16 @@ the fixtures and not on the manifest.
 - **`forced_drop_release` is closed to further use.**
 - **`harness.py` and `cli.py` still import each other inside functions.**
 - ruff formats Python blocks inside `docs/*.md`, so the hook rewrites design docs on every edit.
+- **`capture._forced_drop_columns` duplicates `binding_objections`' predicate on purpose.**
+  `test_state.py` pins `binding_objections` to one caller, so the walkthrough's replay reproduces
+  the predicate (including the `COLUMN_SCOPED_CATEGORIES` filter from `feature_eng._forced_drops`)
+  via public helpers. Whether a read-only consumer should get a blessed path instead of a copy is
+  `state.py`'s call to make; until then two copies can drift.
+- **The walkthrough captures found `claims_timing` no longer looping at this commit.** Both fresh
+  replicates passed first-loop with zero objections and both planted leaks already dropped by
+  feature_eng's own plan — against 10/10 committed rows that looped at older commits. Nothing here
+  is wrong, but if the reviewer-on/off ablation expects claims_timing to exercise the loop, that
+  expectation is now stale and worth re-measuring, not assuming.
+- **Untested paths in `capture.py`, accepted as nits:** the reviewer-step crashed-pass headline
+  fallback, `model_artifact` id recovery in `_cited_artifact_ids`, and `envelope()`'s
+  SystemExit-on-missing-fixture path.

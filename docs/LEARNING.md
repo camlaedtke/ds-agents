@@ -994,3 +994,20 @@ Priority: **load-bearing** means the thesis breaks if this is wrong and you cann
   mechanism was there.
   Related: [[a-fit-is-not-a-model]], [[confounded-by-what-you-did-not-vary]],
   [[cost-hides-in-the-cheapest-case]], [[two-axes-treated-as-one]].
+
+### replay-from-a-final-state — what a single-writer contract lets you reconstruct, and what it cannot
+- Priority: useful
+- Came up: 2026-09-09, building the pipeline walkthrough viewer
+- Status: explained
+- Covered: 2026-09-09, `docs/explainers/pipeline-walkthrough.html` — steps five real captured runs
+  node by node with expandable detail, a harness end panel, and an overview of all committed
+  benchmark rows. Every step carries a fidelity label.
+- Why it matters here: the pipeline keeps no checkpointer, so no intermediate state was ever
+  saved — yet the walkthrough replays runs node by node. That works because of three properties
+  the contract already had: every state field has exactly one writer node, `node_trace` appends
+  in execution order, and the review loop is genuinely recorded per pass. The limit is equally
+  instructive: when the router sends a run back and `feature_eng` runs twice, the first run's
+  outputs are overwritten and gone, so the viewer labels those steps `not_recorded` rather than
+  showing the final value in their place. The general shape: a state contract designed for
+  single-writer merges quietly buys you replayability of the last write, and nothing before it.
+  Related: [[langgraph-reducers]], [[encoding-as-a-contract]].

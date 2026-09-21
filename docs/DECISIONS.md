@@ -2569,3 +2569,20 @@ column, and this is a real anomaly that was *handled*. `errored` has no way to s
 recovered". It is reopened in NEXT.md rather than patched here, because deciding whether a
 successful retry belongs in a published failure rate is exactly the kind of column-semantics
 question this repo has now twice been glad it did not answer in a hurry at the end of a session.
+
+## 2026-09-09: the walkthrough replays the final state; it does not checkpoint the run
+
+The interactive pipeline walkthrough (docs/explainers/pipeline-walkthrough.html) needed per-node
+history that the pipeline does not persist: there is no LangGraph checkpointer, and the full final
+state is printed at cli.py:328 and discarded. Two ways to get it were considered. Adding a
+checkpointer would record every intermediate state truthfully but adds a persistence layer to the
+system under test for the benefit of a documentation artifact. The chosen alternative,
+`ds_agents/capture.py`, freezes the FINAL state into an envelope (`--state-json`) and derives the
+step sequence at build time from three facts that already hold by contract: every state field has
+a single writer node, `node_trace` appends in execution order, and the review loop is genuinely
+recorded (`raised_at_iteration`, `ReviewPass`). The cost of that choice is honest incompleteness:
+what an earlier occurrence of a re-run node wrote is gone, so every replayed step carries a
+fidelity label (`recorded` / `reconstructed` / `not_recorded`) and the viewer renders the gap as a
+gap. Capture is split from derivation so improving the viewer never costs another pipeline run,
+and the derivation lives in src/ under fast tests rather than in the viewer's JS, so a state.py
+rename breaks a test instead of silently blanking a panel.

@@ -1,0 +1,593 @@
+{
+  "schema_version": 1,
+  "captured_at": "2026-09-09T15:06:48.489849Z",
+  "dataset_id": "claims_timing",
+  "note": "replicate 1 of 2 (both identical): both planted leaks were dropped by feature_eng's own plan before the reviewer ever saw them -- zero objections, first-pass pass",
+  "state": {
+    "config": {
+      "run_id": "8550e0b1bb79453aaec12a18cc416467",
+      "arm": "team",
+      "reviewer_enabled": true,
+      "reviewer_model": "haiku",
+      "default_model": "haiku",
+      "loop_cap": 3,
+      "reviewer_sees_code": true,
+      "naming": "descriptive",
+      "reviewer_prompt": "base",
+      "objection_routing": "as_addressed",
+      "objection_closure": "off",
+      "forced_drop_release": "withdrawn_only",
+      "holdout_fraction": 0.0,
+      "dataset_source": "fixture",
+      "random_seed": 20260822,
+      "dataset_hash": "1b6f09d0346ef7a86057be89e11d9983dac7b2a6c55ceefc703c951e55367e26",
+      "commit": "d8c72ff-dirty"
+    },
+    "started_at": "2026-09-09T15:06:15.702016Z",
+    "ended_at": "2026-09-09T15:06:48.274981Z",
+    "dataset_id": "claims_timing",
+    "task_description": "Predict claim_denied and report roc_auc.",
+    "spec": {
+      "target": "claim_denied",
+      "task_type": "binary",
+      "metric": "roc_auc",
+      "split_strategy": "stratified",
+      "split_key": null,
+      "positive_class": null,
+      "greater_is_better": true
+    },
+    "profile": {
+      "n_rows": 200,
+      "n_columns": 9,
+      "columns": [
+        {
+          "name": "claim_ref",
+          "dtype": "str",
+          "missing_fraction": 0.0,
+          "n_unique": 200,
+          "sample_values": [
+            "CLM-00000",
+            "CLM-00001",
+            "CLM-00002",
+            "CLM-00003",
+            "CLM-00004"
+          ]
+        },
+        {
+          "name": "days_since_policy_start",
+          "dtype": "int64",
+          "missing_fraction": 0.0,
+          "n_unique": 193,
+          "sample_values": [
+            "456",
+            "1714",
+            "621",
+            "1691",
+            "521"
+          ]
+        },
+        {
+          "name": "claim_amount",
+          "dtype": "float64",
+          "missing_fraction": 0.07,
+          "n_unique": 186,
+          "sample_values": [
+            "6535.49",
+            "793.35",
+            "770.8",
+            "1320.1",
+            "603.49"
+          ]
+        },
+        {
+          "name": "prior_claims_12m",
+          "dtype": "int64",
+          "missing_fraction": 0.0,
+          "n_unique": 6,
+          "sample_values": [
+            "0",
+            "1",
+            "2",
+            "3",
+            "4"
+          ]
+        },
+        {
+          "name": "channel",
+          "dtype": "str",
+          "missing_fraction": 0.0,
+          "n_unique": 3,
+          "sample_values": [
+            "web",
+            "agent",
+            "phone"
+          ]
+        },
+        {
+          "name": "region",
+          "dtype": "str",
+          "missing_fraction": 0.0,
+          "n_unique": 4,
+          "sample_values": [
+            "north",
+            "west",
+            "south",
+            "east"
+          ]
+        },
+        {
+          "name": "days_to_close",
+          "dtype": "float64",
+          "missing_fraction": 0.0,
+          "n_unique": 141,
+          "sample_values": [
+            "31.4",
+            "14.1",
+            "5.8",
+            "22.2",
+            "18.7"
+          ]
+        },
+        {
+          "name": "adjuster_touches",
+          "dtype": "int64",
+          "missing_fraction": 0.0,
+          "n_unique": 10,
+          "sample_values": [
+            "5",
+            "3",
+            "2",
+            "4",
+            "0"
+          ]
+        },
+        {
+          "name": "claim_denied",
+          "dtype": "int64",
+          "missing_fraction": 0.0,
+          "n_unique": 2,
+          "sample_values": [
+            "1",
+            "0"
+          ]
+        }
+      ],
+      "leakage_candidates": [
+        {
+          "column": "claim_ref",
+          "reason": "Perfect one-to-one cardinality with rows (200 unique values for 200 rows) combined with elevated mutual information of 0.2116. This pattern indicates the column is a memorizing identifier rather than a predictive feature.",
+          "evidence": "n_unique=200 equals n_rows=200; mutual_info=0.2116 is highest among columns but explained by perfect row identification",
+          "suspicion": "high"
+        },
+        {
+          "column": "days_to_close",
+          "reason": "Days to close is likely a post-hoc variable determined after a claim decision is reached. The number of days required to close a claim depends on whether it is denied or approved, making it causally downstream of the target and not available at prediction time.",
+          "evidence": "mutual_info=0.125 with plausible mechanism: denied claims may close faster/slower than approved ones; high specificity (141 unique values) suggests detailed temporal data collected after resolution",
+          "suspicion": "high"
+        },
+        {
+          "column": "adjuster_touches",
+          "reason": "Number of adjuster interactions is likely determined during or after the claims process based on the claim outcome. Denied claims may receive different handling or interaction patterns, making this a potential post-decision variable.",
+          "evidence": "mutual_info=0.1837 is second-highest; this metric likely varies by claim disposition and may not be known at prediction time",
+          "suspicion": "medium"
+        }
+      ],
+      "target_balance": {
+        "0": 0.68,
+        "1": 0.32
+      }
+    },
+    "split_artifact": "art-001-split-manifest",
+    "feature_code_artifact": "art-002-feature-transform",
+    "feature_summary": "5 source columns -> 10 matrix columns, fitted on 160 train rows from split art-001-split-manifest.\nDropped (3): adjuster_touches [leakage: adjuster_touches represents the count of interactions during the claims handling process, which is largely determined by the claim outcome and subsequent processing rather than known at submission time. With mutual_info=0.1837 (second-highest), the association is explained by denied claims receiving different handling patterns post-decision, not by ex-ante predictiveness.]; claim_ref [identifier: 200 distinct values in 200 rows]; days_to_close [leakage: days_to_close is a post-decision variable determined after the claim outcome is resolved. At prediction time (when the claim is first filed), the number of days required to close is not yet known. The strong association (mutual_info=0.1837) with claim_denied reflects that denied vs. approved claims have systematically different processing timelines, not that this variable has predictive power for prospective decisions.].\nNumeric, median-imputed on train rows (3): days_since_policy_start, claim_amount, prior_claims_12m.\nOne-hot, levels fitted on train rows (2): channel (3), region (4).",
+    "final_features": [
+      "days_since_policy_start",
+      "claim_amount",
+      "prior_claims_12m",
+      "channel",
+      "region"
+    ],
+    "dropped_features": [
+      "adjuster_touches",
+      "claim_ref",
+      "days_to_close"
+    ],
+    "skipped_high_cardinality": [],
+    "candidates": [
+      {
+        "name": "logistic_l2",
+        "params": {
+          "max_iter": 2000,
+          "C": 1.0,
+          "random_state": 20260822
+        },
+        "cv_scores": [
+          0.7445887445887447,
+          0.7272727272727273,
+          0.4636363636363636,
+          0.6272727272727273,
+          0.9045454545454545
+        ],
+        "claimed_holdout_score": 0.8233618233618233,
+        "fit_error": null,
+        "model_artifact": null,
+        "cv_mean": 0.6934632034632034
+      },
+      {
+        "name": "hist_gbdt",
+        "params": {
+          "max_iter": 200,
+          "learning_rate": 0.1,
+          "random_state": 20260822
+        },
+        "cv_scores": [
+          0.5974025974025974,
+          0.709090909090909,
+          0.5045454545454545,
+          0.5590909090909091,
+          0.6590909090909092
+        ],
+        "claimed_holdout_score": 0.792022792022792,
+        "fit_error": null,
+        "model_artifact": null,
+        "cv_mean": 0.6058441558441559
+      }
+    ],
+    "chosen_model": {
+      "name": "logistic_l2",
+      "params": {
+        "max_iter": 2000,
+        "C": 1.0,
+        "random_state": 20260822
+      },
+      "cv_scores": [
+        0.7445887445887447,
+        0.7272727272727273,
+        0.4636363636363636,
+        0.6272727272727273,
+        0.9045454545454545
+      ],
+      "claimed_holdout_score": 0.8233618233618233,
+      "fit_error": null,
+      "model_artifact": null,
+      "cv_mean": 0.6934632034632034
+    },
+    "importance_artifact": "art-003-feature-importance",
+    "top_importances": [
+      [
+        "prior_claims_12m",
+        0.16096866096866086
+      ],
+      [
+        "claim_amount",
+        0.06410256410256401
+      ],
+      [
+        "days_since_policy_start",
+        0.05270655270655263
+      ],
+      [
+        "region",
+        0.02706552706552696
+      ],
+      [
+        "channel",
+        0.00427350427350417
+      ]
+    ],
+    "review_iterations": 1,
+    "objections": [],
+    "review_passes": [
+      {
+        "iteration": 1,
+        "claim": "pass",
+        "routed_to": "reporter",
+        "dispositions": {},
+        "new_objection_ids": []
+      }
+    ],
+    "reviewer_claim": "pass",
+    "reviewer_dispositions": {},
+    "review_verdict": "pass",
+    "report_artifact": "art-004-report-claims-timing-md",
+    "planted_leakage_columns": [
+      "days_to_close",
+      "adjuster_touches"
+    ],
+    "verified_holdout_score": null,
+    "rescore_status": "no_withheld_holdout",
+    "rescore_detail": "",
+    "refit_claim_gap": null,
+    "n_withheld_rows": null,
+    "baseline_zero_score": null,
+    "baseline_unit_score": null,
+    "baseline_status": "no_withheld_holdout",
+    "baseline_detail": "",
+    "baseline_recipe": "",
+    "rescore_seconds": 0.0,
+    "baseline_seconds": 0.0,
+    "errors": [],
+    "node_trace": [
+      {
+        "node": "intake",
+        "started": "2026-09-09T15:06:15.937152Z",
+        "ended": "2026-09-09T15:06:18.559167Z",
+        "input_tokens": 1237,
+        "output_tokens": 66,
+        "cost_usd": 0.001567,
+        "model": "claude-haiku-4-5",
+        "wall_seconds": 2.622015
+      },
+      {
+        "node": "profiler",
+        "started": "2026-09-09T15:06:18.559944Z",
+        "ended": "2026-09-09T15:06:29.849267Z",
+        "input_tokens": 1663,
+        "output_tokens": 402,
+        "cost_usd": 0.003673,
+        "model": "claude-haiku-4-5",
+        "wall_seconds": 11.289323
+      },
+      {
+        "node": "feature_eng",
+        "started": "2026-09-09T15:06:29.851608Z",
+        "ended": "2026-09-09T15:06:35.935838Z",
+        "input_tokens": 1749,
+        "output_tokens": 222,
+        "cost_usd": 0.002859,
+        "model": "claude-haiku-4-5",
+        "wall_seconds": 6.08423
+      },
+      {
+        "node": "modeler",
+        "started": "2026-09-09T15:06:35.936355Z",
+        "ended": "2026-09-09T15:06:42.886035Z",
+        "input_tokens": 1454,
+        "output_tokens": 206,
+        "cost_usd": 0.002484,
+        "model": "claude-haiku-4-5",
+        "wall_seconds": 6.94968
+      },
+      {
+        "node": "reviewer",
+        "started": "2026-09-09T15:06:42.886819Z",
+        "ended": "2026-09-09T15:06:48.263929Z",
+        "input_tokens": 3125,
+        "output_tokens": 148,
+        "cost_usd": 0.003865,
+        "model": "claude-haiku-4-5",
+        "wall_seconds": 5.37711
+      },
+      {
+        "node": "router",
+        "started": "2026-09-09T15:06:48.265532Z",
+        "ended": "2026-09-09T15:06:48.265567Z",
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cost_usd": 0.0,
+        "model": null,
+        "wall_seconds": 3.5e-05
+      },
+      {
+        "node": "reporter",
+        "started": "2026-09-09T15:06:48.266241Z",
+        "ended": "2026-09-09T15:06:48.274378Z",
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cost_usd": 0.0,
+        "model": null,
+        "wall_seconds": 0.008137
+      }
+    ],
+    "total_cost_usd": 0.014448,
+    "loop_exhausted": false,
+    "wall_seconds": 32.572965,
+    "baseline_separation": null,
+    "baseline_normalised_score": null
+  },
+  "results_row": {
+    "run_id": "8550e0b1bb79453aaec12a18cc416467",
+    "dataset_id": "claims_timing",
+    "arm": "team",
+    "reviewer_enabled": true,
+    "default_model": "haiku",
+    "reviewer_model": "haiku",
+    "reviewer_prompt": "base",
+    "reviewer_sees_code": true,
+    "naming": "descriptive",
+    "loop_cap": 3,
+    "objection_routing": "as_addressed",
+    "objection_closure": "off",
+    "forced_drop_release": "withdrawn_only",
+    "random_seed": 20260822,
+    "commit": "d8c72ff-dirty",
+    "dataset_source": "fixture",
+    "holdout_fraction": 0.0,
+    "dataset_hash": "1b6f09d0346ef7a86057be89e11d9983dac7b2a6c55ceefc703c951e55367e26",
+    "claimed_holdout_score": 0.8233618233618233,
+    "verified_holdout_score": null,
+    "holdout_claim_gap": null,
+    "metric": "roc_auc",
+    "rescore_status": "no_withheld_holdout",
+    "rescore_detail": "",
+    "refit_claim_gap": null,
+    "n_withheld_rows": null,
+    "baseline_zero_score": null,
+    "baseline_unit_score": null,
+    "baseline_normalised_score": null,
+    "baseline_separation": null,
+    "baseline_status": "no_withheld_holdout",
+    "baseline_detail": "",
+    "baseline_recipe": "",
+    "leakage_graded": true,
+    "leakage_planted": [
+      "adjuster_touches",
+      "days_to_close"
+    ],
+    "leakage_flagged": [],
+    "leakage_caught": false,
+    "leakage_remediated": true,
+    "leakage_recall": 0.0,
+    "leakage_precision": null,
+    "false_alarm_columns": [],
+    "false_alarm": 0,
+    "leakage_flagged_standing": [],
+    "false_alarm_standing": 0,
+    "n_final_features": 5,
+    "n_skipped_high_cardinality": 0,
+    "n_candidates": 2,
+    "n_candidates_failed_to_fit": 0,
+    "candidates_failed_to_fit": [],
+    "profiler_nominated": [
+      "adjuster_touches",
+      "claim_ref",
+      "days_to_close"
+    ],
+    "profiler_caught": true,
+    "profiler_recall": 1.0,
+    "profiler_false_alarm": 1,
+    "reviewer_nominated": [],
+    "reviewer_caught": false,
+    "reviewer_recall": 0.0,
+    "reviewer_false_alarm": 0,
+    "review_verdict": "pass",
+    "review_loops": 1,
+    "objections_raised": 0,
+    "objections_by_category": {
+      "leakage": 0,
+      "contamination": 0,
+      "overfit": 0,
+      "metric_mismatch": 0,
+      "implausible_importance": 0,
+      "spec_violation": 0,
+      "other": 0
+    },
+    "objections_open_at_end": 0,
+    "objections_resolved": 0,
+    "objections_withdrawn": 0,
+    "objections_falsely_resolved": 0,
+    "objections_by_target_node": {
+      "feature_eng": 0,
+      "modeler": 0
+    },
+    "objections_rerouted": 0,
+    "objected_columns_unremediated": [],
+    "route_sequence": [
+      "reporter"
+    ],
+    "new_objections_per_pass": [
+      0
+    ],
+    "wall_seconds": 32.572965,
+    "rescore_seconds": 0.0,
+    "baseline_seconds": 0.0,
+    "node_seconds": {
+      "intake": 2.622,
+      "profiler": 11.289,
+      "feature_eng": 6.084,
+      "modeler": 6.95,
+      "reviewer": 5.377,
+      "router": 0.0,
+      "reporter": 0.008
+    },
+    "cost_usd": 0.014448,
+    "errored": false,
+    "halted_at": null,
+    "errors": []
+  },
+  "node_seconds": {
+    "intake": 2.622,
+    "profiler": 11.289,
+    "feature_eng": 6.084,
+    "modeler": 6.95,
+    "reviewer": 5.377,
+    "router": 0.0,
+    "reporter": 0.008
+  },
+  "artifacts": [
+    {
+      "artifact_id": "art-001-split-manifest",
+      "filename": "art-001-split-manifest-split_manifest.json",
+      "text": "{\"version\": 1, \"encoding\": \"assignment-v1\", \"fold_train\": \"complement\", \"strategy\": \"stratified\", \"seed\": 20260822, \"target\": \"claim_denied\", \"n_rows\": 200, \"n_folds\": 5, \"holdout_fraction\": 0.2, \"assignment\": \"00344304h3004230h4233242h34200h2h2h40432220432h131234301h21411h24h0224h302h4422133204h4hh044h1hh03h3hh01433h1h2231301131h141231311143h22111442h31h13030h413h342h112003hh410h0h10h0h024443h2h01004h102h20\", \"counts\": {\"train\": 160, \"holdout\": 40, \"folds\": [32, 32, 32, 32, 32]}, \"assignment_sha256\": \"9b51924f99fd11358ba4ed10131ba433a0a7652c46390e5f9e44a483b52e933d\"}",
+      "truncated": false,
+      "binary": false
+    },
+    {
+      "artifact_id": "art-002-feature-transform",
+      "filename": "art-002-feature-transform-feature_transform.py",
+      "text": "\"\"\"Fitted feature transform emitted by feature_eng. Generated -- do not edit.\n\nConstants below were fitted on the pinned train rows only. `transform` reads no data at\nimport time, so re-applying it to a withheld holdout yields the same columns in the same\norder. That property is what makes verified_holdout_score comparable to the claimed one.\n\"\"\"\nimport pandas as pd\n\nTARGET = 'claim_denied'\nDROPPED = ['adjuster_touches', 'claim_denied', 'claim_ref', 'days_to_close']\nNUMERIC = ['days_since_policy_start', 'claim_amount', 'prior_claims_12m']\nCATEGORICAL = ['channel', 'region']\nMEDIANS = {'days_since_policy_start': 820.5, 'claim_amount': 1539.59, 'prior_claims_12m': 1.0}\nLEVELS = {'channel': ['agent', 'phone', 'web'], 'region': ['east', 'north', 'south', 'west']}\nFEATURE_ORDER = ['days_since_policy_start', 'claim_amount', 'prior_claims_12m', 'channel=agent', 'channel=phone', 'channel=web', 'region=east', 'region=north', 'region=south', 'region=west']\nSOURCE_COLUMNS = ['days_since_policy_start', 'claim_amount', 'prior_claims_12m', 'channel', 'region']\nCOLUMN_SOURCE = {'days_since_policy_start': 'days_since_policy_start', 'claim_amount': 'claim_amount', 'prior_claims_12m': 'prior_claims_12m', 'channel=agent': 'channel', 'channel=phone': 'channel', 'channel=web': 'channel', 'region=east': 'region', 'region=north': 'region', 'region=south': 'region', 'region=west': 'region'}\n\n\ndef transform(df):\n    \"\"\"Raw frame -> model matrix, float64, no NaN, columns exactly FEATURE_ORDER.\"\"\"\n    out = pd.DataFrame(index=df.index)\n    for c in NUMERIC:\n        col = df[c] if c in df.columns else pd.Series(MEDIANS[c], index=df.index)\n        out[c] = pd.to_numeric(col, errors='coerce').astype('float64').fillna(MEDIANS[c])\n    for c in CATEGORICAL:\n        if c in df.columns:\n            col = df[c].astype('string')\n        else:\n            col = pd.Series(pd.NA, index=df.index, dtype='string')\n        for level in LEVELS[c]:\n            out[c + '=' + level] = (col == level).fillna(False).astype('float64')\n    for name in FEATURE_ORDER:\n        if name not in out.columns:\n            out[name] = 0.0\n    return out[FEATURE_ORDER]\n\n",
+      "truncated": false,
+      "binary": false
+    },
+    {
+      "artifact_id": "art-003-feature-importance",
+      "filename": "art-003-feature-importance-feature_importance.json",
+      "text": "{\n  \"method\": \"permutation_importance\",\n  \"scoring\": \"roc_auc\",\n  \"n_repeats\": 10,\n  \"evaluated_on\": \"agent_holdout\",\n  \"random_state\": 20260822,\n  \"note\": \"Source-column importances: the feature transform is inside the estimator pipeline, so sklearn permuted raw columns, not one-hot expansions.\",\n  \"matrix_columns\": [\n    \"days_since_policy_start\",\n    \"claim_amount\",\n    \"prior_claims_12m\",\n    \"channel=agent\",\n    \"channel=phone\",\n    \"channel=web\",\n    \"region=east\",\n    \"region=north\",\n    \"region=south\",\n    \"region=west\"\n  ],\n  \"candidates\": {\n    \"logistic_l2\": [\n      [\n        \"prior_claims_12m\",\n        0.16096866096866086,\n        0.0618076049609289\n      ],\n      [\n        \"claim_amount\",\n        0.06410256410256401,\n        0.025994711667941116\n      ],\n      [\n        \"days_since_policy_start\",\n        0.05270655270655263,\n        0.020115251405246545\n      ],\n      [\n        \"region\",\n        0.02706552706552696,\n        0.0292560827399346\n      ],\n      [\n        \"channel\",\n        0.00427350427350417,\n        0.004273504273504221\n      ]\n    ],\n    \"hist_gbdt\": [\n      [\n        \"prior_claims_12m\",\n        0.10883190883190881,\n        0.06032624781029158\n      ],\n      [\n        \"claim_amount\",\n        0.09145299145299143,\n        0.062176835559586766\n      ],\n      [\n        \"days_since_policy_start\",\n        0.06994301994301991,\n        0.047912613600776234\n      ],\n      [\n        \"region\",\n        0.03760683760683756,\n        0.030785054493994515\n      ],\n      [\n        \"channel\",\n        0.008831908831908819,\n        0.027723301099473692\n      ]\n    ]\n  }\n}",
+      "truncated": false,
+      "binary": false
+    },
+    {
+      "artifact_id": "art-004-report-claims-timing-md",
+      "filename": "art-004-report-claims-timing-md-report-claims_timing.md",
+      "text": "# ds-agents run report -- claims_timing\n\nWritten by the reporter node. Nothing here is a grade: `claimed_holdout_score` is what the system said about itself, scored on a holdout the system chose. The independent number is written by the harness after the graph ends and is deliberately not in this file.\n\n## Run\n\n| field | value |\n| --- | --- |\n| run_id | 8550e0b1bb79453aaec12a18cc416467 |\n| dataset_id | claims_timing |\n| arm | team |\n| reviewer_enabled | True |\n| reviewer_model | haiku |\n| reviewer_prompt | base |\n| reviewer_sees_code | True |\n| naming | descriptive |\n| loop_cap | 3 |\n| random_seed | 20260822 |\n| started_at | 2026-09-09 15:06:15.702016+00:00 |\n\n## Task\n\n| field | value |\n| --- | --- |\n| target | claim_denied |\n| task_type | binary |\n| metric | roc_auc |\n| greater_is_better | True |\n| split_strategy | stratified |\n| split_key | - |\n| positive_class | - |\n\n## Data profile\n\n200 rows x 9 columns.\n\nTarget balance: 0: 68.0%, 1: 32.0%.\n\n| column | dtype | missing | distinct |\n| --- | --- | --- | --- |\n| claim_ref | str | 0.0% | 200 |\n| days_since_policy_start | int64 | 0.0% | 193 |\n| claim_amount | float64 | 7.0% | 186 |\n| prior_claims_12m | int64 | 0.0% | 6 |\n| channel | str | 0.0% | 3 |\n| region | str | 0.0% | 4 |\n| days_to_close | float64 | 0.0% | 141 |\n| adjuster_touches | int64 | 0.0% | 10 |\n| claim_denied | int64 | 0.0% | 2 |\n\n## Leakage candidates (profiler)\n\n| column | suspicion | evidence | reason |\n| --- | --- | --- | --- |\n| claim_ref | high | n_unique=200 equals n_rows=200; mutual_info=0.2116 is highest among columns but explained by perfect row identification | Perfect one-to-one cardinality with rows (200 unique values for 200 rows) combined with elevated mutual information of 0.2116. This pattern indicates the column is a memorizing identifier rather than a predictive feature. |\n| days_to_close | high | mutual_info=0.125 with plausible mechanism: denied claims may close faster/slower than approved ones; high specificity (141 unique values) suggests detailed temporal data collected after resolution | Days to close is likely a post-hoc variable determined after a claim decision is reached. The number of days required to close a claim depends on whether it is denied or approved, making it causally downstream of the target and not available at prediction time. |\n| adjuster_touches | medium | mutual_info=0.1837 is second-highest; this metric likely varies by claim disposition and may not be known at prediction time | Number of adjuster interactions is likely determined during or after the claims process based on the claim outcome. Denied claims may receive different handling or interaction patterns, making this a potential post-decision variable. |\n\n## Feature engineering\n\nfeature_code_artifact: art-002-feature-transform\n\n5 source columns -> 10 matrix columns, fitted on 160 train rows from split art-001-split-manifest.\nDropped (3): adjuster_touches [leakage: adjuster_touches represents the count of interactions during the claims handling process, which is largely determined by the claim outcome and subsequent processing rather than known at submission time. With mutual_info=0.1837 (second-highest), the association is explained by denied claims receiving different handling patterns post-decision, not by ex-ante predictiveness.]; claim_ref [identifier: 200 distinct values in 200 rows]; days_to_close [leakage: days_to_close is a post-decision variable determined after the claim outcome is resolved. At prediction time (when the claim is first filed), the number of days required to close is not yet known. The strong association (mutual_info=0.1837) with claim_denied reflects that denied vs. approved claims have systematically different processing timelines, not that this variable has predictive power for prospective decisions.].\nNumeric, median-imputed on train rows (3): days_since_policy_start, claim_amount, prior_claims_12m.\nOne-hot, levels fitted on train rows (2): channel (3), region (4).\n\nKept (5): days_since_policy_start, claim_amount, prior_claims_12m, channel, region\nDropped (3): adjuster_touches, claim_ref, days_to_close\n\n## Modelling\n\n| candidate | cv mean | cv scores | claimed holdout | note |\n| --- | --- | --- | --- | --- |\n| logistic_l2 | 0.6935 | 0.7446, 0.7273, 0.4636, 0.6273, 0.9045 | 0.8234 | - |\n| hist_gbdt | 0.6058 | 0.5974, 0.7091, 0.5045, 0.5591, 0.6591 | 0.7920 | - |\n\nChosen: logistic_l2.\nClaimed roc_auc on the agents' holdout (a claim, not a verified score): 0.8234.\n\nPermutation importance (source columns, agents' holdout):\n\n| column | importance |\n| --- | --- |\n| prior_claims_12m | 0.1610 |\n| claim_amount | 0.0641 |\n| days_since_policy_start | 0.0527 |\n| region | 0.0271 |\n| channel | 0.0043 |\n\nimportance_artifact: art-003-feature-importance\n\n## Review\n\nVerdict: pass. Iterations: 1 of 3. Last claim: pass.\n\nNo objections raised.\n\n| iteration | claim | routed_to | dispositions |\n| --- | --- | --- | --- |\n| 1 | pass | reporter | - |\n\n## Errors\n\nNone.\n\n## Node trace\n\n| node | seconds | model | in/out tokens | cost |\n| --- | --- | --- | --- | --- |\n| intake | 2.6220 | claude-haiku-4-5 | 1237/66 | 0.0016 |\n| profiler | 11.2893 | claude-haiku-4-5 | 1663/402 | 0.0037 |\n| feature_eng | 6.0842 | claude-haiku-4-5 | 1749/222 | 0.0029 |\n| modeler | 6.9497 | claude-haiku-4-5 | 1454/206 | 0.0025 |\n| reviewer | 5.3771 | claude-haiku-4-5 | 3125/148 | 0.0039 |\n| router | 0.0000 | - | 0/0 | 0.0000 |\n| total | 32.3224 | - | - | 0.0144 |\n\n_The reporter's own event is not in this table: it is minted after the report is written. The harness's results row is built from the finished state and includes it._\n",
+      "truncated": false,
+      "binary": false
+    },
+    {
+      "artifact_id": "feature_importance.json",
+      "filename": "feature_importance.json",
+      "text": "{\n  \"method\": \"permutation_importance\",\n  \"scoring\": \"roc_auc\",\n  \"n_repeats\": 10,\n  \"evaluated_on\": \"agent_holdout\",\n  \"random_state\": 20260822,\n  \"note\": \"Source-column importances: the feature transform is inside the estimator pipeline, so sklearn permuted raw columns, not one-hot expansions.\",\n  \"matrix_columns\": [\n    \"days_since_policy_start\",\n    \"claim_amount\",\n    \"prior_claims_12m\",\n    \"channel=agent\",\n    \"channel=phone\",\n    \"channel=web\",\n    \"region=east\",\n    \"region=north\",\n    \"region=south\",\n    \"region=west\"\n  ],\n  \"candidates\": {\n    \"logistic_l2\": [\n      [\n        \"prior_claims_12m\",\n        0.16096866096866086,\n        0.0618076049609289\n      ],\n      [\n        \"claim_amount\",\n        0.06410256410256401,\n        0.025994711667941116\n      ],\n      [\n        \"days_since_policy_start\",\n        0.05270655270655263,\n        0.020115251405246545\n      ],\n      [\n        \"region\",\n        0.02706552706552696,\n        0.0292560827399346\n      ],\n      [\n        \"channel\",\n        0.00427350427350417,\n        0.004273504273504221\n      ]\n    ],\n    \"hist_gbdt\": [\n      [\n        \"prior_claims_12m\",\n        0.10883190883190881,\n        0.06032624781029158\n      ],\n      [\n        \"claim_amount\",\n        0.09145299145299143,\n        0.062176835559586766\n      ],\n      [\n        \"days_since_policy_start\",\n        0.06994301994301991,\n        0.047912613600776234\n      ],\n      [\n        \"region\",\n        0.03760683760683756,\n        0.030785054493994515\n      ],\n      [\n        \"channel\",\n        0.008831908831908819,\n        0.027723301099473692\n      ]\n    ]\n  }\n}",
+      "truncated": false,
+      "binary": false
+    },
+    {
+      "artifact_id": "feature_transform.py",
+      "filename": "feature_transform.py",
+      "text": "\"\"\"Fitted feature transform emitted by feature_eng. Generated -- do not edit.\n\nConstants below were fitted on the pinned train rows only. `transform` reads no data at\nimport time, so re-applying it to a withheld holdout yields the same columns in the same\norder. That property is what makes verified_holdout_score comparable to the claimed one.\n\"\"\"\nimport pandas as pd\n\nTARGET = 'claim_denied'\nDROPPED = ['adjuster_touches', 'claim_denied', 'claim_ref', 'days_to_close']\nNUMERIC = ['days_since_policy_start', 'claim_amount', 'prior_claims_12m']\nCATEGORICAL = ['channel', 'region']\nMEDIANS = {'days_since_policy_start': 820.5, 'claim_amount': 1539.59, 'prior_claims_12m': 1.0}\nLEVELS = {'channel': ['agent', 'phone', 'web'], 'region': ['east', 'north', 'south', 'west']}\nFEATURE_ORDER = ['days_since_policy_start', 'claim_amount', 'prior_claims_12m', 'channel=agent', 'channel=phone', 'channel=web', 'region=east', 'region=north', 'region=south', 'region=west']\nSOURCE_COLUMNS = ['days_since_policy_start', 'claim_amount', 'prior_claims_12m', 'channel', 'region']\nCOLUMN_SOURCE = {'days_since_policy_start': 'days_since_policy_start', 'claim_amount': 'claim_amount', 'prior_claims_12m': 'prior_claims_12m', 'channel=agent': 'channel', 'channel=phone': 'channel', 'channel=web': 'channel', 'region=east': 'region', 'region=north': 'region', 'region=south': 'region', 'region=west': 'region'}\n\n\ndef transform(df):\n    \"\"\"Raw frame -> model matrix, float64, no NaN, columns exactly FEATURE_ORDER.\"\"\"\n    out = pd.DataFrame(index=df.index)\n    for c in NUMERIC:\n        col = df[c] if c in df.columns else pd.Series(MEDIANS[c], index=df.index)\n        out[c] = pd.to_numeric(col, errors='coerce').astype('float64').fillna(MEDIANS[c])\n    for c in CATEGORICAL:\n        if c in df.columns:\n            col = df[c].astype('string')\n        else:\n            col = pd.Series(pd.NA, index=df.index, dtype='string')\n        for level in LEVELS[c]:\n            out[c + '=' + level] = (col == level).fillna(False).astype('float64')\n    for name in FEATURE_ORDER:\n        if name not in out.columns:\n            out[name] = 0.0\n    return out[FEATURE_ORDER]\n\n",
+      "truncated": false,
+      "binary": false
+    },
+    {
+      "artifact_id": "split_manifest.json",
+      "filename": "split_manifest.json",
+      "text": "{\"version\": 1, \"encoding\": \"assignment-v1\", \"fold_train\": \"complement\", \"strategy\": \"stratified\", \"seed\": 20260822, \"target\": \"claim_denied\", \"n_rows\": 200, \"n_folds\": 5, \"holdout_fraction\": 0.2, \"assignment\": \"00344304h3004230h4233242h34200h2h2h40432220432h131234301h21411h24h0224h302h4422133204h4hh044h1hh03h3hh01433h1h2231301131h141231311143h22111442h31h13030h413h342h112003hh410h0h10h0h024443h2h01004h102h20\", \"counts\": {\"train\": 160, \"holdout\": 40, \"folds\": [32, 32, 32, 32, 32]}, \"assignment_sha256\": \"9b51924f99fd11358ba4ed10131ba433a0a7652c46390e5f9e44a483b52e933d\"}",
+      "truncated": false,
+      "binary": false
+    }
+  ],
+  "fixture_manifest": {
+    "seed": 20260827,
+    "n_rows": 200,
+    "target": "claim_denied",
+    "task_type": "binary",
+    "metric": "roc_auc",
+    "planted_leakage": [
+      {
+        "column": "days_to_close",
+        "kind": "recorded_after_label",
+        "why": "Stamped when the claim file is closed, which happens after the denial decision. It cannot exist at predict time.",
+        "agreement_with_target": null,
+        "mutual_info_with_target": 0.125
+      },
+      {
+        "column": "adjuster_touches",
+        "kind": "recorded_after_label",
+        "why": "Counted over the life of the claim file, so it is complete only once the claim is closed and the decision has already been made.",
+        "agreement_with_target": null,
+        "mutual_info_with_target": 0.1837
+      }
+    ],
+    "legit_strong_features": [
+      "prior_claims_12m",
+      "claim_amount"
+    ],
+    "noise_features": [
+      "channel",
+      "region"
+    ],
+    "id_columns": [
+      "claim_ref"
+    ],
+    "positive_rate": 0.32
+  }
+}
