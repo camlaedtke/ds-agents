@@ -1334,3 +1334,78 @@ reason as `bench-tall`.
   columns, all categorical); nothing yet connects those two facts to a reviewer that objects.
 - **`objections_raised` is 0 on 36 of 52 rows.** A reviewer that never objects is not obviously
   working, and this file cannot distinguish "nothing to object to" from "not looking".
+
+---
+
+## 2026-09-21 -- `claims-repro`: does Result 3's arm still behave at HEAD?
+
+**Pre-registered before the run, at commit `31c5fa8` with a clean tree.** Written here first so the
+endpoints cannot move after the numbers land.
+
+### The question, and what it is not
+
+`docs/NEXT.md` carried this as the largest standing risk to a number already published in the
+README: the 2026-09-09 walkthrough session recorded that `claims_timing` "no longer loops", against
+committed rows that do. README Result 3 quotes this fixture heavily.
+
+**Half of that risk dissolved for $0 before the run, and the resolution is a conditions mismatch.**
+`docs/explainers/capture_runs.py` invokes `ds-agents run --dataset claims_timing` with no
+`--naming` and no `--reviewer-prompt`, so its two replicates are `naming=descriptive`,
+`reviewer_prompt=base`, `objection_routing=as_addressed`. Every row in README Result 3 is
+`naming=opaque`. The walkthrough was never observing the arm it appeared to contradict.
+
+Worse for the alarm and better for the project: the descriptive arm's own committed rows
+(`2026-08-27_naming-ablation.jsonl`, n=10) are `review_loops` [1,1,1,1,1,1,3,2,1,1] with
+`leakage_remediated` 8/10. Eight of ten passed first-loop with zero objections at the time the
+ablation was published. Two fresh replicates doing the same thing is that distribution's most
+likely observation, not a departure from it. The profiler drops the traps by name in this arm, so
+the reviewer never sees a leaky matrix, which is exactly what Result 2 says and exactly why
+"everything after Result 2 runs in the opaque arm."
+
+So this run tests the remaining half, which is real: **the opaque rows carry an older commit or no
+commit at all, and nothing has re-run that arm at HEAD.**
+
+### Configuration
+
+`uv run ds-agents eval --subset claims-repro --name claims-repro --replicates 2 --n 5
+--max-cost-usd 0.40`
+
+One cell, `claims-opaque-which`: `claims_timing`, Haiku throughout, `naming=opaque`,
+`reviewer_prompt=which_column`, `objection_routing=by_category`, `objection_closure=off`,
+`loop_cap=3`, `random_seed` untouched. n=10, 2 replicates of 5, ordered replicate-major. The subset
+shares the `Cell` **object** with `ci` rather than retyping its arguments, pinned by
+`test_claims_repro_is_the_ci_claims_cell_itself_not_a_copy`.
+
+Comparand: `evals/results/2026-08-31_ci-baseline.jsonl`, the same cell name, n=10, commit
+`8a629bf-dirty`. **This crosses a commit boundary**, and `commit` is an `evaldiff.CONDITION_FIELD`,
+so `eval-diff` will report the two sides as separate one-sided cells by design. The pooled
+comparison below is therefore stated by hand, with the boundary named, per /run-eval's rule.
+
+Estimated spend $0.30 (measured baseline mean $0.0296/run), cap $0.40, expected wall clock 5-7 min.
+
+### Pre-registered endpoints
+
+Baseline values are the 2026-08-31 cell, n=10. Null observations are excluded from denominators,
+which is `eval-diff`'s rule; where that differs from the README's own denominator both are given.
+
+| # | endpoint | baseline | reproduces if | fails if |
+|---|---|---|---|---|
+| 1 | `reviewer_caught` | 10/10 | >= 7/10 | <= 6/10 |
+| 2 | `leakage_remediated` | 9/9 non-null (README quotes 9/10) | >= 7 of non-null | <= 6 of non-null |
+| 3 | first-pass-with-zero-objections | **0/10** | <= 2/10 | >= 5/10 |
+| 4 | `review_loops` mean | 2.30 | in [1.8, 3.0] | < 1.5 |
+| 5 | `leakage_caught` | 3/10 | in [0,7] (wide on purpose, n=10) | -- |
+| 6 | `cost_usd` mean | $0.0296 | within +/-25% | -- |
+
+Endpoints 1 and 2 are the ones the README's numbers rest on. **Endpoint 3 is the falsification test
+for the walkthrough's claim**: the observation that started this question was 2 of 2 runs passing
+first-loop with zero objections, and this arm has never once done that in 10 committed runs. A
+majority of first-pass runs here is the fixture genuinely having shifted. Endpoints 5 and 6 are
+recorded because they are cheap, not because n=10 can resolve them.
+
+Endpoints 1-4 are read as a conjunction: if all four reproduce, README Result 3's `ci-baseline`
+row describes the pipeline at HEAD and the provenance gap on that row closes.
+
+### Results
+
+_(pending -- the run has not been executed at the time this block was written)_

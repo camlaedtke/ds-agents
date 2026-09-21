@@ -124,18 +124,24 @@ class Cell:
 # here -- a run that takes the review loop three times costs around 2.5x one that passes first
 # time. `est_cost_usd` is planning-only and never reaches a results row, so changing it revises no
 # published number -- it only changes where a future cap truncates.
+# The cell Result 3 of the README rests on, lifted out of the `ci` tuple so that the
+# `claims-repro` subset below can name the SAME object rather than a copy of its arguments. A
+# reproduction check whose conditions are retyped is a check of the typing; sharing the object
+# makes "identical conditions" a property of the module instead of a promise in a commit message.
+CLAIMS_OPAQUE_WHICH = Cell(
+    name="claims-opaque-which",
+    dataset="claims_timing",
+    naming="opaque",
+    reviewer_prompt="which_column",
+    objection_routing="by_category",
+    est_cost_usd=0.030,
+)
+
 SUBSETS: dict[str, tuple[Cell, ...]] = {
     "toy": (Cell(name="toy-default", dataset="toy", est_cost_usd=0.015),),
     "ci": (
         Cell(name="toy-default", dataset="toy", est_cost_usd=0.015),
-        Cell(
-            name="claims-opaque-which",
-            dataset="claims_timing",
-            naming="opaque",
-            reviewer_prompt="which_column",
-            objection_routing="by_category",
-            est_cost_usd=0.030,
-        ),
+        CLAIMS_OPAQUE_WHICH,
         Cell(
             name="reissued-opaque-which",
             dataset="reissued_ids",
@@ -145,6 +151,14 @@ SUBSETS: dict[str, tuple[Cell, ...]] = {
             est_cost_usd=0.029,
         ),
     ),
+    # One cell, ten runs, one question: does the arm the README quotes still behave at HEAD the way
+    # its committed rows say? The `ci` subset would answer it at n=4 for $0.30 while spending two
+    # thirds of that on `toy` and `reissued_ids`; this spends all of it on the cell that carries
+    # Result 3. It is not an ablation and has no second arm -- the comparison is against
+    # `evals/results/2026-08-31_ci-baseline.jsonl` (n=10, same cell, commit `8a629bf-dirty`), which
+    # means it crosses a commit boundary and `commit` is an eval-diff condition field, so eval-diff
+    # will report the two sides as separate cells and the pooling has to be stated by hand.
+    "claims-repro": (CLAIMS_OPAQUE_WHICH,),
     # The first subset that names a dataset nobody here wrote. One cell, one dataset, on purpose:
     # `credit_g` is the cheapest thing in the manifest at 1000 rows, and the point is to prove the
     # run-and-grade path end to end before thirteen of them are paid for. `est_cost_usd` is a

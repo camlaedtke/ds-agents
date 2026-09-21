@@ -781,9 +781,10 @@ def _build_parser() -> argparse.ArgumentParser:
         "--subset",
         default="ci",
         help=(
-            "which cells to run: toy, ci, bench-smoke, bench-mid, bench-tall, or full. `full` is "
-            "all 13 manifest datasets and costs about $1.10 at --replicates 2 --n 2; --dry-run "
-            "first. See harness.SUBSETS."
+            "which cells to run: toy, ci, claims-repro, bench-smoke, bench-mid, bench-tall, or "
+            "full. `claims-repro` is the single `ci` claims cell on its own, for re-running the "
+            "arm README Result 3 rests on at a later commit. `full` is all 13 manifest datasets "
+            "and costs about $1.10 at --replicates 2 --n 2; --dry-run first. See harness.SUBSETS."
         ),
     )
     ev.add_argument(

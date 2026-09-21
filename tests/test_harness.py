@@ -17,7 +17,15 @@ import pytest
 
 from ds_agents.benchmark import load_manifest
 from ds_agents.fixtures import available
-from ds_agents.harness import SUBSETS, Cell, HarnessReport, PlannedRun, plan, run_eval
+from ds_agents.harness import (
+    CLAIMS_OPAQUE_WHICH,
+    SUBSETS,
+    Cell,
+    HarnessReport,
+    PlannedRun,
+    plan,
+    run_eval,
+)
 from ds_agents.runnable import available as runnable_available
 from ds_agents.state import NodeEvent, PipelineState, utc_now
 
@@ -271,6 +279,21 @@ class TestSubsetsPointAtRealFixtures:
 
     def test_the_toy_subset_is_just_toy_default(self):
         assert [cell.name for cell in SUBSETS["toy"]] == ["toy-default"]
+
+    def test_claims_repro_is_the_ci_claims_cell_itself_not_a_copy(self):
+        """The reproduction subset must share the object, not the argument list.
+
+        `claims-repro` exists to re-run the arm README Result 3 quotes at a later commit. If it
+        held its own `Cell(...)` with the same arguments typed again, a later edit to the `ci`
+        cell would silently turn the check into a comparison of two different arms, which is the
+        one failure mode a reproduction check cannot survive. `is` is the assertion, not `==`.
+        """
+        assert len(SUBSETS["claims-repro"]) == 1
+        assert SUBSETS["claims-repro"][0] is CLAIMS_OPAQUE_WHICH
+        assert CLAIMS_OPAQUE_WHICH in SUBSETS["ci"]
+        assert SUBSETS["claims-repro"][0] is next(
+            cell for cell in SUBSETS["ci"] if cell.name == "claims-opaque-which"
+        )
 
     def test_ci_cells_share_loop_cap_three_and_closure_off(self):
         """The spec's cell definitions, pinned so a future edit notices it changed one.
