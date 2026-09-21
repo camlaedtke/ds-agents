@@ -472,6 +472,16 @@ unremediated -- outside the trap fixtures for the first time.
       selectivity (third entry), both for $0 from committed rows.
 - [ ] resume bullet with real numbers
 
+Scope note 2026-09-21: **reproduction became a phase 5 activity, and it was not on the list.**
+Nothing here says "re-run a published cell at a later commit", and the writeup needed it: every
+number in the Result 3 table was produced between 2026-08-27 and 08-31, and the README installed on
+2026-09-21 quoted them as descriptions of the current pipeline. `claims-repro` (n=10, $0.3006)
+established that one of those cells still holds, and the same check turned up a second cell that
+may not -- the profiler's opaque-arm recall reads 2/10, 5/10 and 8/10 across three dates. The
+implication for this phase's remaining boxes is that an ablation's two arms must run at one commit,
+which they always did, and that a published number ages against a model nobody pinned, which
+nothing in the repo currently measures. See DECISIONS.md 2026-09-21, fourth and sixth entries.
+
 Scope note: `docs/explainers/pipeline-walkthrough.html` and `src/ds_agents/capture.py` were built
 on 2026-09-09 and are not on any list above. They are documentation rather than measurement -- a
 replay of five captured runs node by node -- but `capture.py` ships in `src/` under fast tests

@@ -82,10 +82,13 @@ reads `status=ok`, `share=0.521`, `n80=3` on 7 of 10 rows, reproducing the commi
 exactly.
 
 The floor: **891 tests pass** in the full suite with 29 skipped, **798 of them fast** (up from
-778 and 869 at session start), ruff clean. Toy green live at
-the end of session: $0.0133, 16.2s, first pass, reading `status=ok`, `share=0.378`, `n80=3`, which
-reproduces the committed toy envelope exactly and matches the previous session's first-pass run.
-Spend this session was $0.3006 on the reproduction plus $0.0133 on the toy, about $0.314 total;
+778 and 869 at session start), ruff clean. Toy green live twice, the
+second time at final HEAD after the review fixes landed: $0.0133 / 16.2s and $0.0137 / 25.5s, both
+first pass, both reading `status=ok`, `share=0.378`, `n80=3`, which reproduces the committed toy
+envelope exactly. The two agree on cost to 3% and disagree on wall clock by 57%, all of it in the
+profiler (5.1s against 13.3s) -- **wall clock is the noisy axis on a first-pass toy run and cost is
+not**, which is worth knowing before anyone reads a timing difference as a change. Spend this
+session was $0.3006 on the reproduction plus $0.0270 across the two toy runs, about $0.328 total;
 both investigations were $0.
 
 ## First prompt
