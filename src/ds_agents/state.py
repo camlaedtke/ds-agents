@@ -265,6 +265,25 @@ one is why `baseline_separation` exists: the span goes on the row so a reader ca
 normalised column was divided by, instead of a status flag asserting that they should not trust it.
 """
 
+TopImportanceStatus = Literal["ok", "no_importances", "no_positive_importance"]
+"""Why `top_importance_share` and `top_importance_n80` are or are not on this row.
+
+Two different reasons a reviewer-shape summary can be missing, and the reason `leakage_graded`
+exists applies here too: a bare null does not say which. `no_importances` means `top_importances`
+itself is empty -- no candidate was chosen, or the modeling snippet produced nothing -- and there
+is no distribution to summarise at all. `no_positive_importance` means the list is non-empty but
+every mean importance in it is zero or negative: permutation importance can go negative when
+shuffling a column actually IMPROVES the score, and a set of columns that is entirely
+zero-or-negative has no positive importance mass for a rank-1 share to divide by, or for an
+80%-of-total threshold to sum toward. Both derived columns are `None` under either status; `ok` is
+the only value under which they carry a number.
+
+Computed over the same top `TOP_IMPORTANCES` (15) entries the reviewer is actually shown, not
+every column the modeler fit on -- `top_importances` is already truncated by the time it reaches
+`PipelineState`, and that truncation is the point: these two columns describe the shape of what
+the reviewer's prompt contains, not a property of a ranking nothing downstream ever sees.
+"""
+
 DEFAULT_RANDOM_SEED = 20260822
 
 DEFAULT_LOOP_CAP = 3
@@ -844,6 +863,66 @@ class PipelineState(Contract):
         numerator = self.verified_holdout_score - self.baseline_zero_score
         return (numerator if self.spec.greater_is_better else -numerator) / separation
 
+    @computed_field
+    @property
+    def top_importance_status(self) -> TopImportanceStatus:
+        """Why `top_importance_share` and `top_importance_n80` are or are not on this row.
+
+        See the module-level `TopImportanceStatus` docstring for what the two null values mean.
+        """
+        if not self.top_importances:
+            return "no_importances"
+        if not any(mean > 0.0 for _, mean in self.top_importances):
+            return "no_positive_importance"
+        return "ok"
+
+    @computed_field
+    @property
+    def top_importance_share(self) -> float | None:
+        """Rank-1 mean importance / sum of positive mean importances, among the shown columns.
+
+        A float in (0, 1]: `top_importances` is sorted highest-first (see its own docstring), so
+        the rank-1 entry is the maximum of the list, and under `top_importance_status == "ok"`
+        that maximum is itself positive and no larger than the sum of every positive value in the
+        list. Close to 1.0 when one column dominates the distribution the reviewer is shown; close
+        to 1/n when it is flat across n roughly-equal columns.
+
+        `None` exactly when `top_importance_status != "ok"` -- see that field for the two reasons.
+        """
+        if self.top_importance_status != "ok":
+            return None
+        positive_sum = sum(mean for _, mean in self.top_importances if mean > 0.0)
+        return self.top_importances[0][1] / positive_sum
+
+    @computed_field
+    @property
+    def top_importance_n80(self) -> int | None:
+        """How many shown columns it takes to reach 80% of their total positive importance.
+
+        Walks `top_importances` in its existing highest-first order, summing only positive mean
+        importances -- zero and negative entries contribute no mass, and because the list is
+        sorted descending they only ever appear after every positive one -- and returns the rank
+        at which the running sum first reaches 80% of the positive total. 1 when a single column
+        carries the distribution the reviewer is shown; close to the count of positive columns
+        when it is flat.
+
+        An integer >= 1 exactly when `top_importance_status == "ok"`, `None` otherwise -- see that
+        field for the two reasons a shape cannot be summarised.
+        """
+        if self.top_importance_status != "ok":
+            return None
+        positive = [mean for _, mean in self.top_importances if mean > 0.0]
+        threshold = 0.8 * sum(positive)
+        cumulative = 0.0
+        for rank, mean in enumerate(positive, start=1):
+            cumulative += mean
+            if cumulative >= threshold:
+                return rank
+        # Unreachable in exact arithmetic: the full positive prefix sums to exactly the total,
+        # which is always >= threshold. Kept only as a floating-point guard so this can never
+        # return None once `top_importance_status` says "ok".
+        return len(positive)
+
     def objected_columns(
         self,
         categories: frozenset[str] = COLUMN_SCOPED_CATEGORIES,
@@ -1092,6 +1171,14 @@ class PipelineState(Contract):
             "n_candidates": len(self.candidates),
             "n_candidates_failed_to_fit": sum(1 for c in self.candidates if c.fit_error),
             "candidates_failed_to_fit": sorted(c.name for c in self.candidates if c.fit_error),
+            # The shape of the permutation-importance distribution the REVIEWER is shown --
+            # `top_importances`, truncated to `TOP_IMPORTANCES`, is the only per-column evidence
+            # in its prompt, and until these two columns existed nothing on the row summarised it.
+            # `top_importance_status` says why the other two are null when they are, exactly as
+            # `leakage_graded`, `rescore_status` and `baseline_status` do for theirs.
+            "top_importance_share": self.top_importance_share,
+            "top_importance_n80": self.top_importance_n80,
+            "top_importance_status": self.top_importance_status,
             # the same comparison one node upstream. `None` rather than empty when the profiler
             # never ran: a node that crashed nominated nothing in a different sense than a node
             # that looked and declined, and averaging those together would be a lie.

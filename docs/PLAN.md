@@ -457,16 +457,19 @@ unremediated -- outside the trap fixtures for the first time.
       cost estimate, so the model main effect is better powered but still not at n=10. The loop-cap
       ablation ran at 1/3/5 rather than 1/3 -- `evals/results/2026-08-28_loop-cap-sweep.jsonl`, a
       null result on remediation. Reviewer on/off and single-agent-vs-team are untouched.
-- [~] README as a short paper: thesis, setup, results tables, failure analysis, design section
-      lifted from DECISIONS.md. **Drafted, not installed.** `docs/README-draft.md` is the full
-      writeup -- five results sections, design notes, limits -- and `docs/readme_numbers.py`
-      regenerates every table from the committed rows, so no number in it rests on prose. It stays
-      a draft in `docs/` until it is read and agreed; installing it is a rename plus deleting the
-      script. Two numbers changed during drafting because the rows disagreed with the notes: the
-      52-row coverage run is in the CONTROL arm (`base` prompt, `as_addressed` routing), so its
-      reviewer silence measures the default and not the best known arm; and `reissued_ids` shows
-      the profiler nominating the innocent planted control identifier 10/10 while finding the
-      guilty one 3/10, which is the name-reading result arriving independently.
+- [x] README as a short paper: thesis, setup, results tables, failure analysis, design section
+      lifted from DECISIONS.md. **Installed 2026-09-21.** `README.md` is the writeup: five results
+      sections, design notes, limits, reproducing. `docs/README-draft.md` is deleted and
+      `docs/readme_numbers.py` is kept and referenced from the README, because regenerating every
+      table from the committed rows is what keeps a number from resting on prose in a log. Every
+      table was re-derived at install time and all of them matched. Two numbers changed during
+      drafting because the rows disagreed with the notes: the 52-row coverage run is in the CONTROL
+      arm (`base` prompt, `as_addressed` routing), so its reviewer silence measures the default and
+      not the best known arm; and `reissued_ids` shows the profiler nominating the innocent planted
+      control identifier 10/10 while finding the guilty one 3/10, which is the name-reading result
+      arriving independently. The install session also closed the loop-rate question (declined, see
+      DECISIONS 2026-09-21 second entry) and produced a mechanism for the reviewer's dataset
+      selectivity (third entry), both for $0 from committed rows.
 - [ ] resume bullet with real numbers
 
 Scope note: `docs/explainers/pipeline-walkthrough.html` and `src/ds_agents/capture.py` were built

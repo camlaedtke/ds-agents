@@ -2615,3 +2615,109 @@ a table script must filter on a non-empty `leakage_planted` instead. And the fix
 the fixture scores are the agents' own claims, graded against ground truth by set comparison but
 never independently rescored. That is a narrower claim than the writeup would otherwise imply, and
 it is the kind of thing that is only cheap to fix before the number is quoted, not after.
+
+## 2026-09-21 (second entry): the cost model does not get a loop-rate term, because six events
+## across three datasets is a record of what happened and not a rate
+
+The recorded next step after the `--subset full` overrun was to add a loop-rate term to the per-run
+cost estimate, on the reasoning that the size model is fine and the missing variable is looping.
+The term was worked out and then declined. The estimate keeps its three pinned coefficients
+(`$0.010163 + $0.000230 * n_features + $0.005609 * (n_rows/1e5)`) unchanged.
+
+What the 52 rows support: 6 runs looped, a rate of 11.5% with a Clopper-Pearson 95% interval of
+[4.3%, 23.4%]. Conditional on looping, 2 of 6 took two loops and 4 of 6 took three, an interval on
+that split of [22%, 96%], which is the whole unit interval for practical purposes. The within-
+dataset multipliers are x1.80 at two loops (n=2) and x2.46 at three (n=4).
+
+Two things killed the term. First, the looping is not spread across the benchmark, it is piled into
+three datasets: `australian` 3/4, `kr_vs_kp` 2/4, `sylvine` 1/4, and 0/4 on the other ten. Under a
+null of one constant per-run loop probability applied uniformly, a goodness-of-fit across datasets
+gives chi-square(12) = 27.5, p = 0.0065, and `australian` alone drawing 3 or more loops in 4 tries
+has probability 0.56%. The data reject a single global rate on their own terms, before sample size
+is even argued. Second, the arithmetic of applying one anyway: a global expected multiplier of
+1.1431 on the $1.104 estimate predicts $1.2620 against an actual $1.2165. That looks like a 3.7%
+miss and is worse than it reads, because it charges the ten never-looping datasets a 17.3% premium
+for behaviour they have never shown while still pricing the three that do loop at 71% of what they
+actually cost. It would move the error around instead of removing it.
+
+The per-dataset alternative fails for a different reason. At n=4 an observed rate can only be one
+of five values and none of them is a rate, and there is no rule for assigning a dataset that has
+never been run to the looping bucket or the quiet one. That rule is exactly the open mechanism
+question, which is still unanswered, so a per-dataset term would encode the answer before it is
+known.
+
+What was done instead is the smaller true thing. The loop contingency is recorded as a note beside
+the coefficients in `harness.py`, with its rate, its interval, its two multipliers and the three
+datasets it is concentrated in, and the guidance to budget $0.05 to $0.15 of contingency on a
+`full` run under this reviewer config without distributing it across all 13 cells. The two
+multipliers are pinned by a test that recomputes them from the committed rows, named and commented
+as a record of the 2026-09-02 run and not as a model of the next one, following the same pattern as
+`PRE_REGISTERED_FIT`. This is the second time the honest move has been to publish the length of a
+scale instead of a single adjusted number, and it is the same reasoning as declining the
+13-dataset refit: a known mechanism laundered into a coefficient makes an estimate look better
+founded while making it worse founded.
+
+## 2026-09-21 (third entry): the reviewer objects on importance concentration, and the row records
+## nothing the reviewer is shown
+
+The question of why `australian`, `kr_vs_kp` and `sylvine` drew every objection on the 52-row
+benchmark run, while the other ten datasets drew none in 36 runs, was worked from the committed
+rows and the reviewer's own code for $0. It produced a mechanism, a falsification test, and a
+defect in the instrument that is larger than the original question.
+
+Two structural facts settle most of it. First, `reviewer.py:_user_message` does not include
+`verified_holdout_score`, `baseline_separation`, `baseline_normalised_score` or
+`holdout_claim_gap`. The reviewer cannot see that the pipeline underperformed its own reference
+point, so the tempting reading of the three lowest normalised scores was never available to it, and
+the ranking interleaves objectors with silent datasets anyway. Second, the base prompt admits an
+objection only if it names the columns at issue and states a number, and `_adjudicate` enforces the
+naming half mechanically by rejecting a column-scoped objection whose columns intersect nothing in
+the profile. The only per-column number anywhere in the reviewer's input is `top_importances`.
+
+The hypothesis that follows is that two independent conditions must both hold. A profiler
+nomination puts the column's name into the reviewer's context through the "Kept despite a profiler
+flag" line of the feature summary, and a concentrated permutation-importance head supplies the
+number. Nomination alone is not enough: the profiler nominated on 6 datasets and the reviewer
+objected on 3. Recomputed offline, the count of columns needed to reach 80% of total positive
+importance is 1, 1 and 3 on the three objectors and 4 or more on all ten silent datasets. The
+reviewer named the head of that distribution and cut it at the cliff, taking the top three on
+`kr_vs_kp` where rank 4 is six times smaller, and never naming a rank-4 column anywhere. The same
+gate explains why all 4 `metric_mismatch` objections are on `australian`: they occur on passes
+where the concentrated column was already dropped, leaving nothing nameable and forcing the one
+category that needs no column. Also notable is that the profiler and the reviewer are reading two
+different statistics of the same intuition, normalized mutual information and permutation
+importance, which agree on an isolated strong column and diverge under feature redundancy.
+
+The hypothesis is recorded as a hypothesis. The threshold separates 3 from 10 on a single post-hoc
+ranking at n=13, worth about p = 0.02 once the number of statistics tried is accounted for, and the
+importances were recomputed from a proxy RandomForest rather than read off the pipeline. The
+falsification test is a redundancy ablation on `australian` and `sylvine`: adding near-duplicate
+copies of the dominant column collapses permutation importance while leaving per-column NMI, row
+count, class balance and categorical fraction untouched, which moves this trigger and no other
+hypothesis in the list. Roughly $0.40 for two datasets at two arms and four replicates, built under
+`tests/fixtures/` and not `evals/datasets/`.
+
+The defect worth more than the answer: the results row carries 83 columns and not one of them is a
+fact the reviewer is shown. `top_importances`, per-candidate `cv_mean` and `claimed_holdout_score`,
+`chosen_model.name`, `dropped_features` and `feature_summary` all exist on `PipelineState` and none
+reaches the row. The row records what the harness measured while the reviewer adjudicates on a
+disjoint set of facts, which is why the committed rows could not settle this without an offline
+reconstruction. `top_importance_share` and `top_importance_n80` are added so the shape of the
+distribution the reviewer sees is recorded at zero marginal cost on every future run. That is a
+narrower fix than recording the whole list, and it is the part the hypothesis actually needs.
+
+Both are computed over the same 15 entries the reviewer is shown, because the point is to describe
+the prompt's contents and not a ranking nothing downstream sees, and both are null under a
+`top_importance_status` companion rather than a bare null, which is the fourth application of the
+pattern named beside `leakage_graded`. The status separates two genuinely different reasons: an
+empty `top_importances` means no distribution exists, while a non-empty list whose every mean is
+zero or negative means there is no positive mass for a share to divide by. Permutation importance
+goes negative when shuffling a column improves the score, so the second case is reachable rather
+than defensive. Checked against the five committed run envelopes, which carry real pipeline
+importances: `reissued_ids` reads share 1.00 at n80=1, one planted column dominating with every
+other entry negative; `claims_timing` 0.521 at n80=3; `phoneme` 0.360 at n80=4; `kc1` 0.199 at
+n80=8. The `kc1` reading is worth noting because it is a silent dataset and its real n80 sits well
+above the threshold the hypothesis proposes, which is weak independent support for the offline
+proxy that produced the threshold. The emitted row goes from 83 columns to 86.
+`n_final_features` remains post-loop, so a per-pass feature count is still missing and is still what
+confounds any comparison of first-pass against post-loop scores.

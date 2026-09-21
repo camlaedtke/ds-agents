@@ -388,6 +388,17 @@ Neither `errored` nor `halted_at` can be tallied as a rate by
 `eval-diff` without help — `halted_at` is null on every healthy run and would exclude them all,
 `errored` is never null — which is what `--metrics halted_at:notnull` exists for.
 
+The shape of the distribution the REVIEWER is shown, not the harness's own measurement: `top_importances`
+is the only per-column evidence in the reviewer's prompt, and before `top_importance_share` and
+`top_importance_n80` nothing on the row summarised it, so no committed row could be used to explain
+why the reviewer objected. `top_importance_share` is the rank-1 mean importance divided by the sum
+of positive mean importances among the top `TOP_IMPORTANCES` (15) columns the reviewer sees;
+`top_importance_n80` is how many of those columns it takes to reach 80% of that positive total. Both
+are `None`, with `top_importance_status` saying why, in the same two-reasons shape as
+`leakage_graded` / `rescore_status` / `baseline_status`: `no_importances` when `top_importances`
+itself is empty, `no_positive_importance` when every entry is zero or negative (permutation
+importance can go negative) and there is no positive mass to divide or sum toward.
+
 Where that time and money went: `node_seconds` (a `{node: seconds}` map summed over repeats, so a
 node the review loop visited three times shows all three), plus `rescore_seconds` and
 `baseline_seconds`. Those last two are NOT inside `wall_seconds` and cannot be: `ended_at` is

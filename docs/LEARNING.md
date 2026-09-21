@@ -333,6 +333,20 @@ Priority: **load-bearing** means the thesis breaks if this is wrong and you cann
   rule asking which column explains an implausible score moved Haiku from 1 of 10 to 9 of 10. "Was
   not shown" and "was not asked" are different diagnoses with different fixes, and this entry only
   covers the first. Related: [[factorial-design]].
+- Sharpened 2026-09-21, twice. First, the evidence surface has an **admissibility gate** sitting on
+  top of its contents. The base prompt admits an objection only if it names the columns at issue and
+  states a number, and `_adjudicate` enforces the naming half mechanically, rejecting a
+  column-scoped objection whose columns intersect nothing in the profile. So the question is not
+  only "was the evidence in the prompt" but "was it in a form that could survive adjudication". Since
+  `top_importances` is the only per-column number in the whole surface, a flat importance list
+  leaves the reviewer no admissible column-scoped objection at all, and it falls through to a
+  category that needs no column. That is the reading of why all 4 `metric_mismatch` objections on
+  the benchmark landed on one dataset. Second, and worse: **the recorded row and the evidence
+  surface share no columns.** All 83 columns record what the harness measured, and none of them is a
+  fact the reviewer was shown, so no committed row can explain a reviewer decision without an
+  offline reconstruction. `top_importance_share` and `top_importance_n80`, with a
+  `top_importance_status` companion, are the first columns to cross that gap. Related:
+  [[two-statistics-one-intuition]].
 
 ### fixture-difficulty — a benchmark whose trap gets cleaned upstream measures nothing
 - Priority: useful
@@ -1011,3 +1025,40 @@ Priority: **load-bearing** means the thesis breaks if this is wrong and you cann
   showing the final value in their place. The general shape: a state contract designed for
   single-writer merges quietly buys you replayability of the last write, and nothing before it.
   Related: [[langgraph-reducers]], [[encoding-as-a-contract]].
+
+### two-statistics-one-intuition — NMI and permutation importance agree until they do not
+- Priority: load-bearing
+- Came up: 2026-09-21, working out why three datasets drew every objection on the benchmark run
+- Status: flagged
+- Why it matters here: the profiler and the reviewer are both asking "is one column carrying this
+  model", and they ask it with different statistics. The profiler computes normalized mutual
+  information between each column and the target, which is univariate and blind to whether any other
+  column carries the same signal. The reviewer is shown permutation importance, which is
+  multivariate and measures what breaks when one column is shuffled. On an isolated strong column
+  the two agree, which is why they look like one detector most of the time. They diverge under
+  feature redundancy: if two columns carry the same information, shuffling either one changes
+  nothing because the model reads the other, so permutation importance collapses toward zero while
+  NMI stays exactly where it was. The practical consequence is that the pipeline has two leak
+  detectors that fail on opposite data. `bank_marketing` is concentrated in importance and flat in
+  NMI. `nomao` and `kc1` are NMI outliers and flat in importance, which is why the profiler
+  nominated columns there and the reviewer never objected. The same divergence is what makes the
+  falsification test cheap: adding near-duplicate copies of a dominant column moves permutation
+  importance and leaves NMI, row count and class balance untouched, so it is an intervention on one
+  detector and not the other. Related: [[evidence-surface]],
+  [[semantic-vs-statistical-leakage]], [[confounded-by-what-you-did-not-vary]].
+
+### a-clustered-rate-is-not-a-rate — six events in three datasets, and why they do not average
+- Priority: useful
+- Came up: 2026-09-21, declining a loop-rate term for the cost estimate
+- Status: flagged
+- Why it matters here: 6 of 52 runs looped, which reads like an 11.5% loop rate that could be
+  multiplied into every cell's price. It is not one, because the events are piled into 3 of 13
+  datasets rather than sprinkled across them. The test that catches this is a goodness-of-fit
+  against the null that one constant probability applies to every dataset: chi-square(12) = 27.5,
+  p = 0.0065, so the pooled rate is rejected on the data's own terms before sample size is argued.
+  Averaging anyway does visible damage, charging the ten datasets that never loop a 17.3% premium
+  while still under-pricing the three that do. The general shape is that a mean is only a summary
+  when the thing being averaged is homogeneous, and heterogeneity is testable rather than a matter
+  of taste. When it fails, the honest output is a range with its interval attached and a note about
+  where the events concentrate. Related: [[a-fit-is-not-a-model]],
+  [[replication-before-attribution]], [[binomial-variance-and-wilson-intervals]].

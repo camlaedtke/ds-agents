@@ -1293,6 +1293,116 @@ class TestResultsRowBranches:
         assert row["false_alarm_standing"] == 0
 
 
+class TestTopImportanceShape:
+    """`top_importance_share`, `top_importance_n80` and their companion `top_importance_status`.
+
+    These summarise the shape of `top_importances` -- the only per-column evidence the reviewer's
+    prompt actually contains -- so a committed row can explain why the reviewer did or did not
+    object, which nothing on the row could do before these existed. `top_importances` is documented
+    as sorted highest-first, so every fixture below is written in that order deliberately, matching
+    what `modeler.py` actually produces.
+    """
+
+    def test_populated_state_is_a_single_dominant_column(self):
+        """`populated_state()` carries one entry, so it must read as fully concentrated."""
+        row = populated_state().results_row()
+        assert row["top_importance_status"] == "ok"
+        assert row["top_importance_share"] == pytest.approx(1.0)
+        assert row["top_importance_n80"] == 1
+
+    def test_concentrated_distribution(self):
+        state = PipelineState(
+            dataset_id="toy",
+            task_description="x",
+            top_importances=[("a", 0.9), ("b", 0.05), ("c", 0.05)],
+        )
+        row = state.results_row()
+        assert row["top_importance_status"] == "ok"
+        assert row["top_importance_share"] == pytest.approx(0.9)
+        assert row["top_importance_n80"] == 1
+
+    def test_flat_distribution(self):
+        state = PipelineState(
+            dataset_id="toy",
+            task_description="x",
+            top_importances=[("a", 0.1), ("b", 0.1), ("c", 0.1), ("d", 0.1), ("e", 0.1)],
+        )
+        row = state.results_row()
+        assert row["top_importance_status"] == "ok"
+        assert row["top_importance_share"] == pytest.approx(0.2)
+        # Equal weights: reaching 80% of 5 equal shares takes 4 of the 5 columns.
+        assert row["top_importance_n80"] == 4
+
+    def test_single_feature_case(self):
+        state = PipelineState(
+            dataset_id="toy", task_description="x", top_importances=[("only_col", 0.37)]
+        )
+        row = state.results_row()
+        assert row["top_importance_status"] == "ok"
+        assert row["top_importance_share"] == pytest.approx(1.0)
+        assert row["top_importance_n80"] == 1
+
+    def test_empty_top_importances_is_the_no_importances_status(self):
+        """No candidate chosen, or the modeling snippet produced nothing: there is no
+        distribution to summarise, and that must be distinguishable from an all-negative one."""
+        state = PipelineState(dataset_id="toy", task_description="x")
+        row = state.results_row()
+        assert row["top_importance_status"] == "no_importances"
+        assert row["top_importance_share"] is None
+        assert row["top_importance_n80"] is None
+
+    def test_all_negative_importances_is_the_no_positive_importance_status(self):
+        """Permutation importance can go negative -- shuffling the column improved the score --
+        and a wholly non-positive list has no positive mass to divide or sum toward."""
+        state = PipelineState(
+            dataset_id="toy",
+            task_description="x",
+            top_importances=[("a", -0.01), ("b", -0.02)],
+        )
+        row = state.results_row()
+        assert row["top_importance_status"] == "no_positive_importance"
+        assert row["top_importance_share"] is None
+        assert row["top_importance_n80"] is None
+
+    def test_all_zero_importances_is_also_no_positive_importance(self):
+        """Zero is not positive: a column with truly zero effect on the score contributes no
+        importance mass, the same as a negative one, and must not be silently treated as 100%
+        of an empty sum."""
+        state = PipelineState(
+            dataset_id="toy",
+            task_description="x",
+            top_importances=[("a", 0.0), ("b", 0.0)],
+        )
+        row = state.results_row()
+        assert row["top_importance_status"] == "no_positive_importance"
+        assert row["top_importance_share"] is None
+        assert row["top_importance_n80"] is None
+
+    def test_negative_and_zero_entries_are_excluded_from_a_mixed_list(self):
+        """A mix of positive, zero and negative importances: only the two positive entries may
+        contribute to the share and the 80% threshold."""
+        state = PipelineState(
+            dataset_id="toy",
+            task_description="x",
+            top_importances=[("a", 0.3), ("b", 0.05), ("c", 0.0), ("d", -0.1)],
+        )
+        row = state.results_row()
+        assert row["top_importance_status"] == "ok"
+        assert row["top_importance_share"] == pytest.approx(0.3 / 0.35)
+        assert row["top_importance_n80"] == 1
+
+    def test_share_and_n80_are_computed_fields_not_just_row_entries(self):
+        """The row reads these off `PipelineState` directly, following the same pattern as
+        `baseline_separation` -- so the properties themselves must agree with the row."""
+        state = PipelineState(
+            dataset_id="toy", task_description="x", top_importances=[("a", 0.4), ("b", 0.1)]
+        )
+        row = state.results_row()
+        assert state.top_importance_share == row["top_importance_share"]
+        assert state.top_importance_n80 == row["top_importance_n80"]
+        assert state.top_importance_status == row["top_importance_status"]
+
+
 class TestWhyTheLoopDidNotConverge:
     """The four fields that separate "the reviewer was wrong" from "the reviewer was right and
     told a node with no lever".

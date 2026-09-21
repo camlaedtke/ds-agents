@@ -216,6 +216,64 @@ def test_the_full_subset_costs_what_the_docs_say_it_costs():
     assert per_pass * 4 == pytest.approx(1.104, abs=0.002), "--replicates 2 --n 2 is 4 runs a cell"
 
 
+# What actually happened in `evals/results/2026-09-02_full.jsonl` (52 rows: all 13 manifest
+# datasets, n=4 a cell, the arm that asked whether a loop-rate term belongs on the size model).
+# These three constants are a RECORD of that arm, not a model of the next one -- the whole finding
+# was that 6 loop events, clustered in 3 of 13 datasets, is not enough to fit a rate. See the
+# contingency note on `SUBSETS["bench-tall"]` in `harness.py`, which is what this test backs.
+FULL_2026_09_02_LOOP_RATE = 6 / 52  # 11.5%, Clopper-Pearson 95% CI [4.3%, 23.4%] at this n
+FULL_2026_09_02_LOOP_MULTIPLIER_AT_2_LOOPS = 1.799  # n=2: one `australian` row, one `sylvine` row
+FULL_2026_09_02_LOOP_MULTIPLIER_AT_3_LOOPS = (
+    2.458  # n=4: two `australian` rows, two `kr_vs_kp` rows
+)
+
+
+def test_the_full_arm_loop_multipliers_reproduce_from_the_results_file():
+    """The two numbers `SUBSETS["bench-tall"]`'s contingency comment cites, recomputed rather than
+    quoted.
+
+    The multiplier is per-row, against that ROW's OWN dataset's 1-loop mean, then averaged --
+    not dollars pooled across datasets first -- because `australian` and `kr_vs_kp` do not cost
+    the same to begin with and pooling would let the cheaper dataset's ratio get outweighed by the
+    pricier one's dollars rather than counted once like every other row.
+    """
+    costs_by_dataset_and_loops: dict[str, dict[int, list[float]]] = defaultdict(
+        lambda: defaultdict(list)
+    )
+    loop_counts: list[int] = []
+    for line in (RESULTS / "2026-09-02_full.jsonl").read_text().splitlines():
+        if not line.strip():
+            continue
+        row = json.loads(line)
+        costs_by_dataset_and_loops[row["dataset_id"]][row["review_loops"]].append(row["cost_usd"])
+        loop_counts.append(row["review_loops"])
+
+    assert len(loop_counts) == 52, (
+        "13 datasets x n=4; a different row count changes every number here"
+    )
+
+    one_loop_mean = {
+        dataset: sum(costs[1]) / len(costs[1])
+        for dataset, costs in costs_by_dataset_and_loops.items()
+        if 1 in costs
+    }
+
+    def multiplier_at(loop_count: int) -> float:
+        ratios = [
+            cost / one_loop_mean[dataset]
+            for dataset, costs in costs_by_dataset_and_loops.items()
+            for cost in costs.get(loop_count, [])
+        ]
+        return sum(ratios) / len(ratios)
+
+    assert multiplier_at(2) == pytest.approx(FULL_2026_09_02_LOOP_MULTIPLIER_AT_2_LOOPS, abs=5e-4)
+    assert multiplier_at(3) == pytest.approx(FULL_2026_09_02_LOOP_MULTIPLIER_AT_3_LOOPS, abs=5e-4)
+
+    looped = sum(1 for loops in loop_counts if loops > 1)
+    assert looped == 6
+    assert looped / len(loop_counts) == pytest.approx(FULL_2026_09_02_LOOP_RATE, abs=1e-9)
+
+
 # Categorical column counts, by the rule `feature_eng` actually applies: a column is one-hot
 # encoded when it is NOT numeric or bool dtype and has at most MAX_ONE_HOT_LEVELS distinct values.
 # Held as literals so the fit above runs without the gitignored CSV cache, and checked against the

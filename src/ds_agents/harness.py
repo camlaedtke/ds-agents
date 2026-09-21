@@ -273,10 +273,31 @@ SUBSETS: dict[str, tuple[Cell, ...]] = {
     # never been run:  cost ~= $0.010163 + $0.000230 * n_features + $0.005609 * (n_rows / 1e5).
     #
     # The caveat a mean cannot carry, and it is the same one `bench-mid` recorded: all 16 runs
-    # raised ZERO objections, took the review loop exactly once and returned `pass`. Nothing in this
-    # project has ever been observed looping on a manifest dataset, and the `ci` comment above
-    # records that a run that loops three times costs about 2.5x. Every number in this dict is the
-    # cost of a run that passes first time.
+    # raised ZERO objections, took the review loop exactly once and returned `pass`. At the time
+    # this was written, nothing in this project had ever been observed looping on a manifest
+    # dataset, and the `ci` comment above records that a run that loops three times costs about
+    # 2.5x. Every number in this dict is the cost of a run that passes first time.
+    #
+    # THAT STOPPED BEING TRUE THE SAME DAY. `evals/results/2026-09-02_full.jsonl` (52 rows, all 13
+    # manifest datasets, n=4 a cell) is where looping actually showed up: 6/52 runs took more than
+    # one review pass, an 11.5% rate (Clopper-Pearson 95% CI [4.3%, 23.4%] -- 6 events out of 52
+    # runs is not many to bound a rate with). It does not spread evenly across the manifest:
+    # `australian` looped 3/4, `kr_vs_kp` 2/4, `sylvine` 1/4, and the other ten datasets are 0/4.
+    # Within a dataset, cost against that dataset's own 1-loop mean runs about x1.80 at 2 loops
+    # (n=2: one `australian` row, one `sylvine` row) and about x2.46 at 3 loops (n=4: two
+    # `australian` rows, two `kr_vs_kp` rows) -- pinned in `tests/test_cost_model.py` as
+    # `FULL_2026_09_02_LOOP_MULTIPLIER_AT_2_LOOPS` / `_AT_3_LOOPS`, a record of what happened on
+    # that date rather than a model of what happens next.
+    #
+    # A global loop-rate term on the size model was considered here and rejected. The 11.5% rate
+    # as an expected multiplier (1.1431, from the empirical mix of 1/2/3-loop runs) applied to the
+    # $1.104 `full` estimate predicts $1.2620 against an actual $1.2165 -- close, but for the wrong
+    # reason: it would over-price the ten never-looping datasets by about 17.3% while still
+    # under-pricing the three that do loop, because 3 of 13 datasets carry all 6 loop events and 6
+    # events is not enough to fit a rate at all, let alone a single global one. No coefficient
+    # above changes for this. Budget roughly $0.05-$0.15 of contingency on a `full` run under this
+    # reviewer config instead, held as slack against `australian` / `kr_vs_kp` / `sylvine` rather
+    # than smeared across all thirteen cells.
     "bench-tall": (
         Cell(name="adult-categorical-tall", dataset="adult", est_cost_usd=0.016),
         Cell(name="bank-categorical-tall", dataset="bank_marketing", est_cost_usd=0.018),
