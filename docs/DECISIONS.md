@@ -2721,3 +2721,92 @@ above the threshold the hypothesis proposes, which is weak independent support f
 proxy that produced the threshold. The emitted row goes from 83 columns to 86.
 `n_final_features` remains post-loop, so a per-pass feature count is still missing and is still what
 confounds any comparison of first-pass against post-loop scores.
+
+## 2026-09-21 (fourth entry): a reproduction check is a subset, not a set of retyped flags
+
+`docs/NEXT.md` carried the largest standing risk to a published number: a 2026-09-09 session
+recorded that `claims_timing` "no longer loops", against the committed rows README Result 3 quotes.
+Half of it was answered for $0 by reading the code that produced the contrary evidence.
+`docs/explainers/capture_runs.py` shells out to `ds-agents run --dataset claims_timing` with no
+`--naming` and no `--reviewer-prompt`, so its replicates are the **descriptive** arm; every row in
+Result 3 is **opaque**. The descriptive arm's own committed rows pass first-loop 8 times in 10, so
+two replicates doing exactly that is the most likely observation from that distribution rather than
+a departure from it. An alarm about a number is worth the cost of checking which arm produced it
+before it is worth the cost of a run.
+
+The remaining half was real and needed a run: no opaque row exists at a commit near HEAD. The
+decision is how to buy one. `--subset ci --replicates 2 --n 2` costs the same $0.30 and answers at
+n=4 while spending two thirds of it on cells that were not in question, so a single-cell subset was
+added instead. The cell is not a new `Cell(...)` with the same arguments typed again: `ci` and
+`claims-repro` name the **same object**, pinned by a test asserting `is` rather than `==`. A
+reproduction check whose conditions are retyped is a check of the typing, and the failure mode --
+someone edits the `ci` cell and the "reproduction" silently becomes a comparison of two different
+arms -- is the one thing this kind of check cannot survive.
+
+All four primary pre-registered endpoints reproduced, `review_loops` to the second decimal, and the
+falsification endpoint came back 0/10 for the second time: this arm has passed first-loop with zero
+objections in 0 of 20 runs across two commits three weeks apart. Result 3 stands.
+
+## 2026-09-21 (fifth entry): a provenance helper that fails silently is worse than one that fails
+
+The run above wrote ten rows at a clean `46bd4ed` and every one of them carries `commit: null`.
+`provenance.git_commit()` shells out to bare `git`, which on this machine is `/usr/bin/git` under
+an unaccepted Xcode license, which refuses with a notice on stderr and a non-zero exit.
+`git_commit` caught it and returned `None`, which is the correct value and the documented
+behaviour: a provenance helper must not be able to take a benchmark run down. The defect is that it
+did so without saying anything, so a run set up specifically to close a provenance gap recorded no
+provenance and reported success. The Xcode license was a known open question in NEXT.md for several
+sessions and it still cost a run its `commit`, because nothing connected the known machine problem
+to the moment it mattered.
+
+Three changes, and deliberately not a fourth. `describe_commit()` returns `(commit, reason)` and
+keeps the failure instead of discarding it. `git_commit()` still returns `None` and never raises,
+and now prints the reason to stderr once per process. The harness calls `describe_commit` directly
+and prints before the first run, because a null `commit` fragments an `eval-diff` cell and that is
+only actionable before the money is spent. `DS_AGENTS_GIT` names a git to use instead of the one on
+PATH, which is a fix a session can apply to itself; the fix to the machine is still
+`sudo xcodebuild -license`.
+
+The fourth change not made: `git_commit` does not fall back to searching PATH for a git that works.
+A provenance string whose source is "whichever git we found" is a worse record than a null, because
+a null is visibly missing and a value from an unknown binary is not.
+
+Two things the diff review caught, both of which had turned the fix into a smaller version of the
+bug. Replacing the old blanket `except Exception` with four named exception types read as an
+improvement and was a contract regression: `subprocess.run(text=True)` decodes git's output, so a
+non-UTF-8 byte raises `UnicodeDecodeError`, a `ValueError`, which no subprocess-flavoured except
+list catches, and it would have propagated out of a function documented as unable to end a run.
+The named branches are there to produce a useful reason; the catch-all is what holds the contract,
+and it is back with a comment saying which is which. Separately, the new `print` to stderr was
+itself unguarded, so a closed or broken stderr would have made the logging added to fix a silent
+failure into a loud one -- `warn_to_stderr` now suppresses `OSError` and `ValueError` around it.
+Both are tested.
+
+The harness keeps its own message rather than calling `git_commit(warn=True)`, and deliberately
+sits outside the once-per-process guard: the consequence it reports is specific to a benchmark
+invocation (these rows cannot be pooled with any committed cell) and a second `_live_run` in one
+process is a second invocation that should say so again.
+
+## 2026-09-21 (sixth entry): the profiler's opaque recall moved, and it is recorded as a flag
+
+Not pre-registered, found while checking whether anything else in the cell had shifted.
+`profiler_caught` on `claims_timing --naming opaque` reads 2/10 on 2026-08-27, 5/10 on 2026-08-31
+and 8/10 today. chi-square(2) = 7.20, p = 0.027; the first against the last by Fisher exact,
+p = 0.023. The movement is specific: the profiler nominates `var_01`, a false alarm, in 29 of those
+30 runs, and all of the change is in how often the planted `var_08` appears beside it.
+
+The profiler cannot see what differs between those files. It runs once per run, before the
+reviewer, and `graph.ROUTES` contains no edge back to it, so `reviewer_prompt` and
+`objection_routing` are downstream of its only pass. `leakage_planted` and `random_seed` are
+identical across all three. `naming.py` changed between the first two observations and the change
+is a pure `Fixture`-to-`Runnable` refactor with `rename_map`'s body untouched. `profiler.py` changed
+between the second and third and both commits touch `SPLIT_SNIPPET` and the split-manifest encoder
+only, neither of which reaches `_user_message`; `PROFILER_SYSTEM` is unchanged. What is left is
+model-side drift over 25 days, or chance at n=10.
+
+It is recorded as a flag and not a result, because it is post-hoc on a ranking that was looked at
+after the 8/10 was seen, and because three points make a monotone series with no effort. What it
+costs is a caveat on a published number: README Result 2's "2 of 20 under opaque names, recall
+0.10" is the 2026-08-27 cell, and the same measurement at HEAD reads 8 of 20, recall 0.40. The
+direction of the result survives that comfortably. The number does not, and the README now says so
+beside it rather than waiting for the replication that would settle it.

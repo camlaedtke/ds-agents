@@ -1062,3 +1062,39 @@ Priority: **load-bearing** means the thesis breaks if this is wrong and you cann
   of taste. When it fails, the honest output is a range with its interval attached and a note about
   where the events concentrate. Related: [[a-fit-is-not-a-model]],
   [[replication-before-attribution]], [[binomial-variance-and-wilson-intervals]].
+
+### pre-registered-vs-found — the same number means two different things depending on when you named it
+- Priority: load-bearing
+- Came up: 2026-09-21, the `claims-repro` run producing one of each in the same file
+- Status: flagged
+- Why it matters here: that run produced two results and they have different standing even though
+  both came out of the same ten rows. The four endpoints written into `LOG.md` before the run
+  reproduced, and those are believable at face value because the test was chosen without knowing
+  the answer, so there was exactly one way to be wrong. The profiler's 2/10 to 8/10 shift was
+  noticed afterwards, while looking at a table of everything that might have moved, and it carries
+  a nominal p = 0.027 that is not really 0.027: it is the smallest of however many comparisons the
+  eye ran over before that one looked interesting, and the eye does not keep count. The correction
+  is not to discard it. It is to treat it as a **hypothesis** that generates the next experiment
+  rather than a result that settles this one, which is why the README says the number is dated and
+  does not say it is wrong, and why the next session's first $0.30 is a direct replication with the
+  endpoint named in advance. A found effect that replicates under pre-registration is a finding; a
+  found effect quoted as a finding is how a project accumulates numbers nobody can reproduce.
+  Related: [[replication-before-attribution]], [[binomial-variance-and-wilson-intervals]],
+  [[confounded-by-what-you-did-not-vary]].
+
+### the-conditions-are-part-of-the-number — an arm mismatch reads exactly like a regression
+- Priority: useful
+- Came up: 2026-09-21, the walkthrough capture that appeared to contradict README Result 3
+- Status: flagged
+- Why it matters here: a session recorded that `claims_timing` "no longer loops" and it sat in
+  NEXT.md for twelve days as the largest standing risk to a published number. It was never a
+  contradiction. The capture script runs the fixture under descriptive column names and the
+  published rows are under opaque ones, and the pipeline behaves completely differently under the
+  two because the profiler reads names. Both observations were correct and they were about
+  different experiments. The general shape: a measurement is a number plus the conditions that
+  produced it, and a number carried alone will eventually be compared against one from another arm.
+  The practical defence is cheap and this session paid for learning it twice -- read the invocation
+  that produced the surprising number before pricing a run to chase it, and make the conditions
+  something a reader cannot miss, which is why `claims-repro` shares its `Cell` object with `ci`
+  rather than retyping the same arguments. Related: [[confounded-by-what-you-did-not-vary]],
+  [[semantic-vs-statistical-leakage]].

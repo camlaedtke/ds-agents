@@ -1446,7 +1446,9 @@ reports 9/10 where the baseline reported 9/9 of 10. HEAD is the healthier file o
 
 ### The rows carry no `commit`, and that is a defect this run walked into
 
-`git_commit()` returned `None` on all 10 rows. The tree was clean and the commit was `46bd4ed`.
+`git_commit()` returned `None` on all 10 rows. The tree was clean and the commit was `46bd4ed` --
+asserted here, from the session that ran it, and **not checkable against the file**, which is
+exactly the substitution this column exists to prevent.
 The cause is the Xcode license block already recorded in `docs/NEXT.md`: `provenance.git_commit()`
 shells out to bare `git`, which resolves to `/usr/bin/git`, which refuses with a license notice.
 `git_commit` catches every exception and returns `None` by design, **silently**, so a run set up

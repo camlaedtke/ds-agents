@@ -458,21 +458,39 @@ def _live_run(artifacts_root: Path, *, transport: str, no_live: bool) -> Runner:
     every run that is supposed to see the same bytes has to actually see the same bytes, and
     rewriting the file N times is N chances for it not to.
 
-    `git_commit()` is read here, once, under exactly that rule, and the 2026-08-31 `ci` baseline is
+    Provenance is read here, once, under exactly that rule, and the 2026-08-31 `ci` baseline is
     what proved it belongs here rather than inside `_run_once`. The results file is untracked until
     someone commits it, so writing row 0 dirties the tree, and a per-run read recorded run 0 at
     `8a629bf` and runs 1..29 at `8a629bf-dirty`. `commit` is one of `evaldiff.CONDITION_FIELDS`, so
     that fragmented `toy-default` into cells of n=1 and n=9 -- the harness contaminating its own
     provenance with its own output. One read, before any row exists, cannot.
+
+    `describe_commit` rather than `git_commit`, and the warning is this function's own rather than
+    the one `git_commit` prints. Two reasons: the consequence differs (a null `commit` on a
+    benchmark invocation means these rows cannot be pooled with any committed cell, which is worth
+    stopping for and is not worth stopping for on a one-off `ds-agents run`), and it must be said
+    before the first run rather than once per process. So it is deliberately NOT behind
+    `provenance._warned`: a second `_live_run` in one process is a second invocation whose rows
+    will also lack a commit, and it should say so again.
     """
     # Deferred import: see the module docstring for why this cannot be a top-level import.
     from ds_agents import cli
     from ds_agents.holdout import prepare
-    from ds_agents.provenance import git_commit
+    from ds_agents.provenance import GIT_ENV_VAR, describe_commit, warn_to_stderr
     from ds_agents.runnable import Runnable, resolve
     from ds_agents.state import RunConfig
 
-    commit = git_commit()
+    # `describe_commit` rather than `git_commit`, so the reason is printed here, once, before the
+    # first run rather than into whatever scrollback the operator is not reading. A null `commit`
+    # fragments the cell in eval-diff and is only fixable before the money is spent -- 2026-09-21's
+    # `claims-repro` wrote ten rows with no commit and reported success.
+    commit, commit_reason = describe_commit()
+    if commit is None:
+        warn_to_stderr(
+            f"provenance: no commit will be recorded on these rows -- {commit_reason}. "
+            f"`commit` is an eval-diff condition field, so these rows cannot be pooled with any "
+            f"committed cell. Set {GIT_ENV_VAR} to a git that works, or accept it deliberately."
+        )
 
     runnables: dict[str, Runnable] = {}
     prepared_by_key: dict[tuple[str, str], PreparedDataset] = {}

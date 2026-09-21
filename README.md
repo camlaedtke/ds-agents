@@ -14,7 +14,9 @@ Summary of the results:
 1. **The leakage detector reads column names.** The profiler finds 19 of 20 planted traps when the
    columns are called `days_to_close` and `adjuster_touches`, and 2 of 20 when the same columns are
    renamed `var_07` and `var_08` with nothing else about the data changed. Recall goes from 0.95 to
-   0.10 on one line of one file.
+   0.10 on one line of one file. **The 2-of-20 half of that ratio is dated.** It is a 2026-08-27
+   measurement, and the same opaque cell reads 8 of 20 at HEAD; the effect survives, the number
+   needs a re-run. See the caveat under Result 2.
 2. **Catching a leak and fixing it fail independently.** In the arm where the reviewer names the
    trap in 10 of 10 runs, the trap still shipped in 3 of 10. The cause was dispatch. The reviewer
    addressed column-scoped objections to a node that has no lever to drop a column.
@@ -187,6 +189,32 @@ reports the number with no hedge.
 Everything after this section runs in the opaque arm, because it is the only configuration that
 reliably puts a leaky matrix in front of the reviewer at all.
 
+### Caveat: the opaque number has moved since it was measured
+
+The opaque cell above was run on 2026-08-27. The same measurement, on the same fixture at the same
+seed under the same naming, has been made twice since:
+
+| date | file | profiler nominated a planted column | `profiler_recall` |
+|---|---|---|---|
+| 2026-08-27 | naming-ablation | **2/10** | 0.100 |
+| 2026-08-31 | ci-baseline | 5/10 | 0.300 |
+| 2026-09-21 | claims-repro | **8/10** | 0.400 |
+
+chi-square(2) = 7.20, p = 0.027. The profiler runs once per run, before the reviewer, with no graph
+edge back to it, so the conditions that differ between those files are all downstream of it;
+`leakage_planted` and `random_seed` are identical across the three; the intervening change to
+`naming.py` is a pure refactor and the intervening change to `profiler.py` touches only the split
+snippet, which never reaches the profiler's prompt. What is left is model-side drift over 25 days,
+or chance at n=10.
+
+**This is a flag, not a result.** It is post-hoc, at n=10 per cell, on a three-point series. But it
+means the opaque arm's published 0.10 is a dated observation rather than a stable property, and the
+descriptive arm has not been re-run at HEAD at all, so the 0.95 is unconfirmed rather than
+confirmed. The direction of this result is not in question: 0.95 against 0.40 is still most of the
+finding, and the mechanism argument does not rest on the exact rate. Settling it is a direct
+replication of both arms at one commit, n=10 each, about $0.30, and it is the first item in
+`docs/NEXT.md`.
+
 ---
 
 ## Result 3: catching a leak and fixing it are separate failures
@@ -204,6 +232,19 @@ All rows below are `claims_timing --naming opaque` on the Haiku default model.
 | `which_column` + `by_category` routing | 10 | 8/10 | **5/10** | objection-routing |
 | ditto, second run | 10 | 9/10 | **9/10** | objection-closure |
 | ditto, CI baseline | 10 | **10/10** | **9/10** | ci-baseline |
+| ditto, re-run at HEAD | 10 | **10/10** | **9/10** | claims-repro |
+
+The last row is a pre-registered reproduction of the row above it, run on 2026-09-21, three weeks
+and 25 commits after the original. All four primary endpoints reproduced, `review_loops` matching
+to the second decimal at 2.30. **This table describes the pipeline as it stands**, which is not
+something the rows above it could claim on their own.
+
+With one caveat that belongs here rather than in a footnote: **those rows carry `commit: null`**,
+so the tree that produced them is asserted by `evals/results/LOG.md` and not by the data. The run
+was made at a clean `46bd4ed`, but a reader cannot check that against the file, which is the same
+defect as the rows above it and not a smaller one. The cause was `provenance.git_commit()` reading
+a `git` that refuses on this machine and returning `None` without saying so; it now says so, on
+stderr, before the first run. The next run of this cell will carry its commit.
 
 Three things happen down that table, and they are three different bugs.
 

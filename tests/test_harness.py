@@ -733,10 +733,14 @@ class TestProvenanceIsReadOncePerInvocation:
     def test_every_run_in_one_invocation_gets_the_same_commit(self, tmp_path, monkeypatch):
         from ds_agents import cli, harness
 
-        # A git_commit that answers differently every call, standing in for a tree the invocation
-        # dirties as it goes. If provenance were read per run, these would reach the rows verbatim.
+        # A provenance read that answers differently every call, standing in for a tree the
+        # invocation dirties as it goes. If it were read per run, these would reach the rows
+        # verbatim. Patched at `describe_commit`, which is what the harness calls: it needs the
+        # reason as well as the value so it can say on stderr why a row will carry no commit.
         answers = iter(["cafe1", "cafe1-dirty", "cafe1-dirty", "cafe1-dirty"])
-        monkeypatch.setattr("ds_agents.provenance.git_commit", lambda *a, **k: next(answers))
+        monkeypatch.setattr(
+            "ds_agents.provenance.describe_commit", lambda *a, **k: (next(answers), "")
+        )
 
         seen: list[str | None] = []
 
@@ -752,6 +756,56 @@ class TestProvenanceIsReadOncePerInvocation:
             runner(PlannedRun(cell=cell, replicate=1, index=seq, seq=seq), tmp_path / f"r{seq}")
 
         assert seen == ["cafe1", "cafe1", "cafe1"]
+
+    def test_a_failed_provenance_read_is_reported_before_any_run(self, tmp_path, monkeypatch):
+        """The harness prints its own message, and prints it before the first run.
+
+        `evals/results/2026-09-21_claims-repro.jsonl` is ten rows written at a clean `46bd4ed` that
+        carry `commit: null`, because bare git on that machine refuses under an unaccepted Xcode
+        license and `git_commit` returned `None` without saying so. A null `commit` fragments the
+        cell in `eval-diff`, which is only actionable BEFORE $0.30 has been spent -- so the order
+        asserted here is the whole point, not incidental.
+        """
+        from ds_agents import cli, harness
+
+        monkeypatch.setattr(
+            "ds_agents.provenance.describe_commit", lambda *a, **k: (None, "git exited 69: nope")
+        )
+
+        order: list[str] = []
+        monkeypatch.setattr(
+            "ds_agents.provenance.warn_to_stderr", lambda message: order.append(message)
+        )
+
+        def capturing_run_once(fixture, **kwargs):
+            order.append(f"run commit={kwargs['commit']}")
+            return _state(cost=0.001)
+
+        monkeypatch.setattr(cli, "_run_once", capturing_run_once)
+
+        runner = harness._live_run(tmp_path, transport="local", no_live=True)
+        cell = Cell(name="a", dataset="toy")
+        runner(PlannedRun(cell=cell, replicate=1, index=0, seq=0), tmp_path / "r0")
+
+        assert len(order) == 2
+        warning, first_run = order
+        assert "no commit will be recorded" in warning
+        assert "git exited 69: nope" in warning
+        assert "cannot be pooled" in warning
+        assert "DS_AGENTS_GIT" in warning
+        assert first_run == "run commit=None"
+
+    def test_a_successful_provenance_read_says_nothing(self, tmp_path, monkeypatch):
+        from ds_agents import cli, harness
+
+        monkeypatch.setattr("ds_agents.provenance.describe_commit", lambda *a, **k: ("cafe123", ""))
+        said: list[str] = []
+        monkeypatch.setattr("ds_agents.provenance.warn_to_stderr", lambda m: said.append(m))
+        monkeypatch.setattr(cli, "_run_once", lambda fixture, **kw: _state(cost=0.001))
+
+        harness._live_run(tmp_path, transport="local", no_live=True)
+
+        assert said == []
 
     def test_run_once_has_no_default_commit_to_fall_back_to(self):
         """The bug was a default, not a call site, so the guard is on the default.

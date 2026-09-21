@@ -123,3 +123,28 @@ def test_every_repetition_records_the_same_commit(tmp_path, monkeypatch):
 
     assert cmd_run(_args(tmp_path, repeat=2)) == 0
     assert seen == ["feed1", "feed1"]
+
+
+def test_a_failed_provenance_read_warns_once_across_every_repetition(tmp_path, monkeypatch):
+    """`cmd_run` inherits `git_commit`'s new default of `warn=True`, and once is once.
+
+    This call site was silent before 2026-09-21 and is now the reason `cmd_run` says anything at
+    all about a missing commit. The once-per-process guard lives in `provenance`, so the thing
+    worth asserting here is that the guard actually covers this caller: reading provenance once per
+    invocation and warning once per invocation have to be the same "once", or a `--repeat 10` run
+    prints ten identical lines about a single read.
+    """
+    from ds_agents import provenance
+
+    monkeypatch.setattr(provenance, "_warned", False)
+    monkeypatch.setattr(
+        "ds_agents.provenance.describe_commit", lambda *a, **k: (None, "git not found")
+    )
+
+    said: list[str] = []
+    monkeypatch.setattr("ds_agents.provenance.warn_to_stderr", lambda message: said.append(message))
+
+    assert cmd_run(_args(tmp_path, repeat=3)) == 0
+    assert len(said) == 1
+    assert "no commit recorded" in said[0]
+    assert "git not found" in said[0]
