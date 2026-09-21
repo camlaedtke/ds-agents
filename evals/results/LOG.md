@@ -1408,4 +1408,99 @@ row describes the pipeline at HEAD and the provenance gap on that row closes.
 
 ### Results
 
-_(pending -- the run has not been executed at the time this block was written)_
+`evals/results/2026-09-21_claims-repro.jsonl`, 10 rows, **$0.3006**, 0 refused, 0 runs failed, cap
+never bound. Estimate was $0.3000, so the cost model was out by 0.2% on this cell.
+
+| # | endpoint | baseline | HEAD | verdict |
+|---|---|---|---|---|
+| 1 | `reviewer_caught` | 10/10 | **10/10** | reproduces |
+| 2 | `leakage_remediated` | 9/9 non-null | **9/10** | reproduces |
+| 3 | first-pass, zero objections | 0/10 | **0/10** | reproduces |
+| 4 | `review_loops` mean | 2.30 | **2.30** | reproduces |
+| 5 | `leakage_caught` | 3/10 | 4/10 | consistent |
+| 6 | `cost_usd` mean | $0.0296 | $0.0301 | +1.7% |
+
+**All four primary endpoints reproduce, and endpoint 4 reproduces to the second decimal.** HEAD
+loops are [2,2,2,2,3,2,3,2,2,3] against the baseline's [2,2,3,2,2,2,2,3,3,2] -- the same
+distribution, seven twos and three threes either way. `eval-diff` renders the two sides as separate
+one-sided cells because `commit` differs, and every Wilson interval on the HEAD side contains the
+baseline point estimate.
+
+**The walkthrough's claim is refuted on its own terms.** Endpoint 3 was the falsification test and
+it came back 0/10 for the second time. This arm has now passed first-loop with zero objections in
+0 of 20 runs across two commits three weeks apart. The two replicates that started this question
+were the descriptive arm, where the same thing happens 8 times in 10 by design.
+
+**README Result 3's `ci-baseline` row describes the pipeline at HEAD.** Nothing in Result 3 needs
+changing and the provenance gap on that row is closed, with one wrinkle recorded below.
+
+### `errored` 2/10 -> 4/10 is not a reliability regression
+
+All four HEAD errors are the same shape: a column-scoped objection rejected for naming no surviving
+column, then the zero-objection block-retry firing and succeeding. That is the open question
+already recorded as "`errored` is true on a run where the recovery WORKED", and this run supplies
+four more instances of it, bringing the count in this cell to 5 of 20. **No candidate-fit failure
+occurred at HEAD.** The baseline's one genuine error -- `every candidate failed to fit`, the row
+with `n_final_features: 0` and `leakage_remediated: null` -- did not recur, which is why HEAD
+reports 9/10 where the baseline reported 9/9 of 10. HEAD is the healthier file of the two.
+
+### The rows carry no `commit`, and that is a defect this run walked into
+
+`git_commit()` returned `None` on all 10 rows. The tree was clean and the commit was `46bd4ed`.
+The cause is the Xcode license block already recorded in `docs/NEXT.md`: `provenance.git_commit()`
+shells out to bare `git`, which resolves to `/usr/bin/git`, which refuses with a license notice.
+`git_commit` catches every exception and returns `None` by design, **silently**, so a run set up
+specifically to close a provenance gap recorded no provenance and said nothing about it. The
+comparison above still holds, because the run is pinned by its date, its file and this entry -- but
+that is narrative provenance, which is what the column exists to replace. Fixed in the commit
+after this one.
+
+### The finding nobody asked for: the profiler's opaque-arm recall has moved
+
+Not pre-registered. Found while checking whether anything else in the cell had shifted, and it is
+a bigger deal than the thing the run was for.
+
+`profiler_caught` on `claims_timing --naming opaque`, three files, n=10 each:
+
+| date | file | profiler nominated a planted column | `profiler_recall` mean |
+|---|---|---|---|
+| 2026-08-27 | naming-ablation | **2/10** | 0.100 |
+| 2026-08-31 | ci-baseline | 5/10 | 0.300 |
+| 2026-09-21 | claims-repro | **8/10** | 0.400 |
+
+chi-square(2) = 7.20, **p = 0.027**; 2026-08-27 against 2026-09-21 by Fisher exact, **p = 0.023**.
+The pattern within the rows is specific rather than diffuse: the profiler nominates `var_01`, a
+false alarm, in 29 of those 30 runs, and the whole movement is in how often it adds the planted
+`var_08` beside it.
+
+**The profiler cannot see the conditions that differ between those files.** It runs exactly once
+per run, before the reviewer, and `graph.ROUTES` has no edge back to it, so `reviewer_prompt` and
+`objection_routing` are downstream of the only pass it gets. Three further explanations were
+checked and eliminated at $0:
+
+- **The opaque mapping is stable.** `leakage_planted` is `['var_07', 'var_08']` in all three files
+  and `random_seed` is 20260822 in all three.
+- **`naming.py` did change on 2026-08-31, between the first two observations, and the change is a
+  pure refactor** -- `Fixture` to `Runnable` in five signatures, with `rename_map`'s body
+  unchanged.
+- **`profiler.py` did change on 2026-09-01, between the second and third, and it cannot reach the
+  nomination.** Both commits touch `SPLIT_SNIPPET` and the split-manifest encoder only.
+  `leakage_candidates` come from the model, given `_user_message`, which carries the column stats
+  and mutual information and never mentions the split manifest. `PROFILER_SYSTEM` is untouched.
+
+What is left is model-side drift over 25 days, or chance at n=10. **This is post-hoc on a ranking
+I went looking at after seeing 8/10**, and a three-point monotone series is three points, so it is
+a flag and not a result.
+
+**What it threatens.** README Result 1's headline is "19 of 20 planted traps under descriptive
+names, 2 of 20 under opaque names, recall 0.95 to 0.10." The 2-of-20 half is the 2026-08-27 opaque
+cell in the table above. At HEAD the same measurement reads **8 of 20, recall 0.40**. The direction
+of Result 1 is not in danger -- 0.95 against 0.40 is still most of the finding -- but the number
+published is a 2026-08-27 observation that the current pipeline does not reproduce, and the
+descriptive arm has not been re-run at HEAD at all, so the other half of the ratio is unmeasured
+rather than confirmed.
+
+**The test that settles it** is a direct replication of the naming ablation at one commit: both
+arms, n=10 each, `--subset` cells that differ in `naming` alone, about $0.30. Pre-register
+`profiler_recall` per arm. Until that runs, README Result 1's opaque number should be read as
+dated, which is what the README now says beside it.
