@@ -2586,3 +2586,32 @@ fidelity label (`recorded` / `reconstructed` / `not_recorded`) and the viewer re
 gap. Capture is split from derivation so improving the viewer never costs another pipeline run,
 and the derivation lives in src/ under fast tests rather than in the viewer's JS, so a state.py
 rename breaks a test instead of silently blanking a panel.
+
+## 2026-09-21: the writeup's leakage numbers cannot be attributed to a commit, and the draft says so
+## rather than quietly not mentioning it
+
+Drafting the README surfaced an asymmetry nobody had measured: the two halves of the evidence base
+do not have the same provenance, and only one half can be re-derived. The 52 benchmark rows in
+`2026-09-02_full.jsonl` are uniform -- 83 columns, one `commit` value, and no change to `src/`
+between the run and the writeup. The 145 fixture rows that carry **every leakage finding** are not.
+They were written by earlier code and hold 36 to 62 columns, missing 23 to 49 of the current 83.
+`commit` is one of the missing ones, so no leakage number in the writeup can be attributed to a
+specific tree; its provenance is a filename and a date.
+
+Three options were considered. Re-running the quoted fixture cells at HEAD would buy uniform rows
+with a real `commit` and cost money. Batching that with the two unrun Phase 5 ablations would cost
+more and close the phase. Doing neither and saying so costs nothing. The third was chosen, and the
+reason is that the limitation is legible and bounded: the rows still carry the conditions that
+produced them on a frozen `RunConfig`, `evaldiff` still refuses to compare across a differing
+condition, and a reader told which numbers lack a commit can weigh them accordingly. A limitation
+stated in the Limits section is worth more than an unstated one papered over with a re-run, and the
+re-run stays available if the writeup is ever published somewhere that needs it.
+
+Two consequences follow and are recorded in the draft rather than left to be rediscovered. **No
+committed row anywhere carries `leakage_graded: true`** -- the 85 rows that have the column are all
+benchmark runs where it is correctly `false`, and the 145 it would have marked `true` predate it, so
+a table script must filter on a non-empty `leakage_planted` instead. And the fixture rows predate
+`verified_holdout_score`, so **the claimed-versus-verified check exists only on the benchmark side**:
+the fixture scores are the agents' own claims, graded against ground truth by set comparison but
+never independently rescored. That is a narrower claim than the writeup would otherwise imply, and
+it is the kind of thing that is only cheap to fix before the number is quoted, not after.

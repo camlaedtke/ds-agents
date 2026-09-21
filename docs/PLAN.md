@@ -457,9 +457,23 @@ unremediated -- outside the trap fixtures for the first time.
       cost estimate, so the model main effect is better powered but still not at n=10. The loop-cap
       ablation ran at 1/3/5 rather than 1/3 -- `evals/results/2026-08-28_loop-cap-sweep.jsonl`, a
       null result on remediation. Reviewer on/off and single-agent-vs-team are untouched.
-- [ ] README as a short paper: thesis, setup, results tables, failure analysis, design section
-      lifted from DECISIONS.md
+- [~] README as a short paper: thesis, setup, results tables, failure analysis, design section
+      lifted from DECISIONS.md. **Drafted, not installed.** `docs/README-draft.md` is the full
+      writeup -- five results sections, design notes, limits -- and `docs/readme_numbers.py`
+      regenerates every table from the committed rows, so no number in it rests on prose. It stays
+      a draft in `docs/` until it is read and agreed; installing it is a rename plus deleting the
+      script. Two numbers changed during drafting because the rows disagreed with the notes: the
+      52-row coverage run is in the CONTROL arm (`base` prompt, `as_addressed` routing), so its
+      reviewer silence measures the default and not the best known arm; and `reissued_ids` shows
+      the profiler nominating the innocent planted control identifier 10/10 while finding the
+      guilty one 3/10, which is the name-reading result arriving independently.
 - [ ] resume bullet with real numbers
+
+Scope note: `docs/explainers/pipeline-walkthrough.html` and `src/ds_agents/capture.py` were built
+on 2026-09-09 and are not on any list above. They are documentation rather than measurement -- a
+replay of five captured runs node by node -- but `capture.py` ships in `src/` under fast tests
+because the derivation reads `PipelineState`, and a rename there should break a test rather than
+blank a panel. See DECISIONS.md 2026-09-09.
 
 ## Out of scope unless the core is done and credits remain
 - non-tabular data, hyperparameter search, a web UI, TypeScript anything, Kubernetes anything
