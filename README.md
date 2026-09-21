@@ -476,7 +476,7 @@ is a structural defect that no prompt fixes.
 
 ```console
 uv sync
-uv run pytest                              # 864 tests, includes the toy end-to-end run
+uv run pytest                              # 869 tests, includes the toy end-to-end run
 uv run ds-agents run --dataset toy         # one pipeline run, prints the node trace
 uv run ds-agents datasets verify --online  # check the manifest against OpenML
 uv run ds-agents eval --subset ci          # the fixture subset, ~$0.73

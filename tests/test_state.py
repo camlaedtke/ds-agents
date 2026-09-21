@@ -1403,6 +1403,49 @@ class TestTopImportanceShape:
         assert state.top_importance_status == row["top_importance_status"]
 
 
+class TestTopImportancesSortedDescending:
+    """`top_importance_share` and `top_importance_n80` both read rank order off `top_importances`
+    without re-sorting, and the reviewer's prompt is told to read it "from the top" on the same
+    assumption -- see `_top_importances_sorted_descending` on `PipelineState`. An out-of-order
+    list must fail loudly at construction rather than be silently repaired downstream.
+    """
+
+    def test_sorted_descending_is_accepted(self):
+        state = PipelineState(
+            dataset_id="toy",
+            task_description="x",
+            top_importances=[("a", 0.9), ("b", 0.5), ("c", 0.1)],
+        )
+        assert [column for column, _ in state.top_importances] == ["a", "b", "c"]
+
+    def test_out_of_order_is_rejected(self):
+        with pytest.raises(ValidationError, match="'b' \\(0.5\\) precedes 'a' \\(0.9\\)"):
+            PipelineState(
+                dataset_id="toy",
+                task_description="x",
+                top_importances=[("b", 0.5), ("a", 0.9), ("c", 0.1)],
+            )
+
+    def test_tied_means_are_accepted(self):
+        """Equal means are not a violation -- only a strict increase is."""
+        state = PipelineState(
+            dataset_id="toy",
+            task_description="x",
+            top_importances=[("a", 0.5), ("b", 0.5), ("c", 0.5)],
+        )
+        assert len(state.top_importances) == 3
+
+    def test_empty_list_is_accepted(self):
+        state = PipelineState(dataset_id="toy", task_description="x", top_importances=[])
+        assert state.top_importances == []
+
+    def test_single_entry_is_accepted(self):
+        state = PipelineState(
+            dataset_id="toy", task_description="x", top_importances=[("only_col", 0.37)]
+        )
+        assert state.top_importances == [("only_col", 0.37)]
+
+
 class TestWhyTheLoopDidNotConverge:
     """The four fields that separate "the reviewer was wrong" from "the reviewer was right and
     told a node with no lever".

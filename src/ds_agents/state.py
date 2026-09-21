@@ -13,13 +13,14 @@ Two rules shape most of what follows, both of them consequences of the project's
    string-matching a model's sentence, the metric is not real.
 """
 
+import itertools
 import operator
 import uuid
 from collections.abc import Sequence
 from datetime import UTC, datetime
 from typing import Annotated, Any, Literal, Self, get_args
 
-from pydantic import BaseModel, ConfigDict, Field, computed_field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, computed_field, field_validator, model_validator
 
 ArtifactId = str
 
@@ -263,6 +264,13 @@ real but NARROW is not a status either -- `numerai28_6` measured both points hon
 and read 2.089 normalised, which is a fact about a near-chance dataset rather than a failure. That
 one is why `baseline_separation` exists: the span goes on the row so a reader can see what the
 normalised column was divided by, instead of a status flag asserting that they should not trust it.
+"""
+
+TOP_IMPORTANCE_N80_THRESHOLD = 0.8
+"""The fraction of positive importance mass `top_importance_n80` walks `top_importances` to reach.
+
+Named for the field it feeds so the two cannot drift apart silently -- `n80` in the field name and
+`0.8` here must always mean the same number.
 """
 
 TopImportanceStatus = Literal["ok", "no_importances", "no_positive_importance"]
@@ -641,8 +649,31 @@ class PipelineState(Contract):
         default_factory=list,
         description="The chosen model's permutation importances, source column names, highest "
         "first. Source names because `planted_leakage_columns` and `Objection.columns` speak that "
-        "vocabulary, and a set comparison across two vocabularies is not a comparison.",
+        "vocabulary, and a set comparison across two vocabularies is not a comparison. Enforced "
+        "sorted descending by mean importance at construction -- see the field_validator below.",
     )
+
+    @field_validator("top_importances")
+    @classmethod
+    def _top_importances_sorted_descending(
+        cls, value: list[tuple[str, float]]
+    ) -> list[tuple[str, float]]:
+        """Reject a `top_importances` not sorted highest-mean-first.
+
+        `top_importance_share` and `top_importance_n80` both read rank order off this list without
+        re-sorting -- see their own docstrings -- and the reviewer's prompt is told to "read
+        `top_importances` from the top" on the same assumption. An out-of-order list would make
+        both computed fields silently wrong and the reviewer's prompt silently misleading, so this
+        fails loudly at the field boundary instead of being repaired downstream. Ties (equal means)
+        are allowed -- only a STRICT increase from one entry to the next is a violation.
+        """
+        for (column_a, mean_a), (column_b, mean_b) in itertools.pairwise(value):
+            if mean_a < mean_b:
+                raise ValueError(
+                    "top_importances must be sorted descending by mean importance: "
+                    f"{column_a!r} ({mean_a}) precedes {column_b!r} ({mean_b}), which is greater"
+                )
+        return value
 
     # reviewer
     review_iterations: int = Field(
@@ -897,14 +928,15 @@ class PipelineState(Contract):
     @computed_field
     @property
     def top_importance_n80(self) -> int | None:
-        """How many shown columns it takes to reach 80% of their total positive importance.
+        """How many shown columns it takes to reach `TOP_IMPORTANCE_N80_THRESHOLD` of their total
+        positive importance.
 
         Walks `top_importances` in its existing highest-first order, summing only positive mean
         importances -- zero and negative entries contribute no mass, and because the list is
         sorted descending they only ever appear after every positive one -- and returns the rank
-        at which the running sum first reaches 80% of the positive total. 1 when a single column
-        carries the distribution the reviewer is shown; close to the count of positive columns
-        when it is flat.
+        at which the running sum first reaches `TOP_IMPORTANCE_N80_THRESHOLD` of the positive
+        total. 1 when a single column carries the distribution the reviewer is shown; close to the
+        count of positive columns when it is flat.
 
         An integer >= 1 exactly when `top_importance_status == "ok"`, `None` otherwise -- see that
         field for the two reasons a shape cannot be summarised.
@@ -912,7 +944,7 @@ class PipelineState(Contract):
         if self.top_importance_status != "ok":
             return None
         positive = [mean for _, mean in self.top_importances if mean > 0.0]
-        threshold = 0.8 * sum(positive)
+        threshold = TOP_IMPORTANCE_N80_THRESHOLD * sum(positive)
         cumulative = 0.0
         for rank, mean in enumerate(positive, start=1):
             cumulative += mean

@@ -52,10 +52,21 @@ envelopes rather than a live run: `reissued_ids` 1.00 at n80=1, `claims_timing` 
 `phoneme` 0.360 at n80=4, `kc1` 0.199 at n80=8. `kc1` is a silent dataset reading well above the
 proposed threshold, which is weak independent support for the offline proxy.
 
-The floor: **864 tests pass** (up from 854), ruff clean, toy green live at $0.0131 / 17.3s / first
-pass. That toy run is also the first live emission of the three new columns, and it read
+**The diff was reviewed: 0 blocking issues, 3 nits.** Two were fixed in a follow-up commit: the
+`n80` threshold became a named constant, and the descending-sort invariant that
+`top_importance_share` and `top_importance_n80` both depend on is now enforced by a validator
+rather than left as a docstring promise. That order is also what the reviewer node's prompt relies
+on when it says to read `top_importances` from the top, so an out-of-order list is a real bug and
+should fail loudly instead of being silently repaired in one consumer. The third nit is in the
+parking lot.
+
+The floor: **869 tests pass** (up from 854), ruff clean, toy green live twice. The first run was
+$0.0131 / 17.3s / first pass, and it is the first live emission of the three new columns: it read
 `status=ok`, `share=0.378`, `n80=3`, reproducing exactly what the committed toy envelope gives
-offline. Total spend this session was the one toy run; both investigations were $0.
+offline. The second, after the validator landed, was $0.0312 / 40.2s / three loops, which is
+**a fourth observation of the toy loop spread at 2.38x** and agrees with the manifest's x2.46. The
+validator rejected nothing on a live run with real permutation importances. Total spend this
+session was those two toy runs, about $0.044; both investigations were $0.
 
 ## First prompt
 
@@ -171,6 +182,12 @@ cells at HEAD closes the provenance gap at the same time.
 - **Untested paths in `capture.py`, accepted as nits:** the reviewer-step crashed-pass headline
   fallback, `model_artifact` id recovery in `_cited_artifact_ids`, and `envelope()`'s
   SystemExit-on-missing-fixture path.
+- **`top_importance_n80`'s trailing `return len(positive)` is an untested defensive branch.**
+  Unreachable in exact arithmetic, because the full positive prefix sums to the total and the
+  total always clears its own 80% threshold. It exists as a floating-point guard so the field can
+  never return `None` once the status says `ok`. Flagged by review 2026-09-21 and accepted on the
+  same terms as the `capture.py` nits above: it is dead code with no coverage signal if summation
+  order ever changes.
 - **`n_candidates_failed_to_fit` has never fired.** 0 on 52/52 live rows. The column is shown to be
   quiet, not shown to work. Do not read a zero here as evidence the estimators are healthy.
 - **The manifest prose rename is still deferred and must ride the next `datasets refresh`.**
@@ -179,8 +196,10 @@ cells at HEAD closes the provenance gap at the same time.
 - **The retained cost model** is `$0.010163 + $0.000230 * n_features + $0.005609 * (n_rows/1e5)`,
   residual sd $0.0022 on 9 datasets and 3 parameters. Accurate to +/-8% on first-pass runs and
   silent about looping ones, with the contingency held as a note rather than a coefficient.
-- **The toy run's 2.5x loop spread** has three observations and agrees with the manifest's x2.46.
-  Still thin, and still the reason no toy cost should be quoted from one run.
+- **The toy run's 2.5x loop spread** now has four observations, the newest being this session's
+  $0.0131 first-pass against $0.0312 at three loops, a 2.38x spread at one commit. It keeps
+  agreeing with the manifest's x2.46. Still thin, and still the reason no toy cost should be
+  quoted from one run.
 - **H_categorical was refuted** with a real mechanism behind it, and it has no separating power on
   the objection question either.
 - **`test_baseline_cost.py`'s synthetic bound is loose by about 1.6x on real data.**
