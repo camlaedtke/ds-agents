@@ -1,27 +1,6 @@
-"""Do the planted traps actually reach the reviewer?
-
-This is the test the two new fixtures exist for. `StubModel` nominates no leakage candidates and
-proposes no drops by design, so a run under it is the case where every upstream node declines to
-act -- exactly the situation the reviewer is supposed to be the last line against. If a trap is
-absent from `final_features` or from `top_importances` after such a run, the reviewer is being
-shown a clean matrix and cannot be graded on that fixture at all. That is how the toy fixture
-turned out to be unable to demonstrate PLAN.md's "reviewer catches the leakage" box, and it failed
-silently: nothing errored, the leakage numbers just came out looking like a reviewer miss.
-
-`final_features` and `top_importances` are named specifically because they are two of the seven
-things `reviewer._user_message` puts in front of the model. A column outside both is invisible.
-
-Every case runs in both naming arms, and that is not padding. The name-transparency ablation
-compares a descriptive run against an opaque one, and the comparison only means something if the
-trap is mechanically capable of reaching the reviewer in *both*. If the rename broke survival --
-if `var_07` fell out of the matrix where `adjuster_touches` did not -- the opaque arm would score
-a leakage_recall of 0.0 that reads exactly like the profiler successfully ignoring a trap, and the
-session's headline number would be an artefact of the harness. Nothing else in the suite would
-notice, which is the same silent failure that made the toy fixture unable to pose Phase 3's
-question for three sessions.
-
-Not marked `fast`: each case runs the whole graph.
-"""
+"""Under a StubModel run (no upstream node acts), every planted trap must still reach the reviewer
+in `final_features` and `top_importances`, in both naming arms. Not marked `fast`: runs the whole
+graph."""
 
 from pathlib import Path
 from typing import NamedTuple

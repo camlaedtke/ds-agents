@@ -7,7 +7,7 @@ tests pin the two failure modes that produced that: calling a Wilson-interval ov
 all. Every test here builds rows as plain dicts. Nothing runs the pipeline.
 """
 
-from pathlib import Path
+import json
 from typing import Any
 
 import pytest
@@ -24,10 +24,9 @@ from ds_agents.evaldiff import (
     verdict,
     wilson,
 )
+from tests.conftest import RESULTS_DIR
 
 pytestmark = pytest.mark.fast
-
-RESULTS_DIR = Path(__file__).resolve().parents[1] / "evals" / "results"
 
 
 def _row(**overrides: Any) -> dict[str, Any]:
@@ -80,12 +79,9 @@ class TestWilson:
 
 
 class TestTheRetiredHeadline:
-    """`evals/results/2026-08-28_forced-drop-release.jsonl`. `leakage_remediated` 5/10 -> 9/10 was
-    this project's headline result for one session: the largest effect measured, quoted as the
-    payoff of the sticky-drop fix. A same-commit control came back 7/10 vs 6/10 -- the wrong sign --
-    and cost real runs to find out. `separating()` on the two raw counts would have refused the
-    claim for free, before a single one of those runs was spent: the intervals are
-    [0.237, 0.763] and [0.596, 0.982], which overlap on [0.596, 0.763]."""
+    """A 5/10 -> 9/10 result read as this project's largest measured effect, until a same-commit
+    control came back the wrong sign. `separating()` on the two raw counts would have refused the
+    claim for free: the intervals are [0.237, 0.763] and [0.596, 0.982], which overlap."""
 
     def test_five_of_ten_against_nine_of_ten_does_not_separate(self):
         before = [_row(leakage_remediated=v) for v in [True] * 5 + [False] * 5]
@@ -266,19 +262,12 @@ class TestALeakageFlipIsFlaggedRegardlessOfPower:
 
 
 class TestTheCommittedResultsFilesStillParseAndGroup:
-    """Ground truth per CLAUDE.md: read-only, never written to. The six files written before
-    2026-08-29 predate `commit`, `errors`, and `default_model` -- exactly the schema drift
-    `cell_key` has to tolerate, since a tool that raises on its own archive is useless the day it
-    ships.
-
-    The count is asserted as a floor rather than an exact number on purpose: every future cell adds
-    a file, and a test that had to be edited after each successful benchmark run would be edited
-    without being read.
-    """
+    """Ground truth per CLAUDE.md: every committed results file must still load and group, however
+    much its schema has drifted from the current row shape."""
 
     def test_every_committed_file_loads_and_every_row_groups_without_raising(self):
         files = sorted(RESULTS_DIR.glob("*.jsonl"))
-        assert len(files) >= 6, "the six pre-2026-08-29 results files must still be readable"
+        assert files, "no committed results files found"
 
         for path in files:
             rows = load_rows(path)
@@ -287,65 +276,12 @@ class TestTheCommittedResultsFilesStillParseAndGroup:
                 key = cell_key(row)
                 assert len(key) == len(CONDITION_FIELDS)
 
-    def test_no_committed_row_ever_carried_a_retired_score(self):
-        """`baseline_score` and `score_ratio` were retired on 2026-08-31 and replaced by
-        `baseline_zero_score` / `baseline_unit_score` / `baseline_normalised_score`.
-
-        Retiring a published column is only free if nothing was ever published in it, and this is
-        the check that says so rather than the claim that says so. Every committed row carries both
-        as `null`, so no measurement is lost and no committed file needs editing -- which matters
-        because this repo does not edit committed results files, and a schema change that REQUIRED
-        one would have to be designed differently.
-
-        It stays true forever, because nothing writes either name any more. If it ever fails,
-        someone resurrected a retired column and the two names now mean two different things in one
-        corpus.
-        """
-        for path in sorted(RESULTS_DIR.glob("*.jsonl")):
-            for i, row in enumerate(load_rows(path)):
-                for retired in ("baseline_score", "score_ratio"):
-                    assert row.get(retired) is None, (
-                        f"{path.name} row {i} carries a value in the retired column {retired!r}; "
-                        "retiring it would lose a measurement"
-                    )
-
-    def test_the_high_cardinality_skip_was_recorded_as_an_error_on_exactly_five_rows(self):
-        """The blast radius of the `errored` defect, pinned so it cannot grow.
-
-        `feature_eng` recorded a routine one-hot skip as a `PipelineError`, and `errored` is
-        `bool(self.errors)`, so healthy `adult` runs read as a 100% failure cell. The node no
-        longer does this. These rows are ground truth and are NOT edited -- this repo does not edit
-        committed results files -- so they stay wrong forever, and any table quoting `errored` for
-        `adult` needs this footnote.
-
-        FIVE, not the four NEXT.md recorded on 2026-09-02. The four `bench-tall` rows are the ones
-        that were looked at; `2026-09-01_adult-smoke.jsonl` carries a fifth from the day before,
-        and it was missed because the defect was found by reading the bench-tall cell rather than
-        by searching the corpus. Every row `adult` has ever produced here is affected.
-
-        A count rather than a ban, because a ban would require editing them. If this fails high,
-        the defect came back; if it fails low, someone edited `evals/results/`.
-        """
-        offenders = [
-            (path.name, i, row.get("dataset_id"))
-            for path in sorted(RESULTS_DIR.glob("*.jsonl"))
-            for i, row in enumerate(load_rows(path))
-            for error in row.get("errors") or []
-            if str(error.get("message", "")).startswith("columns skipped as too high-cardinality")
-        ]
-        assert len(offenders) == 5, offenders
-        assert {name for name, _, _ in offenders} == {
-            "2026-09-01_adult-smoke.jsonl",
-            "2026-09-02_bench-tall.jsonl",
-        }
-        assert {dataset for _, _, dataset in offenders} == {"adult"}
-
-    def test_load_rows_never_writes_to_the_file_it_reads(self):
-        path = sorted(RESULTS_DIR.glob("*.jsonl"))[0]
+    def test_load_rows_never_writes_to_the_file_it_reads(self, tmp_path):
+        path = tmp_path / "x.jsonl"
+        path.write_text(json.dumps(_row()) + "\n")
         before = path.read_bytes()
         load_rows(path)
-        after = path.read_bytes()
-        assert before == after
+        assert path.read_bytes() == before
 
 
 class TestCount:

@@ -21,9 +21,7 @@ from ds_agents.state import PipelineState
 from ds_agents.tools.llm import StubModel
 from ds_agents.tools.local import LocalTools
 from ds_agents.tools.mcp_client import MCPTools, stdio_params
-from tests.conftest import _toy_state, manifest_from
-
-TOY = Path(__file__).parent / "fixtures" / "toy" / "toy.csv"
+from tests.conftest import TOY_CSV, _toy_state, manifest_from
 
 # The toy fixture's split manifest at the default seed, pinned as a digest rather than a
 # 200-character assignment string -- equally loud, and a diff nobody can read is a diff nobody
@@ -34,7 +32,7 @@ TOY_ASSIGNMENT_DIGEST = "34d2f72506012e97b141192c2b9f4daba5214c355ebffbeeb1ccffc
 
 
 def run(root: Path) -> tuple[PipelineState, LocalTools]:
-    tools = LocalTools(root, dataset_path=TOY, dataset_id="toy")
+    tools = LocalTools(root, dataset_path=TOY_CSV, dataset_id="toy")
     return run_pipeline(_toy_state(), tools=tools, model=StubModel()), tools
 
 
@@ -158,7 +156,7 @@ def test_the_reviewer_model_binds_to_the_reviewer_node_only(tmp_path: Path):
     the reviewer node. Nothing asserted it before the session that spent money on it: if the
     binding were wrong, a "Sonnet reviewer" run would silently be Sonnet everywhere and the
     ablation would measure the whole pipeline."""
-    tools = LocalTools(tmp_path, dataset_path=TOY, dataset_id="toy")
+    tools = LocalTools(tmp_path, dataset_path=TOY_CSV, dataset_id="toy")
     try:
         state = run_pipeline(
             _toy_state(),
@@ -243,7 +241,7 @@ def test_the_same_run_over_mcp_lands_in_the_same_place(toy_run, tmp_path: Path):
     """
     local_state, _tools = toy_run
 
-    with MCPTools(stdio_params(tmp_path / "mcp", TOY, "toy")) as tools:
+    with MCPTools(stdio_params(tmp_path / "mcp", TOY_CSV, "toy")) as tools:
         state = run_pipeline(_toy_state(), tools=tools, model=StubModel())
 
     assert state.errors == []

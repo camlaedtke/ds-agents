@@ -12,17 +12,13 @@ profiler, feature_eng, modeler) still gets the ordinary `StubModel` answer, whic
 these tests from having to re-derive the whole toy run's behaviour.
 """
 
-from pathlib import Path
-
-from conftest import QueuedModel, _toy_state
+from conftest import TOY_CSV, QueuedModel, _toy_state
 
 from ds_agents.graph import run_pipeline
 from ds_agents.nodes.reviewer import DispositionUpdate, ProposedObjection, ReviewFinding
 from ds_agents.state import PipelineState
 from ds_agents.tools.llm import StubModel
 from ds_agents.tools.local import LocalTools
-
-TOY = Path(__file__).parent / "fixtures" / "toy" / "toy.csv"
 
 
 def _block_account_status_code(payload: dict) -> ReviewFinding:
@@ -96,7 +92,7 @@ def _with_routing(state: PipelineState, objection_routing: str) -> PipelineState
 def test_block_once_then_pass(tmp_path):
     """The whole point of the loop: a reviewer that blocks on real evidence, feature_eng acting on
     the objection it's handed, and the reviewer clearing its own objection once the fix lands."""
-    tools = LocalTools(tmp_path / "loop-block-pass", dataset_path=TOY, dataset_id="toy")
+    tools = LocalTools(tmp_path / "loop-block-pass", dataset_path=TOY_CSV, dataset_id="toy")
     model = QueuedModel(ReviewFinding, [_block_account_status_code, _pass_and_resolve])
 
     state = run_pipeline(_toy_state(), tools=tools, model=model)
@@ -117,7 +113,7 @@ def test_block_once_then_pass(tmp_path):
 def test_always_block_ends_exhausted_at_the_cap(tmp_path):
     """A reviewer that never resolves its own objection must not loop forever: `loop_cap=2` forces
     the second pass to `exhausted` even though the claim is still `block`."""
-    tools = LocalTools(tmp_path / "loop-exhausted", dataset_path=TOY, dataset_id="toy")
+    tools = LocalTools(tmp_path / "loop-exhausted", dataset_path=TOY_CSV, dataset_id="toy")
     model = QueuedModel(ReviewFinding, [_block_account_status_code, _block_account_status_code])
     state_in = _with_loop_cap(_toy_state(), loop_cap=2)
 
@@ -134,7 +130,7 @@ def test_a_modeler_addressed_column_objection_dead_ends_under_the_default_routin
     This is what 0-of-21 looked like in the committed rows: `reviewer_caught` true,
     `leakage_remediated` false, and a `route_sequence` that never mentions `feature_eng`.
     """
-    tools = LocalTools(tmp_path / "loop-dead-end", dataset_path=TOY, dataset_id="toy")
+    tools = LocalTools(tmp_path / "loop-dead-end", dataset_path=TOY_CSV, dataset_id="toy")
     model = QueuedModel(ReviewFinding, [_block_via_modeler, _pass_and_resolve])
 
     state = run_pipeline(_toy_state(), tools=tools, model=model)
@@ -152,7 +148,7 @@ def test_a_modeler_addressed_column_objection_reaches_feature_eng_under_by_categ
     the run goes, not what the reviewer said -- which is what keeps `objections_by_target_node`
     meaningful in this arm and makes `objections_rerouted` the count of the disagreement.
     """
-    tools = LocalTools(tmp_path / "loop-rerouted", dataset_path=TOY, dataset_id="toy")
+    tools = LocalTools(tmp_path / "loop-rerouted", dataset_path=TOY_CSV, dataset_id="toy")
     model = QueuedModel(ReviewFinding, [_block_via_modeler, _pass_and_resolve])
 
     state = run_pipeline(_with_routing(_toy_state(), "by_category"), tools=tools, model=model)
@@ -172,7 +168,7 @@ def test_the_stub_reviewer_leaves_the_run_clean(tmp_path):
     """`StubModel` now answers `ReviewFinding` too (claim `pass`, nothing raised). With the
     reviewer flipped on in `_toy_state`, the offline run must still finish with no errors -- the
     reviewer being wired in must not make every stub run look broken."""
-    tools = LocalTools(tmp_path / "loop-stub", dataset_path=TOY, dataset_id="toy")
+    tools = LocalTools(tmp_path / "loop-stub", dataset_path=TOY_CSV, dataset_id="toy")
 
     state = run_pipeline(_toy_state(), tools=tools, model=StubModel())
 

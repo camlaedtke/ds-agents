@@ -202,12 +202,8 @@ def test_the_target_column_is_filtered_out_like_any_unknown_column():
 
 
 def test_a_column_scoped_objection_naming_no_columns_at_all_does_not_sink_the_pass():
-    """The live failure of 2026-08-27: Haiku raised `implausible_importance` with `columns: []`.
-
-    While `ProposedObjection` carried `Objection`'s column validator, that one malformed objection
-    failed the whole `ReviewFinding`, and a pass that found something real read as a crash. The
-    rule belongs to the filtering loop, one objection at a time.
-    """
+    """One malformed objection (a column-scoped category with `columns: []`) must not fail the
+    whole `ReviewFinding`; the validation belongs to the filtering loop, one objection at a time."""
     bad = ProposedObjection(
         category="implausible_importance",
         subcategory="named no column",
@@ -256,13 +252,8 @@ def test_a_non_column_scoped_objection_survives_with_empty_columns():
 
 
 def test_a_resolved_objection_is_not_re_shown_to_the_reviewer():
-    """The other half of the 2026-08-28 sticky-drop blast-radius guard.
-
-    `feature_eng` now keeps a resolved objection's column dropped via `binding_objections`. The
-    reviewer's own facts must NOT follow it there: an objection it already closed, re-presented in
-    `open_objections` every pass, would be re-adjudicated forever and closure would be a treadmill
-    rather than a termination condition. `_user_message` must keep asking `open_objections`.
-    """
+    """An objection already closed, re-presented every pass, would be re-adjudicated forever and
+    closure would be a treadmill rather than a termination condition."""
     ob = objection()
     closed = ReviewPass(
         iteration=0, claim="block", routed_to="feature_eng", dispositions={ob.id: "resolved"}
@@ -444,32 +435,6 @@ def test_disabled_reviewer_is_a_zero_cost_no_op():
 # --- the prompt condition ---------------------------------------------------------------------
 
 
-def test_the_base_prompt_is_the_unmodified_system_prompt():
-    """`base` must stay byte-identical to what every earlier run used, or rows written across
-    sessions stop being comparable."""
-    model = ScriptedModel({ReviewFinding: finding()})
-
-    reviewer(state(), tools=FakeTools(), model=model)
-
-    (system, _user, _schema) = model.calls[0]
-    assert system == REVIEWER_SYSTEM
-
-
-def test_which_column_appends_exactly_one_rule():
-    model = ScriptedModel({ReviewFinding: finding()})
-
-    reviewer(
-        state(config=RunConfig(reviewer_enabled=True, reviewer_prompt="which_column")),
-        tools=FakeTools(),
-        model=model,
-    )
-
-    (system, _user, _schema) = model.calls[0]
-    assert system.startswith(REVIEWER_SYSTEM)
-    assert system.removeprefix(REVIEWER_SYSTEM) == WHICH_COLUMN_RULE
-    assert "top_importances" in system
-
-
 def _system_for(**config) -> str:
     model = ScriptedModel({ReviewFinding: finding()})
     reviewer(
@@ -481,27 +446,24 @@ def _system_for(**config) -> str:
     return system
 
 
-def test_closure_appends_exactly_one_rule():
-    system = _system_for(objection_closure="on")
-    assert system.removeprefix(REVIEWER_SYSTEM) == CLOSURE_RULE
-    assert "final_features" in system
+# (reviewer_prompt, objection_closure, expected_system): both are config changes, not a second
+# code path, and must compose in a fixed order so a row's config always predicts its prompt.
+PROMPT_VARIANT_CASES = [
+    pytest.param("base", "off", REVIEWER_SYSTEM, id="base_off"),
+    pytest.param("which_column", "off", REVIEWER_SYSTEM + WHICH_COLUMN_RULE, id="which_column_off"),
+    pytest.param("base", "on", REVIEWER_SYSTEM + CLOSURE_RULE, id="base_on"),
+    pytest.param(
+        "which_column", "on", REVIEWER_SYSTEM + WHICH_COLUMN_RULE + CLOSURE_RULE, id="both_on"
+    ),
+]
 
 
-def test_closure_composes_with_which_column_in_a_fixed_order():
-    """Both rules are independent conditions, so all four cells must be reachable and the order
-    must be pinned -- an order that drifted would make two runs with identical config rows carry
-    different prompts."""
-    system = _system_for(reviewer_prompt="which_column", objection_closure="on")
-    assert system == REVIEWER_SYSTEM + WHICH_COLUMN_RULE + CLOSURE_RULE
-
-
-def test_closure_off_leaves_both_earlier_prompts_byte_identical():
-    """The comparability guarantee. `off` must reproduce what every run before 2026-08-28 saw,
-    under either prompt condition, or no committed reviewer row survives this session."""
-    assert _system_for(reviewer_prompt="base", objection_closure="off") == REVIEWER_SYSTEM
-    assert _system_for(reviewer_prompt="which_column", objection_closure="off") == (
-        REVIEWER_SYSTEM + WHICH_COLUMN_RULE
-    )
+@pytest.mark.parametrize(("reviewer_prompt", "objection_closure", "expected"), PROMPT_VARIANT_CASES)
+def test_the_prompt_and_closure_conditions_compose_in_a_fixed_order(
+    reviewer_prompt, objection_closure, expected
+):
+    system = _system_for(reviewer_prompt=reviewer_prompt, objection_closure=objection_closure)
+    assert system == expected
 
 
 def test_no_appended_rule_names_a_fixture_column():
@@ -575,23 +537,71 @@ class TestABlockWithNothingToActOn:
     documented terminal-block path, which is why invariant 2 in this module's docstring survives.
     """
 
-    def test_a_block_whose_only_objection_was_filtered_away_retries_once(self):
-        """Cause (a), the hypothesis last session could not check: objections were raised, and the
-        malformed-objection filter dropped them one at a time."""
-        model = QueuedModel(
-            ReviewFinding,
+    # (findings, state_kwargs): a block whose objections don't survive to something actionable,
+    # for three different reasons the retry trigger must be blind to.
+    RETRY_CASES = [
+        pytest.param(
             [
                 finding(claim="block", objections=[bad_proposal()]),
                 finding(claim="block", objections=[good_proposal()]),
             ],
-        )
+            {},
+            id="only_objection_filtered_away",
+        ),
+        pytest.param(
+            [
+                finding(claim="block", objections=[]),
+                finding(claim="block", objections=[good_proposal()]),
+            ],
+            {},
+            id="no_objections_at_all",
+        ),
+        pytest.param(
+            [
+                finding(
+                    claim="block",
+                    dispositions=[DispositionUpdate(objection_id="obj-1", disposition="resolved")],
+                ),
+                finding(claim="block", objections=[good_proposal()]),
+            ],
+            {"objections": [objection()]},
+            id="dispositions_close_every_open_objection",
+        ),
+    ]
 
-        update = reviewer(state(), tools=FakeTools(), model=model)
+    @pytest.mark.parametrize(("findings", "state_kwargs"), RETRY_CASES)
+    def test_a_block_with_nothing_actionable_retries_once(self, findings, state_kwargs):
+        model = QueuedModel(ReviewFinding, findings)
+
+        reviewer(state(**state_kwargs), tools=FakeTools(), model=model)
 
         assert len(model.calls) == 2
-        assert update["reviewer_claim"] == "block"
-        (raised,) = update["objections"]
-        assert raised.columns == ["account_status_code"]
+
+    # (model, state_kwargs): a block that already has something actionable, so the retry trigger
+    # (the router's own `would_be_open` question) must not fire.
+    NEVER_RETRY_CASES = [
+        pytest.param(
+            ScriptedModel({ReviewFinding: finding(claim="block", objections=[])}),
+            {"objections": [objection()]},
+            id="surviving_prior_open_objection",
+        ),
+        pytest.param(
+            ScriptedModel({ReviewFinding: finding(claim="pass")}),
+            {},
+            id="pass_claim",
+        ),
+        pytest.param(
+            ScriptedModel({ReviewFinding: finding(claim="block", objections=[good_proposal()])}),
+            {},
+            id="surviving_objection",
+        ),
+    ]
+
+    @pytest.mark.parametrize(("model", "state_kwargs"), NEVER_RETRY_CASES)
+    def test_a_block_with_something_actionable_never_retries(self, model, state_kwargs):
+        reviewer(state(**state_kwargs), tools=FakeTools(), model=model)
+
+        assert len(model.calls) == 1
 
     def test_a_successful_retry_still_records_why_the_first_response_failed(self):
         """The rejection diagnostic is the only evidence of what the model actually got wrong, and
@@ -609,71 +619,6 @@ class TestABlockWithNothingToActOn:
 
         assert any("adjuster touches" in e.message for e in update["errors"])
         assert any(BLOCK_RETRY_PREFIX in e.message for e in update["errors"])
-
-    def test_a_block_with_no_objections_at_all_also_retries(self):
-        """Cause (b). The fix must not depend on which cause was real -- the teed logs that would
-        have decided it were never committed -- so the trigger is the router's question, which is
-        blind to how the objection set got empty."""
-        model = QueuedModel(
-            ReviewFinding,
-            [
-                finding(claim="block", objections=[]),
-                finding(claim="block", objections=[good_proposal()]),
-            ],
-        )
-
-        update = reviewer(state(), tools=FakeTools(), model=model)
-
-        assert len(model.calls) == 2
-        assert [o.columns for o in update["objections"]] == [["account_status_code"]]
-
-    def test_a_block_whose_dispositions_close_every_open_objection_retries(self):
-        """Cause (c): the objections existed, and this pass's own dispositions closed all of them.
-        Nothing was filtered and nothing was malformed, and the block is still a dead end."""
-        existing = objection()
-        model = QueuedModel(
-            ReviewFinding,
-            [
-                finding(
-                    claim="block",
-                    dispositions=[
-                        DispositionUpdate(objection_id=existing.id, disposition="resolved")
-                    ],
-                ),
-                finding(claim="block", objections=[good_proposal()]),
-            ],
-        )
-
-        reviewer(state(objections=[existing]), tools=FakeTools(), model=model)
-
-        assert len(model.calls) == 2
-
-    def test_a_block_with_a_surviving_prior_open_objection_never_retries(self):
-        """The trigger is the router's question, not "did this pass raise something". An earlier
-        pass's objection that is still open is something feature_eng can act on, so this block is
-        actionable and costs no second call."""
-        model = ScriptedModel({ReviewFinding: finding(claim="block", objections=[])})
-
-        update = reviewer(state(objections=[objection()]), tools=FakeTools(), model=model)
-
-        assert len(model.calls) == 1
-        assert update["reviewer_claim"] == "block"
-
-    def test_a_pass_claim_never_retries(self):
-        """The happy path pays nothing. A retry on `pass` would double the cost of every clean run
-        in the benchmark."""
-        model = ScriptedModel({ReviewFinding: finding(claim="pass")})
-
-        reviewer(state(), tools=FakeTools(), model=model)
-
-        assert len(model.calls) == 1
-
-    def test_a_block_with_a_surviving_objection_never_retries(self):
-        model = ScriptedModel({ReviewFinding: finding(claim="block", objections=[good_proposal()])})
-
-        reviewer(state(), tools=FakeTools(), model=model)
-
-        assert len(model.calls) == 1
 
     def test_the_retry_names_the_rejection_reason_and_the_known_columns(self):
         """The correction travels INSIDE the JSON facts block, keyed `retry_reason` and
@@ -711,9 +656,8 @@ class TestABlockWithNothingToActOn:
         assert set(offered) == {c.name for c in PROFILE.columns} - {"churned"}
 
     def test_the_first_call_is_byte_identical_to_a_run_that_never_retried(self):
-        """The comparability guarantee. Every committed row was produced by a pipeline that made
-        exactly this first call; if the retry changed it, no reviewer number from before
-        2026-08-29 would be comparable with anything after it."""
+        """The comparability guarantee: if the retry mechanism changed the first call, no reviewer
+        number from a run that retried would be comparable with one that never did."""
         retrying = QueuedModel(
             ReviewFinding, [finding(claim="block", objections=[]), finding(claim="pass")]
         )

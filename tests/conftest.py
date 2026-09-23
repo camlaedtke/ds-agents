@@ -21,6 +21,7 @@ from ds_agents.tools.llm import Completion, StubModel, _payload
 from ds_agents.tools.protocol import ArtifactMeta, ArtifactPayload, RunResult, ToolError
 
 TOY_CSV = Path(__file__).parent / "fixtures" / "toy" / "toy.csv"
+RESULTS_DIR = Path(__file__).resolve().parent.parent / "evals" / "results"
 TOY_COLUMNS = [
     "customer_id",
     "tenure_months",

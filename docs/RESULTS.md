@@ -472,13 +472,9 @@ interval and none is quoted as an effect. The withheld holdout is a random split
 a temporal or grouped leak. All 52 rows come from one configuration, the shipped default, so its
 reviewer numbers do not describe the pipeline's best known arm.
 
-**On whether Result 3 still describes the pipeline.** The `claims_timing` arms were run at older
-commits, and there is evidence in both directions about whether the fixture still behaves that way.
-A later session recorded two fresh replicates that passed first-loop with zero objections, both
-planted leaks already dropped by feature engineering's own plan, against 10 of 10 committed rows
-that looped. If that shift is real, several of Result 3's numbers describe a pipeline that no
-longer exists; if it is nondeterminism, they stand and are underpowered. Unresolved, and about
-$0.30 of replicates would settle it.
+**On whether Result 3 still describes the pipeline.** Two fresh replicates once passed first-loop
+with zero objections, which raised the question. The pre-registered reproduction in Result 3's
+table answered it: run three weeks and 25 commits later, all four primary endpoints reproduced.
 
 **On the leakage rows.** 200 withheld rows put roc_auc's standard error near 0.04 on the fixtures,
 which is wide next to several of the differences above. Three traps is not a taxonomy.

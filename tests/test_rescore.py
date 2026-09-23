@@ -248,7 +248,7 @@ def _prepared(tmp_path, *, withheld: bool = True):
 
 @pytest.mark.fast
 class TestEveryStatusHasItsOwnReason:
-    """One test per non-`ok` status. A catch-all here would defeat the point of the enum."""
+    """One status per non-`ok` reason. A catch-all here would defeat the point of the enum."""
 
     _state = staticmethod(_state)
     _prepared = staticmethod(_prepared)
@@ -266,28 +266,29 @@ class TestEveryStatusHasItsOwnReason:
         assert outcome.status == "no_withheld_holdout"
         assert outcome.verified_holdout_score is None
 
-    def test_no_spec(self, tmp_path):
-        outcome = self._run(tmp_path, self._state(spec=None))
-        assert outcome.status == "no_spec"
-        assert outcome.verified_holdout_score is None
-
-    def test_no_model(self, tmp_path):
-        """The recorded 2026-08-31 failure: a run that produced no model and passed review."""
-        outcome = self._run(tmp_path, self._state(chosen_model=None))
-        assert outcome.status == "no_model"
-        assert outcome.verified_holdout_score is None
-
-    def test_empty_matrix(self, tmp_path):
-        outcome = self._run(tmp_path, self._state(final_features=[]))
-        assert outcome.status == "empty_matrix"
-        assert outcome.verified_holdout_score is None
-
-    def test_unknown_model_spec(self, tmp_path):
-        outcome = self._run(
-            tmp_path, self._state(chosen_model=ModelResult(name="xgboost_from_2019"))
-        )
-        assert outcome.status == "unknown_model_spec"
-        assert "CANDIDATE_SPECS" in outcome.detail
+    # (state_overrides, status, detail_substring): a state the self-check must recognize as not
+    # evaluable, one non-"ok" status per case.
+    @pytest.mark.parametrize(
+        ("overrides", "status", "detail_substring"),
+        [
+            pytest.param({"spec": None}, "no_spec", None, id="no_spec"),
+            pytest.param({"chosen_model": None}, "no_model", None, id="no_model"),
+            pytest.param({"final_features": []}, "empty_matrix", None, id="empty_matrix"),
+            pytest.param(
+                {"chosen_model": ModelResult(name="xgboost_from_2019")},
+                "unknown_model_spec",
+                "CANDIDATE_SPECS",
+                id="unknown_model_spec",
+            ),
+        ],
+    )
+    def test_a_status_reports_its_own_reason(self, tmp_path, overrides, status, detail_substring):
+        outcome = self._run(tmp_path, self._state(**overrides))
+        assert outcome.status == status
+        if detail_substring:
+            assert detail_substring in outcome.detail
+        else:
+            assert outcome.verified_holdout_score is None
 
     def test_a_broken_snippet_is_reported_not_raised(self, tmp_path):
         """Feature code that will not exec. The run already happened; losing its row would drop
@@ -525,15 +526,15 @@ class TestEveryBaselineStatusHasItsOwnReason:
         assert result.status == "snippet_failed"
         assert result.detail
 
-    def test_an_empty_source_matrix_has_its_own_name(self):
-        assert (
-            rescore._baseline_outcome({"status": "empty_source_matrix", "detail": "no columns"})
-        ).status == "empty_source_matrix"
-
-    def test_a_single_class_train_split_has_its_own_name(self):
-        assert (
-            rescore._baseline_outcome({"status": "single_class_train"})
-        ).status == "single_class_train"
+    @pytest.mark.parametrize(
+        "payload",
+        [
+            {"status": "empty_source_matrix", "detail": "no columns"},
+            {"status": "single_class_train"},
+        ],
+    )
+    def test_a_status_has_its_own_name(self, payload):
+        assert rescore._baseline_outcome(payload).status == payload["status"]
 
     def test_a_failed_zero_point_keeps_the_unit_point(self):
         result = rescore._baseline_outcome(
@@ -612,14 +613,8 @@ class TestABaselineFailureIsNotARunFailure:
 
 @pytest.mark.fast
 class TestTheGradersOwnWallCostIsOnTheRow:
-    """`wall_seconds` stops when the graph returns, and the grader runs after it.
-
-    Which means the term this project most needs to price -- a unit-point fit measured at 0.2s on
-    credit_g and 72s on a 98k-row frame -- was invisible in every row committed before 2026-09-01.
-    It was worse than invisible: the four `baseline-smoke` rows read FASTER (19.7-21.0s) than the
-    four `credit-g-smoke` rows that did two fewer fits (22.8-27.3s), because the fits were never in
-    the number and run-to-run LLM latency spread is about 4s.
-    """
+    """`wall_seconds` stops when the graph returns, and the grader runs after it, so its own
+    duration needs its own two columns or it is invisible on every committed row."""
 
     def test_both_durations_are_none_when_neither_half_ran(self):
         """`None` and `0.0` are different claims. The precondition path does no work at all, and a
@@ -647,14 +642,9 @@ class TestTheGradersOwnWallCostIsOnTheRow:
         assert row["rescore_seconds"] == pytest.approx(1.25)
         assert row["baseline_seconds"] == pytest.approx(72.09)
 
-
-class TestTheTimingIsActuallyWiredUp:
-    """The unit tests above prove `apply` writes what it is HANDED. This one proves the call site
-    hands it something -- which is the half that a live run would otherwise be the first to check,
-    at eight runs' worth of money.
-    """
-
     def test_a_graded_run_through_the_cli_records_both_durations(self, tmp_path):
+        """Proves the call site hands `apply` something, not just that `apply` writes what it
+        is handed."""
         from ds_agents.cli import _run_once
 
         csv_path = tmp_path / "d.csv"
@@ -729,10 +719,9 @@ class TestTheDatasetIsRegisteredOncePerToolSurface:
     `ArtifactStore.register_dataset` copies the file, does an unbounded `pd.read_csv` and computes
     a per-column `nunique`. It runs once for the graph's tools and once more inside each of
     `rescore.rescore` and `rescore.baseline`, which build their own `LocalTools` so a grader
-    failure cannot take the run's store with it. Three is therefore correct rather than wasteful --
-    but it was recorded only as a sentence in `docs/DECISIONS.md`, and it is the multiplier on
-    every number in `tests/test_register_dataset_cost.py`. A refactor that shared one store between
-    the three would change the cost of every benchmark run and silently invalidate that table.
+    failure cannot take the run's store with it. Three is therefore correct rather than wasteful,
+    and a refactor that shared one store between the three would change the cost of every
+    benchmark run.
     """
 
     def test_a_benchmark_run_registers_the_dataset_exactly_three_times(self, tmp_path, monkeypatch):
@@ -754,9 +743,7 @@ class TestTheDatasetIsRegisteredOncePerToolSurface:
         assert state.rescore_status == "ok", state.rescore_detail
         assert state.baseline_status == "ok", state.baseline_detail
         assert len(calls) == 3, (
-            f"expected 3 registrations (graph, rescore, baseline), got {len(calls)}: {calls}. "
-            "If this dropped, the per-run figures in tests/test_register_dataset_cost.py and the "
-            "note in docs/DECISIONS.md are now wrong by the same factor."
+            f"expected 3 registrations (graph, rescore, baseline), got {len(calls)}: {calls}"
         )
         assert len(set(calls)) == 1, (
             f"all three registrations must read the same agent CSV, got {set(calls)}"
@@ -772,11 +759,9 @@ class TestTheDatasetIsRegisteredOncePerToolSurface:
         `rescore.baseline` construct `LocalTools` directly, and `--tools local` does too, so two of
         the three calls are unbounded under either transport and all three are under `local`.
 
-        Measured at 1.2% of budget at the largest shape in the manifest (`higgs`, 0.25s a call,
-        0.75s a run, `tests/test_register_dataset_cost.py`), so this is a documented exposure and
-        not an emergency -- which is exactly why it is worth pinning: a small live defect is the
-        kind that survives by never being written down. This test fails if someone adds a fourth
-        unbounded construction site, or bounds one of these two without bounding both.
+        This is a documented exposure, not an emergency -- a small live defect is the kind that
+        survives by never being written down. This test fails if someone adds a fourth unbounded
+        construction site, or bounds one of these two without bounding both.
         """
         source = (Path(rescore.__file__)).read_text()
         assert source.count("LocalTools(") == 2, (

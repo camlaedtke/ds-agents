@@ -39,6 +39,11 @@ def leak_objection(**overrides) -> Objection:
     return Objection(**{**kwargs, **overrides})
 
 
+def _ps(**overrides) -> PipelineState:
+    """A minimal PipelineState with only dataset_id and task_description defaulted."""
+    return PipelineState(dataset_id="toy", task_description="x", **overrides)
+
+
 def populated_state() -> PipelineState:
     """Every optional field set, so round-tripping actually exercises the schema."""
     objection = leak_objection()
@@ -134,7 +139,7 @@ class TestRoundTrip:
         assert dumped["node_trace"][0]["wall_seconds"] is None
 
     def test_minimal_state_needs_only_intake_inputs(self):
-        state = PipelineState(dataset_id="toy", task_description="predict churn")
+        state = _ps()
         assert state.review_verdict == "pending"
         assert state.objections == []
         assert state.config.loop_cap == 3
@@ -144,7 +149,7 @@ class TestContractEnforcement:
     def test_unknown_field_is_rejected(self):
         """A node inventing a field is a contract violation, not a convenience."""
         with pytest.raises(ValidationError):
-            PipelineState(dataset_id="toy", task_description="x", sneaky_field="nope")
+            _ps(sneaky_field="nope")
 
     def test_objection_category_is_closed(self):
         with pytest.raises(ValidationError):
@@ -174,7 +179,7 @@ class TestContractEnforcement:
 
     def test_run_config_is_frozen(self):
         """A node must not be able to raise its own loop cap mid-run."""
-        state = PipelineState(dataset_id="toy", task_description="x")
+        state = _ps()
         with pytest.raises(ValidationError):
             state.config.loop_cap = 99
 
@@ -200,7 +205,7 @@ class TestContractEnforcement:
 
 class TestReviewLoop:
     def test_loop_exhausted_reads_the_frozen_cap(self):
-        state = PipelineState(dataset_id="toy", task_description="x", config=RunConfig(loop_cap=3))
+        state = _ps(config=RunConfig(loop_cap=3))
         assert not state.loop_exhausted
         state.review_iterations = 3
         assert state.loop_exhausted
@@ -208,7 +213,7 @@ class TestReviewLoop:
     def test_open_objections_respects_review_pass_dispositions(self):
         """Silence and acceptance must not look the same."""
         raised = leak_objection()
-        state = PipelineState(dataset_id="toy", task_description="x", objections=[raised])
+        state = _ps(objections=[raised])
         assert len(state.open_objections()) == 1
 
         state.review_passes = [
@@ -224,9 +229,7 @@ class TestReviewLoop:
     def test_an_unmentioned_objection_stays_open(self):
         """A reviewer that goes quiet has not accepted anything."""
         raised = leak_objection()
-        state = PipelineState(
-            dataset_id="toy",
-            task_description="x",
+        state = _ps(
             objections=[raised],
             review_passes=[
                 ReviewPass(
@@ -253,9 +256,7 @@ class TestOpenObjectionsOrdering:
         method sorts by `iteration`, not by whatever order the list happens to be in.
         """
         objection = leak_objection()
-        state = PipelineState(
-            dataset_id="toy",
-            task_description="x",
+        state = _ps(
             objections=[objection],
             review_passes=[
                 ReviewPass(
@@ -299,10 +300,8 @@ class TestClosureIsMeasured:
                     iteration=0, claim="pass", routed_to="reporter", dispositions=dispositions
                 )
             ]
-        return PipelineState(
+        return _ps(
             config=RunConfig(reviewer_enabled=reviewer_enabled),
-            dataset_id="toy",
-            task_description="x",
             planted_leakage_columns=["account_status_code"],
             objections=objections,
             review_passes=passes,
@@ -379,16 +378,10 @@ class TestClosureIsMeasured:
 
 
 class TestABindingObjectionOutlivesItsResolution:
-    """`binding_objections` answers "what must stay OUT of the matrix". `open_objections` answers
-    "what is still being complained about". They are different questions and 2026-08-28 is the day
-    that stopped being a distinction without a difference.
-
-    `_forced_drops` recomputes from scratch on every entry to `feature_eng`, so while it read
-    `open_objections`, a `resolved` objection stopped forcing its drop and the next return to that
-    node -- for any reason at all -- put the leaked column back. Verified live against the node:
-    with the objection open the snippet read `DROP = ['account_status_code', 'churned',
-    'customer_id']`; with it resolved, `DROP = ['churned', 'customer_id']`.
-    """
+    """`binding_objections` answers "what must stay OUT of the matrix"; `open_objections` answers
+    "what is still being complained about". `_forced_drops` recomputes from scratch on every entry
+    to `feature_eng`, so if it read `open_objections`, a `resolved` objection would stop forcing
+    its drop and a later return to that node would put the leaked column back."""
 
     def _state(
         self,
@@ -406,10 +399,8 @@ class TestABindingObjectionOutlivesItsResolution:
                     dispositions={objection.id: disposition},
                 )
             ]
-        return PipelineState(
+        return _ps(
             config=RunConfig(objection_routing=routing),
-            dataset_id="toy",
-            task_description="x",
             planted_leakage_columns=["leaky_col"],
             objections=[objection],
             review_passes=passes,
@@ -459,10 +450,8 @@ class TestABindingObjectionOutlivesItsResolution:
         """Resolved in pass 0, withdrawn in pass 1: the release must land. Same fold, same
         ordering rule as `open_objections`, because they share one implementation."""
         objection = leak_objection(columns=["leaky_col"])
-        state = PipelineState(
+        state = _ps(
             config=RunConfig(),
-            dataset_id="toy",
-            task_description="x",
             planted_leakage_columns=["leaky_col"],
             objections=[objection],
             review_passes=[
@@ -484,17 +473,9 @@ class TestABindingObjectionOutlivesItsResolution:
 
 
 class TestTheForcedDropReleaseRuleIsARecordedCondition:
-    """`config.forced_drop_release` is the control arm for the sticky-drop fix above.
-
-    The fix moved `leakage_remediated` 5/10 -> 9/10, the largest single effect in this project, and
-    its only evidence was two cells run at different commits. `resolved_or_withdrawn` reproduces the
-    pre-2026-08-28 release rule ON THIS COMMIT, so the claim "the release rule caused the effect"
-    has a counterfactual instead of a code-boundary footnote.
-
-    It is a defect reproduction, not a design fork, which is why the default is inverted relative to
-    every other condition on `RunConfig` and why that inversion is pinned by a test rather than left
-    to a comment. See DECISIONS.md 2026-08-28 (fifth entry).
-    """
+    """`config.forced_drop_release` is the control arm for the sticky-drop fix: `resolved_or_
+    withdrawn` reproduces the old release rule on the current commit. It is a defect reproduction,
+    not a design fork, so its default is inverted relative to every other RunConfig condition."""
 
     def _state(
         self,
@@ -514,10 +495,8 @@ class TestTheForcedDropReleaseRuleIsARecordedCondition:
                     dispositions={objection.id: disposition},
                 )
             ]
-        return PipelineState(
+        return _ps(
             config=RunConfig(objection_routing=routing, forced_drop_release=release),
-            dataset_id="toy",
-            task_description="x",
             planted_leakage_columns=["leaky_col"],
             objections=[objection],
             review_passes=passes,
@@ -551,10 +530,8 @@ class TestTheForcedDropReleaseRuleIsARecordedCondition:
                 strict=True,
             )
         )
-        state = PipelineState(
+        state = _ps(
             config=RunConfig(forced_drop_release="resolved_or_withdrawn"),
-            dataset_id="toy",
-            task_description="x",
             planted_leakage_columns=["leaky_col"],
             objections=objections,
             review_passes=[
@@ -634,7 +611,6 @@ class TestTheSingleCallerInvariant:
 
     def test_binding_objections_has_exactly_one_caller_in_the_graph(self):
         import ast
-        from pathlib import Path
 
         import ds_agents
 
@@ -664,21 +640,13 @@ class TestTheSingleCallerInvariant:
 
 
 class TestObjectionRouting:
-    """`config.objection_routing` decides WHO ACTS on an objection, and only that.
-
-    The bug being fixed, live on 2026-08-28: the reviewer raises `implausible_importance` -- a
-    column-scoped category -- and addresses it to `modeler`, which is a defensible reading of its
-    own prompt and a node with no column lever at all. `feature_eng` force-drops objected columns
-    but only sees `open_objections("feature_eng")`, so a correct objection sent one node sideways
-    produced exactly the same results row as a hallucinated one. 0 of 21 runs that never routed to
-    `feature_eng` remediated, against 3 of 6 that did.
-    """
+    """`config.objection_routing` decides WHO ACTS on an objection, and only that: a column-scoped
+    objection addressed to a node with no column lever (e.g. `modeler`) must still be actionable by
+    `feature_eng`, or a correctly-raised objection reads on the row exactly like a missed one."""
 
     def _state(self, objections: list[Objection], routing: str = "as_addressed") -> PipelineState:
-        return PipelineState(
+        return _ps(
             config=RunConfig(objection_routing=routing),
-            dataset_id="toy",
-            task_description="x",
             planted_leakage_columns=["leaky_col"],
             objections=objections,
         )
@@ -767,9 +735,7 @@ class TestDerivedNumbers:
         assert ModelResult(name="m", cv_scores=[0.5, 0.7]).cv_mean == pytest.approx(0.6)
 
     def test_total_cost_sums_the_node_trace(self):
-        state = PipelineState(
-            dataset_id="toy",
-            task_description="x",
+        state = _ps(
             node_trace=[
                 NodeEvent(node="intake", started=datetime(2026, 8, 22, tzinfo=UTC), cost_usd=0.01),
                 NodeEvent(
@@ -922,8 +888,8 @@ class TestTheScalePublishesItsOwnLength:
         )
 
     def test_the_numerai_observation_is_pinned_with_its_explanation(self):
-        """The measurement that motivated the column, from `2026-09-02_bench-tall.jsonl`. 2.089 and
-        0.0101 belong on the same row: the first is not interpretable without the second."""
+        """2.089 and 0.0101 belong on the same row: the first is not interpretable without the
+        second, on a dataset whose two reference points are barely separated."""
         state = self._state(
             verified_holdout_score=0.5211,
             baseline_zero_score=0.5,
@@ -1044,9 +1010,7 @@ class TestProfilerColumnsOnTheRow:
     """
 
     def _state(self, nominated: list[str], planted: list[str]) -> PipelineState:
-        return PipelineState(
-            dataset_id="toy",
-            task_description="x",
+        return _ps(
             planted_leakage_columns=planted,
             profile=ProfileReport(
                 n_rows=200,
@@ -1090,9 +1054,7 @@ class TestProfilerColumnsOnTheRow:
     def test_a_profiler_that_never_ran_is_null_not_zero(self):
         """A node that crashed nominated nothing in a different sense than one that declined to,
         and averaging those together over a benchmark would be a lie."""
-        state = PipelineState(
-            dataset_id="toy", task_description="x", planted_leakage_columns=["leaky_col"]
-        )
+        state = _ps(planted_leakage_columns=["leaky_col"])
         row = state.results_row()
         assert row["profiler_nominated"] is None
         assert row["profiler_caught"] is None
@@ -1100,18 +1062,9 @@ class TestProfilerColumnsOnTheRow:
         assert row["profiler_false_alarm"] is None
 
     def test_no_planted_columns_means_nothing_is_graded_not_that_everything_is_wrong(self):
-        """Changed 2026-08-31, when external benchmark datasets arrived.
-
-        This used to assert `profiler_false_alarm == 1`: with no planted list, every nominated
-        column scored a mistake. That was defensible while every dataset was a fixture with a
-        complete answer key, and it is wrong for `evals/datasets/manifest.yaml`, whose entries all
-        carry `leakage_labelled: false` because nobody has enumerated the leaks in `adult`. An
-        empty planted list now means NOT MEASURED, matching what `profiler_recall` already did.
-
-        No committed row moves: all 145 rows in `evals/results/*.jsonl` carry a non-empty
-        `leakage_planted`, checked by
-        `TestTheLeakageGate::test_no_committed_results_row_has_an_empty_planted_list`.
-        """
+        """An empty planted list means NOT MEASURED, not "everything nominated is wrong" -- an
+        external benchmark dataset with no answer key must not score a false alarm on every
+        nomination just because nobody has enumerated its leaks."""
         row = self._state(["a"], []).results_row()
         assert row["profiler_recall"] is None
         assert row["profiler_false_alarm"] is None
@@ -1121,19 +1074,12 @@ class TestProfilerColumnsOnTheRow:
 
 
 class TestReviewerColumnsOnTheRow:
-    """The reviewer's columns, over every column-scoped category.
-
-    The gap this closes, observed live on 2026-08-27: the reviewer named columns under
-    `implausible_importance`, and `leakage_flagged` counts only leakage and contamination, so a
-    reviewer that names the trap in that category scored as a miss. `leakage_*` keeps its
-    two-category definition -- the committed naming-ablation rows were written under it -- and
-    these fields carry the wider question: did the reviewer name the trap column at all.
-    """
+    """The reviewer's columns, over every column-scoped category rather than just leakage and
+    contamination -- so a reviewer that names the trap under `implausible_importance` is credited,
+    not scored as a miss, while `leakage_*` keeps its narrower two-category definition."""
 
     def _state(self, objections: list[Objection], planted: list[str]) -> PipelineState:
-        return PipelineState(
-            dataset_id="toy",
-            task_description="x",
+        return _ps(
             planted_leakage_columns=planted,
             objections=objections,
             review_passes=[ReviewPass(iteration=1, claim="pass", routed_to="reporter")],
@@ -1184,9 +1130,7 @@ class TestReviewerColumnsOnTheRow:
         assert row["reviewer_nominated"] == []
 
     def test_a_reviewer_that_never_completed_a_pass_is_null_not_zero(self):
-        state = PipelineState(
-            dataset_id="toy", task_description="x", planted_leakage_columns=["leaky_col"]
-        )
+        state = _ps(planted_leakage_columns=["leaky_col"])
         row = state.results_row()
         assert row["reviewer_nominated"] is None
         assert row["reviewer_caught"] is None
@@ -1214,52 +1158,50 @@ class TestReviewerColumnsOnTheRow:
         assert all(count == 0 for count in row["objections_by_category"].values())
 
 
+# (state_kwargs, expected row values): each is a results_row() branch a full populated_state()
+# run never exercises alone, because its fields are always set together there.
+RESULTS_ROW_BRANCH_CASES = [
+    pytest.param(
+        {"verified_holdout_score": 0.7},
+        {"claimed_holdout_score": None, "holdout_claim_gap": None},
+        id="no_chosen_model",
+    ),
+    pytest.param(
+        {"final_features": ["a"]},
+        {"leakage_recall": None, "leakage_remediated": None},
+        id="no_planted_leakage",
+    ),
+    pytest.param(
+        {"planted_leakage_columns": ["c"]},
+        {"leakage_precision": None},
+        id="no_flags",
+    ),
+    pytest.param(
+        # A crashed feature_eng leaves final_features=[], which trivially contains no planted
+        # column; that must not score as remediation.
+        {"planted_leakage_columns": ["leaky_col"], "final_features": []},
+        {"leakage_remediated": None},
+        id="empty_final_features",
+    ),
+]
+
+
 class TestResultsRowBranches:
-    """One assertion-focused test per `results_row()` branch that a full `populated_state()`
-    run can never exercise, because its fields are always set together."""
-
-    def test_no_chosen_model_means_no_claim_or_gap(self):
-        state = PipelineState(dataset_id="toy", task_description="x", verified_holdout_score=0.7)
-        row = state.results_row()
-        assert row["claimed_holdout_score"] is None
-        assert row["holdout_claim_gap"] is None
-
-    def test_no_planted_leakage_means_no_recall_or_remediation(self):
-        state = PipelineState(dataset_id="toy", task_description="x", final_features=["a"])
-        row = state.results_row()
-        assert row["leakage_recall"] is None
-        assert row["leakage_remediated"] is None
-
-    def test_no_flags_means_no_precision(self):
-        state = PipelineState(dataset_id="toy", task_description="x", planted_leakage_columns=["c"])
-        row = state.results_row()
-        assert row["leakage_precision"] is None
-
-    def test_empty_final_features_is_not_remediation(self):
-        """A crashed feature_eng leaves final_features=[], which trivially contains no planted
-        column. That must not score as remediation."""
-        state = PipelineState(
-            dataset_id="toy",
-            task_description="x",
-            planted_leakage_columns=["leaky_col"],
-            final_features=[],
-        )
-        row = state.results_row()
-        assert row["leakage_remediated"] is None
+    @pytest.mark.parametrize(("state_kwargs", "expected"), RESULTS_ROW_BRANCH_CASES)
+    def test_a_results_row_branch_reads_as_expected(self, state_kwargs, expected):
+        row = _ps(**state_kwargs).results_row()
+        for key, value in expected.items():
+            assert row[key] == value
 
     def test_holdout_claim_gap_is_positive_for_overstatement_in_both_directions(self):
         """Positive must always mean 'the agent overstated itself', whichever way the metric
         runs. Both states overstate by the same 0.05 margin."""
-        roc_state = PipelineState(
-            dataset_id="toy",
-            task_description="x",
+        roc_state = _ps(
             spec=TaskSpec(target="y", task_type="binary", metric="roc_auc"),
             chosen_model=ModelResult(name="m", claimed_holdout_score=0.85),
             verified_holdout_score=0.80,
         )
-        rmse_state = PipelineState(
-            dataset_id="toy",
-            task_description="x",
+        rmse_state = _ps(
             spec=TaskSpec(target="y", task_type="regression", metric="rmse"),
             chosen_model=ModelResult(name="m", claimed_holdout_score=0.80),
             verified_holdout_score=0.85,
@@ -1272,9 +1214,7 @@ class TestResultsRowBranches:
         but must drop out of the standing ones -- a reviewer that takes back a bad flag is
         behaving better than one that never looks again."""
         objection = leak_objection(columns=["region"])
-        state = PipelineState(
-            dataset_id="toy",
-            task_description="x",
+        state = _ps(
             planted_leakage_columns=["other_col"],
             objections=[objection],
             review_passes=[
@@ -1293,15 +1233,34 @@ class TestResultsRowBranches:
         assert row["false_alarm_standing"] == 0
 
 
-class TestTopImportanceShape:
-    """`top_importance_share`, `top_importance_n80` and their companion `top_importance_status`.
+# (top_importances, status, share, n80): top_importances is written highest-first throughout,
+# matching what modeler.py actually produces.
+TOP_IMPORTANCE_SHAPE_CASES = [
+    pytest.param([("a", 0.9), ("b", 0.05), ("c", 0.05)], "ok", 0.9, 1, id="concentrated"),
+    # Equal weights: reaching 80% of 5 equal shares takes 4 of the 5 columns.
+    pytest.param(
+        [("a", 0.1), ("b", 0.1), ("c", 0.1), ("d", 0.1), ("e", 0.1)], "ok", 0.2, 4, id="flat"
+    ),
+    pytest.param([("only_col", 0.37)], "ok", 1.0, 1, id="single_feature"),
+    pytest.param([], "no_importances", None, None, id="empty"),
+    # Permutation importance can go negative; a wholly non-positive list has no positive mass.
+    pytest.param(
+        [("a", -0.01), ("b", -0.02)], "no_positive_importance", None, None, id="all_negative"
+    ),
+    pytest.param([("a", 0.0), ("b", 0.0)], "no_positive_importance", None, None, id="all_zero"),
+    pytest.param(
+        [("a", 0.3), ("b", 0.05), ("c", 0.0), ("d", -0.1)],
+        "ok",
+        0.3 / 0.35,
+        1,
+        id="mixed_sign_excludes_nonpositive",
+    ),
+]
 
-    These summarise the shape of `top_importances` -- the only per-column evidence the reviewer's
-    prompt actually contains -- so a committed row can explain why the reviewer did or did not
-    object, which nothing on the row could do before these existed. `top_importances` is documented
-    as sorted highest-first, so every fixture below is written in that order deliberately, matching
-    what `modeler.py` actually produces.
-    """
+
+class TestTopImportanceShape:
+    """top_importance_share, top_importance_n80 and top_importance_status summarise
+    top_importances."""
 
     def test_populated_state_is_a_single_dominant_column(self):
         """`populated_state()` carries one entry, so it must read as fully concentrated."""
@@ -1310,93 +1269,16 @@ class TestTopImportanceShape:
         assert row["top_importance_share"] == pytest.approx(1.0)
         assert row["top_importance_n80"] == 1
 
-    def test_concentrated_distribution(self):
-        state = PipelineState(
-            dataset_id="toy",
-            task_description="x",
-            top_importances=[("a", 0.9), ("b", 0.05), ("c", 0.05)],
-        )
-        row = state.results_row()
-        assert row["top_importance_status"] == "ok"
-        assert row["top_importance_share"] == pytest.approx(0.9)
-        assert row["top_importance_n80"] == 1
-
-    def test_flat_distribution(self):
-        state = PipelineState(
-            dataset_id="toy",
-            task_description="x",
-            top_importances=[("a", 0.1), ("b", 0.1), ("c", 0.1), ("d", 0.1), ("e", 0.1)],
-        )
-        row = state.results_row()
-        assert row["top_importance_status"] == "ok"
-        assert row["top_importance_share"] == pytest.approx(0.2)
-        # Equal weights: reaching 80% of 5 equal shares takes 4 of the 5 columns.
-        assert row["top_importance_n80"] == 4
-
-    def test_single_feature_case(self):
-        state = PipelineState(
-            dataset_id="toy", task_description="x", top_importances=[("only_col", 0.37)]
-        )
-        row = state.results_row()
-        assert row["top_importance_status"] == "ok"
-        assert row["top_importance_share"] == pytest.approx(1.0)
-        assert row["top_importance_n80"] == 1
-
-    def test_empty_top_importances_is_the_no_importances_status(self):
-        """No candidate chosen, or the modeling snippet produced nothing: there is no
-        distribution to summarise, and that must be distinguishable from an all-negative one."""
-        state = PipelineState(dataset_id="toy", task_description="x")
-        row = state.results_row()
-        assert row["top_importance_status"] == "no_importances"
-        assert row["top_importance_share"] is None
-        assert row["top_importance_n80"] is None
-
-    def test_all_negative_importances_is_the_no_positive_importance_status(self):
-        """Permutation importance can go negative -- shuffling the column improved the score --
-        and a wholly non-positive list has no positive mass to divide or sum toward."""
-        state = PipelineState(
-            dataset_id="toy",
-            task_description="x",
-            top_importances=[("a", -0.01), ("b", -0.02)],
-        )
-        row = state.results_row()
-        assert row["top_importance_status"] == "no_positive_importance"
-        assert row["top_importance_share"] is None
-        assert row["top_importance_n80"] is None
-
-    def test_all_zero_importances_is_also_no_positive_importance(self):
-        """Zero is not positive: a column with truly zero effect on the score contributes no
-        importance mass, the same as a negative one, and must not be silently treated as 100%
-        of an empty sum."""
-        state = PipelineState(
-            dataset_id="toy",
-            task_description="x",
-            top_importances=[("a", 0.0), ("b", 0.0)],
-        )
-        row = state.results_row()
-        assert row["top_importance_status"] == "no_positive_importance"
-        assert row["top_importance_share"] is None
-        assert row["top_importance_n80"] is None
-
-    def test_negative_and_zero_entries_are_excluded_from_a_mixed_list(self):
-        """A mix of positive, zero and negative importances: only the two positive entries may
-        contribute to the share and the 80% threshold."""
-        state = PipelineState(
-            dataset_id="toy",
-            task_description="x",
-            top_importances=[("a", 0.3), ("b", 0.05), ("c", 0.0), ("d", -0.1)],
-        )
-        row = state.results_row()
-        assert row["top_importance_status"] == "ok"
-        assert row["top_importance_share"] == pytest.approx(0.3 / 0.35)
-        assert row["top_importance_n80"] == 1
+    @pytest.mark.parametrize(("importances", "status", "share", "n80"), TOP_IMPORTANCE_SHAPE_CASES)
+    def test_the_shape_is_computed_from_top_importances(self, importances, status, share, n80):
+        row = _ps(top_importances=importances).results_row()
+        assert row["top_importance_status"] == status
+        assert row["top_importance_share"] == (None if share is None else pytest.approx(share))
+        assert row["top_importance_n80"] == n80
 
     def test_share_and_n80_are_computed_fields_not_just_row_entries(self):
-        """The row reads these off `PipelineState` directly, following the same pattern as
-        `baseline_separation` -- so the properties themselves must agree with the row."""
-        state = PipelineState(
-            dataset_id="toy", task_description="x", top_importances=[("a", 0.4), ("b", 0.1)]
-        )
+        """The row must agree with the PipelineState properties it reads."""
+        state = _ps(top_importances=[("a", 0.4), ("b", 0.1)])
         row = state.results_row()
         assert state.top_importance_share == row["top_importance_share"]
         assert state.top_importance_n80 == row["top_importance_n80"]
@@ -1404,60 +1286,31 @@ class TestTopImportanceShape:
 
 
 class TestTopImportancesSortedDescending:
-    """`top_importance_share` and `top_importance_n80` both read rank order off `top_importances`
-    without re-sorting, and the reviewer's prompt is told to read it "from the top" on the same
-    assumption -- see `_top_importances_sorted_descending` on `PipelineState`. An out-of-order
-    list must fail loudly at construction rather than be silently repaired downstream.
-    """
+    """An out-of-order top_importances list must fail loudly at construction, not be silently
+    repaired -- the reviewer's prompt reads it "from the top" on the sorted assumption."""
 
-    def test_sorted_descending_is_accepted(self):
-        state = PipelineState(
-            dataset_id="toy",
-            task_description="x",
-            top_importances=[("a", 0.9), ("b", 0.5), ("c", 0.1)],
-        )
-        assert [column for column, _ in state.top_importances] == ["a", "b", "c"]
+    @pytest.mark.parametrize(
+        ("importances", "columns"),
+        [
+            pytest.param([("a", 0.9), ("b", 0.5), ("c", 0.1)], ["a", "b", "c"], id="descending"),
+            pytest.param([("a", 0.5), ("b", 0.5), ("c", 0.5)], ["a", "b", "c"], id="tied"),
+            pytest.param([], [], id="empty"),
+            pytest.param([("only_col", 0.37)], ["only_col"], id="single_entry"),
+        ],
+    )
+    def test_sorted_or_tied_lists_are_accepted(self, importances, columns):
+        state = _ps(top_importances=importances)
+        assert [column for column, _ in state.top_importances] == columns
 
     def test_out_of_order_is_rejected(self):
         with pytest.raises(ValidationError, match="'b' \\(0.5\\) precedes 'a' \\(0.9\\)"):
-            PipelineState(
-                dataset_id="toy",
-                task_description="x",
-                top_importances=[("b", 0.5), ("a", 0.9), ("c", 0.1)],
-            )
-
-    def test_tied_means_are_accepted(self):
-        """Equal means are not a violation -- only a strict increase is."""
-        state = PipelineState(
-            dataset_id="toy",
-            task_description="x",
-            top_importances=[("a", 0.5), ("b", 0.5), ("c", 0.5)],
-        )
-        assert len(state.top_importances) == 3
-
-    def test_empty_list_is_accepted(self):
-        state = PipelineState(dataset_id="toy", task_description="x", top_importances=[])
-        assert state.top_importances == []
-
-    def test_single_entry_is_accepted(self):
-        state = PipelineState(
-            dataset_id="toy", task_description="x", top_importances=[("only_col", 0.37)]
-        )
-        assert state.top_importances == [("only_col", 0.37)]
+            _ps(top_importances=[("b", 0.5), ("a", 0.9), ("c", 0.1)])
 
 
 class TestWhyTheLoopDidNotConverge:
-    """The four fields that separate "the reviewer was wrong" from "the reviewer was right and
-    told a node with no lever".
-
-    The gap these close, observed live on 2026-08-28: 9 of 10 opaque Haiku runs named a planted
-    trap and 1 of 10 removed it. The committed rows could not say why, because nothing on them
-    recorded who the objection was addressed to, where the loop actually went, or whether an
-    objected column was still in the matrix at the end. Diagnostic runs found two causes -- an
-    `implausible_importance` objection routed to `modeler`, which has no column lever at all, and
-    a reviewer that never dispositions its own objection `resolved` even after the drop lands.
-    Each field below is what makes one of those visible in a results file.
-    """
+    """The fields that separate "the reviewer was wrong" from "the reviewer was right and told a
+    node with no lever": who an objection was addressed to, where the loop actually went, and
+    whether an objected column was still in the matrix at the end."""
 
     def _state(
         self,
@@ -1466,9 +1319,7 @@ class TestWhyTheLoopDidNotConverge:
         final_features: list[str] | None = None,
         passes: list[ReviewPass] | None = None,
     ) -> PipelineState:
-        return PipelineState(
-            dataset_id="toy",
-            task_description="x",
+        return _ps(
             planted_leakage_columns=["leaky_col"],
             objections=objections,
             final_features=final_features,
@@ -1539,9 +1390,7 @@ class TestWhyTheLoopDidNotConverge:
         """Same guard `reviewer_nominated` uses. An empty list here would say "columns were
         objected to and all of them were dropped", which is the opposite of what the
         reviewer-off arm did."""
-        state = PipelineState(
-            dataset_id="toy",
-            task_description="x",
+        state = _ps(
             planted_leakage_columns=["leaky_col"],
             final_features=["leaky_col"],
             config=RunConfig(reviewer_enabled=False),
@@ -1583,7 +1432,7 @@ class TestWhyTheLoopDidNotConverge:
         assert row["new_objections_per_pass"] == [1, 1]
 
     def test_a_run_with_no_pass_has_empty_sequences(self):
-        state = PipelineState(dataset_id="toy", task_description="x")
+        state = _ps()
         row = state.results_row()
         assert row["route_sequence"] == []
         assert row["new_objections_per_pass"] == []
@@ -1595,7 +1444,7 @@ class TestWhyTheLoopDidNotConverge:
 
 
 def test_a_trace_containing_a_stub_event_is_not_publishable():
-    state = PipelineState(dataset_id="toy", task_description="t")
+    state = _ps()
     state.node_trace = [
         NodeEvent(node="intake", started=utc_now(), model="claude-haiku-4-5"),
         NodeEvent(node="profiler", started=utc_now(), model="stub"),
@@ -1607,7 +1456,7 @@ def test_a_trace_containing_a_stub_event_is_not_publishable():
 
 
 def test_a_fully_real_trace_is_publishable():
-    state = PipelineState(dataset_id="toy", task_description="t")
+    state = _ps()
     state.node_trace = [NodeEvent(node="intake", started=utc_now(), model="claude-haiku-4-5")]
     assert state.publishable() == (True, "")
     assert state.placeholder_models() == []
@@ -1615,7 +1464,7 @@ def test_a_fully_real_trace_is_publishable():
 
 def test_an_empty_trace_is_not_publishable():
     # A row with no events would report cost 0.0 and look like a free, successful run.
-    ok, reason = PipelineState(dataset_id="toy", task_description="t").publishable()
+    ok, reason = _ps().publishable()
     assert ok is False
     assert "nothing ran" in reason
 
@@ -1623,7 +1472,7 @@ def test_an_empty_trace_is_not_publishable():
 def test_a_node_that_called_no_model_does_not_count_as_a_placeholder():
     # The router and reporter run no model, so their events carry model=None. Treating that as a
     # placeholder would make every real run unpublishable.
-    state = PipelineState(dataset_id="toy", task_description="t")
+    state = _ps()
     state.node_trace = [
         NodeEvent(node="intake", started=utc_now(), model="claude-haiku-4-5"),
         NodeEvent(node="router", started=utc_now(), model=None),
@@ -1633,17 +1482,10 @@ def test_a_node_that_called_no_model_does_not_count_as_a_placeholder():
 
 class TestTheRowCarriesItsErrors:
     """A results row without error text cannot tell "the reviewer named a column that does not
-    exist" from "the sandbox died". `errored` is one bit for every way a run can go wrong, which
-    made the zero-objection `block` bug invisible in the six committed results files -- it had to
-    be counted by hand off `route_sequence == ["reporter"]` instead, and the two teed logs that
-    would have explained it were never kept.
-
-    Not back-fillable onto any row written before 2026-08-29: only rows were committed, the states
-    they came from are gone, and results files are never edited by hand.
-    """
+    exist" from "the sandbox died". `errored` is one bit for every way a run can go wrong."""
 
     def test_every_error_reaches_the_row_with_its_node_and_message(self):
-        state = PipelineState(dataset_id="toy", task_description="t")
+        state = _ps()
         state.errors = [
             PipelineError(node="reviewer", message="block-retry: re-asking once"),
             PipelineError(node="router", message="reviewer claimed 'block' with no open objection"),
@@ -1657,14 +1499,14 @@ class TestTheRowCarriesItsErrors:
     def test_a_clean_run_carries_an_empty_list_not_null(self):
         """Zero errors is a real 0, the same argument `objections_resolved` makes. `None` would be
         indistinguishable from a row written before the column existed."""
-        row = PipelineState(dataset_id="toy", task_description="t").results_row()
+        row = _ps().results_row()
 
         assert row["errors"] == []
 
     def test_an_unrecoverable_error_is_distinguishable_on_the_row(self):
         """The conflation `errored` cannot fix: a filtered column name and a fatal crash are both
         `errored: true`, and only `recoverable` separates them."""
-        state = PipelineState(dataset_id="toy", task_description="t")
+        state = _ps()
         state.errors = [
             PipelineError(node="modeler", message="fit failed", recoverable=False),
             PipelineError(node="reviewer", message="dropped a column", recoverable=True),
@@ -1675,7 +1517,7 @@ class TestTheRowCarriesItsErrors:
         assert [e["recoverable"] for e in row["errors"]] == [False, True]
 
     def test_errored_agrees_with_the_error_list(self):
-        state = PipelineState(dataset_id="toy", task_description="t")
+        state = _ps()
         state.errors = [PipelineError(node="reviewer", message="something")]
 
         row = state.results_row()
@@ -1686,7 +1528,7 @@ class TestTheRowCarriesItsErrors:
     def test_a_long_message_is_truncated_on_the_row_but_not_in_the_state(self):
         """A model client's exception repr can carry a whole HTTP body. The row is a line in a file
         someone greps; the state keeps the full text for whoever is debugging the run."""
-        state = PipelineState(dataset_id="toy", task_description="t")
+        state = _ps()
         state.errors = [PipelineError(node="reviewer", message="x" * 900)]
 
         row = state.results_row()
@@ -1707,7 +1549,7 @@ class TestTheRowCarriesItsProvenance:
     def test_the_commit_is_null_when_nothing_recorded_it(self):
         """Null, not a guess. A row from a state built in a test or from a tarball has no commit,
         and inventing one would be worse than admitting it."""
-        row = PipelineState(dataset_id="toy", task_description="t").results_row()
+        row = _ps().results_row()
 
         assert row["commit"] is None
 
@@ -1715,18 +1557,14 @@ class TestTheRowCarriesItsProvenance:
         """On `RunConfig` rather than annotated at write time, so the row stays self-describing
         from the state alone -- the property that stops a row being labelled by something outside
         the run that could disagree with what actually ran."""
-        state = PipelineState(
-            dataset_id="toy", task_description="t", config=RunConfig(commit="c17a885-dirty")
-        )
+        state = _ps(config=RunConfig(commit="c17a885-dirty"))
 
         assert state.results_row()["commit"] == "c17a885-dirty"
 
     def test_the_row_carries_the_upstream_model_as_well_as_the_reviewers(self):
         """`reviewer_model` was on the row and `default_model` was not, so the first `--model
         sonnet` arm would have produced rows indistinguishable from every Haiku row."""
-        state = PipelineState(
-            dataset_id="toy",
-            task_description="t",
+        state = _ps(
             config=RunConfig(default_model="sonnet", reviewer_model="haiku"),
         )
 
@@ -1737,14 +1575,8 @@ class TestTheRowCarriesItsProvenance:
 
 
 class TestTheLeakageGate:
-    """`planted` is a complete ground-truth list or it is nothing. Added 2026-08-31.
-
-    External benchmark datasets (`evals/datasets/manifest.yaml`) carry no answer key and say so
-    with `leakage_labelled: false`. Before this gate, running one would have produced a row
-    asserting both that the dataset contains no leak and that the reviewer failed to find it --
-    two claims with no evidence behind either, in columns that pool straight into a published
-    rate.
-    """
+    """`planted` is a complete ground-truth list or it is nothing: an external benchmark dataset
+    has no answer key and must not silently score as "no leak, and the reviewer missed it"."""
 
     GATED = (
         "leakage_caught",
@@ -1757,62 +1589,6 @@ class TestTheLeakageGate:
         "reviewer_caught",
         "reviewer_false_alarm",
     )
-
-    # Every results file that existed when the gate landed on 2026-08-31. THIS LIST IS CLOSED --
-    # nothing may be added to it. Its whole purpose is to name the rows that were published
-    # BEFORE the gate, so the claim "no published number moved" stays checkable forever. A new
-    # file goes through the second test below instead.
-    PRE_GATE_FILES = frozenset(
-        {
-            "2026-08-27_naming-ablation.jsonl",
-            "2026-08-28_forced-drop-release.jsonl",
-            "2026-08-28_loop-cap-sweep.jsonl",
-            "2026-08-28_objection-closure.jsonl",
-            "2026-08-28_objection-routing.jsonl",
-            "2026-08-28_reviewer-ablation.jsonl",
-            "2026-08-29_harness-smoke.jsonl",
-            "2026-08-31_ci-baseline.jsonl",
-        }
-    )
-
-    def _rows(self, path: Path):
-        for line in path.read_text().splitlines():
-            if line.strip():
-                yield json.loads(line)
-
-    def test_no_pre_gate_results_row_has_an_empty_planted_list(self):
-        """The precondition for the gate, proved rather than assumed.
-
-        If this ever fails, the gate silently changed an already-published number and the change
-        should be reverted rather than the test relaxed. Scoped to the closed list above because
-        the claim it protects is about rows that existed before the gate; benchmark rows written
-        after it legitimately have no planted list, which is the whole reason the gate exists.
-        """
-        results = Path(__file__).resolve().parents[1] / "evals" / "results"
-        found = {path.name for path in results.glob("*.jsonl")}
-        assert found >= self.PRE_GATE_FILES, (
-            f"a pre-gate results file went missing: {sorted(self.PRE_GATE_FILES - found)}"
-        )
-        rows = 0
-        for name in sorted(self.PRE_GATE_FILES):
-            for row in self._rows(results / name):
-                rows += 1
-                assert row["leakage_planted"], f"{name}: a row has no planted columns"
-        assert rows > 100, "expected the committed corpus, did it move?"
-
-    def test_every_committed_row_either_has_an_answer_key_or_says_it_does_not(self):
-        """The invariant that replaces it going forward, over ALL files including new ones.
-
-        A row with no planted columns is fine -- external benchmark datasets have no answer key.
-        A row with no planted columns that still claims to be graded for leakage is not: every
-        leakage rate on it would be scored against a list that is not an answer key.
-        """
-        results = Path(__file__).resolve().parents[1] / "evals" / "results"
-        for path in sorted(results.glob("*.jsonl")):
-            for row in self._rows(path):
-                assert row["leakage_planted"] or row.get("leakage_graded") is False, (
-                    f"{path.name}: a row has no planted columns but does not say it is ungraded"
-                )
 
     def _reviewed(self, planted: list[str]) -> PipelineState:
         """A state where the profiler AND the reviewer both ran and both named column `a`.

@@ -19,7 +19,6 @@ on the way out of the store rather than by finding a 36k-row dataset to run.
 """
 
 import json
-from pathlib import Path
 
 import pytest
 
@@ -28,9 +27,7 @@ from ds_agents.nodes.router import halt_or
 from ds_agents.state import NodeEvent, PipelineError, PipelineState, utc_now
 from ds_agents.tools.llm import StubModel
 from ds_agents.tools.local import LocalTools
-from tests.conftest import _toy_state
-
-TOY = Path(__file__).parent / "fixtures" / "toy" / "toy.csv"
+from tests.conftest import RESULTS_DIR, TOY_CSV, _toy_state
 
 fast = pytest.mark.fast
 
@@ -103,14 +100,9 @@ class TestTheEdgeFunction:
 
 @fast
 def test_no_committed_results_row_would_have_been_halted():
-    """`halted_at` ships as null on every row already in the tree, so adding it rewrites nothing.
-
-    The same shape of check `score_ratio`'s retirement got. If this ever fails, some committed row
-    was written by a run that had already refused, and every number on it is suspect.
-    """
-    results = Path(__file__).resolve().parents[1] / "evals" / "results"
+    """`halted_at` ships as null on every row already in the tree, so adding it rewrites nothing."""
     rows = 0
-    for path in sorted(results.glob("*.jsonl")):
+    for path in sorted(RESULTS_DIR.glob("*.jsonl")):
         for line in path.read_text().splitlines():
             if not line.strip():
                 continue
@@ -155,7 +147,7 @@ def test_a_truncated_split_stops_the_run_at_feature_eng(tmp_path):
     Before `halt_or`, this run reached `reporter` through `modeler`, `reviewer` and `router`, paid
     for all three, and produced a row indistinguishable at a glance from a measurement.
     """
-    inner = LocalTools(tmp_path / "run", dataset_path=TOY, dataset_id="toy")
+    inner = LocalTools(tmp_path / "run", dataset_path=TOY_CSV, dataset_id="toy")
     state = run_pipeline(_toy_state(), tools=_TruncatesTheSplit(inner), model=StubModel())
 
     assert [event.node for event in state.node_trace] == [

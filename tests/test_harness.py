@@ -9,7 +9,8 @@ in `tests/test_state.py`'s `TestWhyTheLoopDidNotConverge` for the pattern this b
 """
 
 import json
-from collections import Counter
+import math
+from collections import Counter, defaultdict
 from dataclasses import fields
 from datetime import date
 
@@ -28,6 +29,7 @@ from ds_agents.harness import (
 )
 from ds_agents.runnable import available as runnable_available
 from ds_agents.state import NodeEvent, PipelineState, utc_now
+from tests.conftest import RESULTS_DIR
 
 pytestmark = pytest.mark.fast
 
@@ -48,13 +50,9 @@ def _state(*, cost: float = 0.01, model: str = "claude-haiku-4-5") -> PipelineSt
 
 class TestThePlanIsReplicateMajor:
     """A cost cap binds on the plan's execution order, so the order decides who gets starved.
-
-    Cell-major ordering is what put the Sonnet reviewer cells at n=4 and n=3 against a budgeted
-    n=8 in the 2026-08-28 reviewer-ablation run: the cap bound partway through the first cell's
-    replicates, the last cell never started, and the resulting n=4-vs-n=3 pairing was unquotable as
-    a 2x2. Replicate-major ordering -- every cell's replicate 1 before any cell's replicate 2 --
-    means a cap that binds partway through drops the SAME fraction of runs from every cell.
-    """
+    Replicate-major ordering -- every cell's replicate 1 before any cell's replicate 2 -- means a
+    cap that binds partway through drops the SAME fraction of runs from every cell, unlike
+    cell-major ordering, which can starve a later cell entirely."""
 
     def test_the_seq_order_is_replicate_major_not_cell_major(self):
         a = Cell(name="a", dataset="toy")
@@ -165,15 +163,6 @@ class TestSubsetsPointAtRealFixtures:
         assert short_narrow.n_rows < tall_narrow.n_rows
         assert short_wide.n_rows < tall_wide.n_rows
 
-    def test_bench_mid_varies_nothing_but_the_dataset(self):
-        """A measurement, not an ablation. If any other condition moved, the per-dataset cost this
-        run publishes would be confounded with it."""
-        reference = Cell(name="reference", dataset="phoneme")
-        for cell in SUBSETS["bench-mid"]:
-            assert cell.conditions() == reference.conditions(), (
-                f"bench-mid cell {cell.name!r} changes a condition; only the dataset may vary"
-            )
-
     def test_bench_tall_names_the_four_datasets_that_were_never_priced(self):
         """The four that could not complete a run before the 2026-09-01 split-manifest fix."""
         assert [cell.dataset for cell in SUBSETS["bench-tall"]] == [
@@ -183,83 +172,26 @@ class TestSubsetsPointAtRealFixtures:
             "higgs",
         ]
 
-    def test_bench_tall_varies_nothing_but_the_dataset(self):
-        """Same reason as `bench-mid`: a measurement, not an ablation."""
-        reference = Cell(name="reference", dataset="adult")
-        for cell in SUBSETS["bench-tall"]:
-            assert cell.conditions() == reference.conditions(), (
-                f"bench-tall cell {cell.name!r} changes a condition; only the dataset may vary"
-            )
-
-    def test_bench_tall_estimates_are_the_measured_means(self):
-        """The arm has RUN, so these four stopped being predictions on 2026-09-02.
-
-        They are now the per-cell means of `evals/results/2026-09-02_bench-tall.jsonl` (n=4 a cell),
-        rounded UP to the nearest $0.001 per the rule the `ci` comment states. Pinned as literals
-        because that is what they now are -- a measurement, traceable to one file. The predictions
-        they replaced were $0.014 / $0.014 / $0.016 / $0.017 and every one was low.
-        """
-        measured = {
-            "adult": 0.016,
-            "bank_marketing": 0.018,
-            "numerai28_6": 0.018,
-            "higgs": 0.025,
-        }
-        for cell in SUBSETS["bench-tall"]:
-            assert cell.est_cost_usd == measured[cell.dataset], (
-                f"bench-tall cell {cell.name!r} carries est_cost_usd {cell.est_cost_usd}, not the "
-                f"measured mean {measured[cell.dataset]} from the 2026-09-02 run. These are a "
-                "measurement now; change them only by running the arm again."
-            )
-
-    def test_full_prices_every_manifest_dataset_and_says_which_were_measured(self):
-        """`full` is only honest if every dataset in the manifest is in it exactly once.
-
-        Nine cells carry measured means; four carry a modelled price and have never been run. The
-        split is asserted rather than described, because the comment claiming it is the only thing
-        a reader has to go on when deciding whether to trust the total.
-        """
+    def test_full_prices_every_manifest_dataset_exactly_once(self):
+        """`full` is only honest if every dataset in the manifest is in it exactly once."""
         entries = {entry.dataset_id for entry in load_manifest().datasets}
         cells = SUBSETS["full"]
         assert {cell.dataset for cell in cells} == entries
         assert len(cells) == len(entries), "a dataset appears twice in `full`"
-
         never_run = {"australian", "kc1", "sylvine", "kr_vs_kp"}
         assert never_run < entries
-        measured = {
-            "phoneme": 0.011,
-            "amazon_employee_access": 0.014,
-            "adult": 0.016,
-            "credit_g": 0.017,
-            "bank_marketing": 0.018,
-            "numerai28_6": 0.018,
-            "higgs": 0.025,
-            "nomao": 0.041,
-            "jasmine": 0.042,
-        }
-        for cell in cells:
-            if cell.dataset in measured:
-                assert cell.est_cost_usd == measured[cell.dataset], (
-                    f"`full` cell {cell.name!r} disagrees with the measured mean this repo has for "
-                    f"{cell.dataset}; `full` and the subset that measured it must not drift apart"
-                )
 
-    def test_full_varies_nothing_but_the_dataset(self):
-        """Thirteen datasets, one condition set. Same reason as `bench-mid` and `bench-tall`."""
-        reference = Cell(name="reference", dataset="adult")
-        for cell in SUBSETS["full"]:
+    @pytest.mark.parametrize(
+        ("subset", "reference_dataset"),
+        [("bench-mid", "phoneme"), ("bench-tall", "adult"), ("full", "adult")],
+    )
+    def test_a_measurement_subset_varies_nothing_but_the_dataset(self, subset, reference_dataset):
+        """A measurement, not an ablation: any other condition moving would confound the cost."""
+        reference = Cell(name="reference", dataset=reference_dataset)
+        for cell in SUBSETS[subset]:
             assert cell.conditions() == reference.conditions(), (
-                f"full cell {cell.name!r} changes a condition; only the dataset may vary"
+                f"{subset} cell {cell.name!r} changes a condition; only the dataset may vary"
             )
-
-    def test_full_resolves_rather_than_raising(self):
-        """It raised a bespoke ValueError for four sessions while its blocker moved. It does not
-        any more, and nothing should quietly reintroduce the special case."""
-        from ds_agents.harness import _resolve_subset
-
-        assert _resolve_subset("full") == SUBSETS["full"]
-        with pytest.raises(ValueError, match="unknown eval subset"):
-            _resolve_subset("fulll")
 
     def test_bench_tall_anti_correlates_rows_with_categoricals(self):
         """The property that makes the arm interpretable, pinned so it cannot quietly stop holding.
@@ -281,13 +213,9 @@ class TestSubsetsPointAtRealFixtures:
         assert [cell.name for cell in SUBSETS["toy"]] == ["toy-default"]
 
     def test_claims_repro_is_the_ci_claims_cell_itself_not_a_copy(self):
-        """The reproduction subset must share the object, not the argument list.
-
-        `claims-repro` exists to re-run the arm RESULTS.md Result 3 quotes at a later commit. If it
-        held its own `Cell(...)` with the same arguments typed again, a later edit to the `ci`
-        cell would silently turn the check into a comparison of two different arms, which is the
-        one failure mode a reproduction check cannot survive. `is` is the assertion, not `==`.
-        """
+        """The reproduction subset must share the object, not the argument list: a `Cell(...)`
+        typed again with the same arguments would silently drift from the `ci` cell on a later
+        edit, turning the check into a comparison of two different arms. `is`, not `==`."""
         assert len(SUBSETS["claims-repro"]) == 1
         assert SUBSETS["claims-repro"][0] is CLAIMS_OPAQUE_WHICH
         assert CLAIMS_OPAQUE_WHICH in SUBSETS["ci"]
@@ -297,13 +225,8 @@ class TestSubsetsPointAtRealFixtures:
 
     def test_ci_cells_share_loop_cap_three_and_closure_off(self):
         """The spec's cell definitions, pinned so a future edit notices it changed one.
-
-        The three `est_cost_usd` values are measured means from the 2026-08-31 `ci` baseline, not
-        guesses -- see the comment above `SUBSETS`. They are pinned here so that a future revision
-        has to be deliberate, but note what they are NOT: `est_cost_usd` never reaches a results
-        row, so no published number moves when these do. Only the point at which a cost cap
-        truncates a plan moves.
-        """
+        `est_cost_usd` never reaches a results row; only the point at which a cost cap truncates
+        a plan depends on it."""
         for cell in SUBSETS["ci"]:
             assert cell.loop_cap == 3
             assert cell.objection_closure == "off"
@@ -324,6 +247,42 @@ class TestSubsetsPointAtRealFixtures:
         assert reissued.est_cost_usd == pytest.approx(0.029)
 
 
+# Where each measured price in `SUBSETS` comes from -- one dataset per file per cell.
+_COST_SOURCES = {
+    "2026-09-01_bench-mid.jsonl": ("phoneme", "jasmine", "amazon_employee_access", "nomao"),
+    "2026-08-31_credit-g-smoke.jsonl": ("credit_g",),
+    "2026-09-02_bench-tall.jsonl": ("adult", "bank_marketing", "numerai28_6", "higgs"),
+}
+
+
+def _measured_means() -> dict[str, float]:
+    """Per-dataset mean `cost_usd`, read off the committed results files named in _COST_SOURCES."""
+    costs: dict[str, list[float]] = defaultdict(list)
+    for filename, datasets in _COST_SOURCES.items():
+        for line in (RESULTS_DIR / filename).read_text().splitlines():
+            if not line.strip():
+                continue
+            row = json.loads(line)
+            if row["dataset_id"] in datasets:
+                costs[row["dataset_id"]].append(row["cost_usd"])
+    return {name: float(sum(values) / len(values)) for name, values in costs.items()}
+
+
+def test_every_measured_price_in_subsets_is_its_mean_rounded_up():
+    """`est_cost_usd` is planning-only and may be conservative, but never optimistic, or a cost
+    cap truncates a cell it was supposed to fund."""
+    means = _measured_means()
+    for subset in ("bench-mid", "bench-smoke", "bench-tall", "full"):
+        for cell in SUBSETS[subset]:
+            if cell.dataset not in means:
+                continue
+            expected = math.ceil(means[cell.dataset] * 1000) / 1000
+            assert cell.est_cost_usd == pytest.approx(expected, abs=1e-9), (
+                f"{subset} cell {cell.name!r} carries {cell.est_cost_usd}, not the measured mean "
+                f"{means[cell.dataset]:.5f} rounded up to {expected}"
+            )
+
+
 class TestForcedDropReleaseIsAClosedAxis:
     """`forced_drop_release` had exactly one legitimate use and it has been spent (see
     docs/NEXT.md's parking lot). No `Cell` may express it, so no subset can either."""
@@ -334,16 +293,8 @@ class TestForcedDropReleaseIsAClosedAxis:
 
 
 class TestTheFullSubsetIsRunnableNow:
-    """`full` raised a bespoke error for four sessions while its blocker moved, and this class
-    existed to keep that error honest as each blocker was retired: first a missing manifest, then a
-    missing run path, then a missing `baseline_score`, then the split manifest, then cost.
-
-    On 2026-09-02 the last four datasets were priced and the special case was deleted. The
-    assertions invert accordingly. What is asserted now is the property that made the special case
-    removable -- `full` covers the manifest exactly, and its price is real -- plus the one thing
-    worth defending: nobody should reintroduce a bespoke branch for the name. If `full` becomes
-    unrunnable again, that is a subset definition problem with its own test, not a message to edit.
-    """
+    """`full` covers the manifest exactly and its price is real; an unknown subset gets the
+    ordinary message rather than a bespoke branch for the name."""
 
     def test_full_runs_the_whole_manifest_and_is_priced(self):
         report = run_eval(subset="full", name="probe", dry_run=True)
@@ -352,8 +303,6 @@ class TestTheFullSubsetIsRunnableNow:
         assert all(cell.est_cost_usd > 0 for cell in SUBSETS["full"])
 
     def test_an_unknown_subset_still_gets_the_ordinary_message(self):
-        """`full` used to be the reason this branch had a sibling. It no longer does, and a typo
-        should not get a lecture about datasets it did not ask for."""
         with pytest.raises(ValueError) as excinfo:
             run_eval(subset="fulll", name="probe", dry_run=True)
         message = str(excinfo.value)
@@ -361,6 +310,14 @@ class TestTheFullSubsetIsRunnableNow:
         assert "full" in message, "the available list must include what they probably meant"
         for retired in ("baseline_score", "score_ratio", "not runnable yet"):
             assert retired not in message
+
+    def test_full_resolves_rather_than_raising(self):
+        """It once raised a bespoke ValueError for an unresolved blocker; it must not again."""
+        from ds_agents.harness import _resolve_subset
+
+        assert _resolve_subset("full") == SUBSETS["full"]
+        with pytest.raises(ValueError, match="unknown eval subset"):
+            _resolve_subset("fulll")
 
 
 class TestFailureHandling:
@@ -716,19 +673,11 @@ class TestTheLiveRunnerPreparesOncePerDatasetAndNaming:
 
 
 class TestProvenanceIsReadOncePerInvocation:
-    """The harness must not record its own output as a change to the tree that produced its runs.
-
-    Found by the 2026-08-31 `ci` baseline, not by a test: `_run_once` used to call `git_commit()`
-    per run, and the results JSONL is untracked until someone commits it, so writing row 0 made
-    `git status --porcelain` non-empty. Run 0 recorded `8a629bf` and runs 1..29 recorded
-    `8a629bf-dirty`. Because `commit` is one of `evaldiff.CONDITION_FIELDS`, that split
-    `toy-default` into a cell of n=1 and a cell of n=9 -- the field meant to guarantee that pooled
-    rows came from one tree instead guaranteed that they could not be pooled at all.
-
-    This is the same once-per-invocation rule `materialize` already follows above, for the same
-    reason: everything that is supposed to be identical across the runs of one invocation has to be
-    read once, before the runs start changing the thing being read.
-    """
+    """The harness must not record its own output as a change to the tree that produced its runs:
+    reading `commit` per run would make writing row 0 dirty the tree for every run after it, and
+    because `commit` is one of `evaldiff.CONDITION_FIELDS`, a commit that drifted mid-invocation
+    would split one cell into two that can never be pooled. Same once-per-invocation rule
+    `materialize` follows above."""
 
     def test_every_run_in_one_invocation_gets_the_same_commit(self, tmp_path, monkeypatch):
         from ds_agents import cli, harness
@@ -758,14 +707,8 @@ class TestProvenanceIsReadOncePerInvocation:
         assert seen == ["cafe1", "cafe1", "cafe1"]
 
     def test_a_failed_provenance_read_is_reported_before_any_run(self, tmp_path, monkeypatch):
-        """The harness prints its own message, and prints it before the first run.
-
-        `evals/results/2026-09-21_claims-repro.jsonl` is ten rows written at a clean `46bd4ed` that
-        carry `commit: null`, because bare git on that machine refuses under an unaccepted Xcode
-        license and `git_commit` returned `None` without saying so. A null `commit` fragments the
-        cell in `eval-diff`, which is only actionable BEFORE $0.30 has been spent -- so the order
-        asserted here is the whole point, not incidental.
-        """
+        """The harness prints its own message, before the first run: a null `commit` fragments
+        the cell in `eval-diff`, which is only actionable BEFORE money has been spent."""
         from ds_agents import cli, harness
 
         monkeypatch.setattr(

@@ -1,14 +1,4 @@
-"""cli.py's model selection: real client when a key resolves, placeholder otherwise.
-
-`_select_model` is the one place a benchmark run could quietly become a placeholder run because an
-env var went missing, so the tests here are about that boundary: `--no-live` always wins, no key
-falls back to the stub, a key present builds a real client, and an unpriced `--model` value fails
-loudly (`UnknownModelError` -> `SystemExit`) rather than running unbilled.
-
-No test here makes a network call: `AnthropicModel.__post_init__` only constructs an SDK client
-(`anthropic.Anthropic(timeout=...)`), which needs no network -- the client talks to the network
-only inside `generate()`, which nothing here calls.
-"""
+"""CLI parsing, model selection, and results-writing: argv to a runnable RunConfig and back."""
 
 import argparse
 import json
@@ -36,15 +26,13 @@ pytestmark = pytest.mark.fast
 
 @pytest.fixture(autouse=True)
 def no_real_key(monkeypatch):
-    """Every test starts from "no key in the environment," regardless of the shell this suite
-    happens to run in, so a developer's exported ANTHROPIC_API_KEY cannot flip a test's outcome."""
+    """Every test starts with no key in the environment, regardless of the calling shell."""
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     monkeypatch.delenv("ANTHROPIC_AUTH_TOKEN", raising=False)
 
 
 def test_no_live_returns_the_stub_even_with_a_key_present(monkeypatch):
-    # The only way to ask for the stub when a key IS available -- must win over the key, not the
-    # other way around, or a benchmark run could not be forced offline for a cheap smoke test.
+    # --no-live must win over a present key, or a run could not be forced offline.
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test-key")
 
     model = _select_model(RunConfig(default_model="haiku"), no_live=True)
@@ -68,8 +56,7 @@ def test_a_key_present_builds_a_real_client_with_the_resolved_name(monkeypatch):
 
 
 def test_an_unpriced_model_raises_systemexit_rather_than_running_unbilled(monkeypatch):
-    # UnknownModelError is deliberately fatal (see pricing.py): a run that reports $0.00 for an
-    # unpriced model is worse than a run that never starts.
+    # UnknownModelError is fatal: a run that reports $0.00 for an unpriced model is worse than none.
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test-key")
 
     with pytest.raises(SystemExit):
@@ -77,13 +64,7 @@ def test_an_unpriced_model_raises_systemexit_rather_than_running_unbilled(monkey
 
 
 class TestGroundTruthFollowsTheRename:
-    """`_fixture_state` has to write the names the agents will actually see.
-
-    Under `--naming opaque` the planted column is `var_07`, not `adjuster_touches`. If the state
-    kept the manifest's names, `results_row()` would compare the reviewer's objections against
-    columns that do not exist in that arm's data, every opaque run would score a silent zero, and
-    the ablation would report a name effect that was entirely an artefact of the bookkeeping.
-    """
+    """Under `--naming opaque`, planted_leakage_columns must name what the agents actually see."""
 
     def test_descriptive_keeps_the_manifest_names(self):
         fixture = load_fixture("claims_timing")
@@ -109,22 +90,15 @@ class TestGroundTruthFollowsTheRename:
         assert set(state.planted_leakage_columns) <= set(header_of(path))
 
     def test_the_task_description_is_unaffected(self):
-        """It names only the target, and the target is never renamed -- intake still has to infer
-        it from prose, which is the node's actual job."""
+        """The rename touches columns, not the target, which is never renamed."""
         assert (
             _run_state(runnable("claims_timing"), naming="opaque").task_description
             == _run_state(runnable("claims_timing")).task_description
         )
 
     def test_the_arm_cannot_be_claimed_without_the_rename_being_applied(self):
-        """The footgun the signature used to allow.
-
-        `naming` and the map were once two independent arguments, which made a state constructible
-        that said `opaque` while carrying the fixture's real column names -- config and ground truth
-        disagreeing, every objection compared against columns absent from that arm's data, and the
-        arm scoring a silent zero that looks exactly like a profiler success. There is now no way to
-        express it: the map is derived from `naming` inside the function.
-        """
+        """The rename map is derived from `naming`, not passed alongside it, so the two can't
+        drift."""
         fixture = load_fixture("claims_timing")
         for naming in NAMINGS:
             state = _run_state(runnable("claims_timing"), naming=naming)
@@ -143,7 +117,7 @@ class TestTheRunParser:
         assert args.repeat == 1
         assert args.results is None
 
-    def test_the_ablation_flags_parse(self):
+    def test_the_ablation_flags_parse_together(self):
         args = self._parse(
             [
                 "run",
@@ -163,138 +137,75 @@ class TestTheRunParser:
             "evals/results/x.jsonl",
         )
 
-    def test_an_unknown_naming_is_refused(self):
-        with pytest.raises(SystemExit):
-            self._parse(["run", "--naming", "scrambled"])
-
-    def test_the_reviewer_prompt_defaults_to_base(self):
-        assert self._parse(["run"]).reviewer_prompt == "base"
-
-    def test_the_reviewer_prompt_variant_parses(self):
-        args = self._parse(["run", "--reviewer-prompt", "which_column"])
-        assert args.reviewer_prompt == "which_column"
-
-    def test_an_unknown_reviewer_prompt_is_refused(self):
-        with pytest.raises(SystemExit):
-            self._parse(["run", "--reviewer-prompt", "helpful_hints"])
-
-    def test_the_loop_cap_defaults_to_the_config_default(self):
-        """3 in two places -- the flag and `RunConfig` -- and they must agree, or `ds-agents run`
-        and the not-yet-written harness would run the same nominal condition differently."""
-        assert self._parse(["run"]).loop_cap == RunConfig().loop_cap == 3
-
-    def test_the_loop_cap_parses(self):
-        assert self._parse(["run", "--loop-cap", "5"]).loop_cap == 5
-
     def test_a_zero_cap_is_valid_and_not_confused_with_a_negative_one(self):
-        """`RunConfig` allows `ge=0` and the router already special-cases it -- a cap of 0 is the
-        reviewer-off condition expressed as a cap, not a typo. Only `< 0` is refused."""
+        """0 is the reviewer-off condition expressed as a cap; only a negative cap is refused."""
         assert self._parse(["run", "--loop-cap", "0"]).loop_cap == 0
 
-
-class TestTheLoopCapIsRecorded:
-    """Mirror of TestThePromptConditionIsRecorded. The cap decides how many chances feature_eng
-    gets to act on an objection, so a row that did not carry it would be averaged together with
-    rows run under a different cap."""
-
-    def test_fixture_state_records_the_cap(self):
-        assert _run_state(runnable("claims_timing")).config.loop_cap == 3
-        assert _run_state(runnable("claims_timing"), loop_cap=5).config.loop_cap == 5
-
     def test_a_negative_cap_exits_two_rather_than_raising(self):
-        """`RunConfig` would refuse this with `ge=0`, but as a Pydantic traceback. This is the
-        exit-code-2 pattern `--repeat` already uses."""
-        args = _build_parser().parse_args(["run", "--loop-cap", "-1"])
+        """RunConfig's `ge=0` would raise a Pydantic traceback; cmd_run converts it to exit 2."""
+        args = self._parse(["run", "--loop-cap", "-1"])
         assert cmd_run(args) == 2
 
 
-class TestThePromptConditionIsRecorded:
-    """Mirror of TestGroundTruthFollowsTheRename: the condition must land on the frozen config,
-    or the arms are indistinguishable in the results file."""
+# (flag, field, default, variant): every run condition round-trips the same way, from argv through
+# the parser onto RunConfig and into results_row(), or rows run under different conditions would be
+# averaged together as if they were one arm. forced_drop_release's default is the one exception
+# to "default reproduces old behaviour": it is the fixed rule, not the pre-existing one.
+RUN_CONDITIONS = [
+    ("--loop-cap", "loop_cap", 3, 5),
+    ("--reviewer-prompt", "reviewer_prompt", "base", "which_column"),
+    ("--objection-routing", "objection_routing", "as_addressed", "by_category"),
+    ("--objection-closure", "objection_closure", "off", "on"),
+    ("--forced-drop-release", "forced_drop_release", "withdrawn_only", "resolved_or_withdrawn"),
+]
 
-    def test_fixture_state_records_the_variant(self):
-        assert _run_state(runnable("claims_timing")).config.reviewer_prompt == "base"
-        state = _run_state(runnable("claims_timing"), reviewer_prompt="which_column")
-        assert state.config.reviewer_prompt == "which_column"
+# (flag, bogus value): refused by the parser before a run can start.
+BOGUS_CONDITIONS = [
+    ("--naming", "scrambled"),
+    ("--reviewer-prompt", "helpful_hints"),
+    ("--objection-routing", "by_vibes"),
+    ("--objection-closure", "sometimes"),
+    ("--forced-drop-release", "eventually"),
+]
 
 
-class TestTheRoutingConditionIsRecorded:
-    """Mirror of TestThePromptConditionIsRecorded, and the one with the sharpest edge: the two
-    arms differ in whether a column-scoped objection can be acted on at all, so their remediation
-    rates are not comparable and a row that did not carry the condition would be averaged with
-    rows that had a capability it did not."""
+class TestRunConditionsRoundTrip:
+    """Each RunConfig condition: parser default, variant recorded on state and row, bogus
+    refused."""
 
-    def test_the_default_is_the_old_behaviour(self):
-        """Every row committed before 2026-08-28 ran under this, so the default has to be the
-        arm that reproduces them byte for byte."""
+    @pytest.mark.parametrize(("flag", "field", "default", "variant"), RUN_CONDITIONS)
+    def test_the_default_matches_the_parser_and_state(self, flag, field, default, variant):
         args = _build_parser().parse_args(["run"])
-        assert args.objection_routing == "as_addressed"
-        assert _run_state(runnable("claims_timing")).config.objection_routing == ("as_addressed")
+        assert getattr(args, field) == default
+        assert getattr(_run_state(runnable("claims_timing")).config, field) == default
 
-    def test_fixture_state_records_the_variant(self):
-        state = _run_state(runnable("claims_timing"), objection_routing="by_category")
-        assert state.config.objection_routing == "by_category"
-        assert state.results_row()["objection_routing"] == "by_category"
+    @pytest.mark.parametrize(("flag", "field", "default", "variant"), RUN_CONDITIONS)
+    def test_the_variant_parses_and_is_recorded(self, flag, field, default, variant):
+        args = _build_parser().parse_args(["run", flag, str(variant)])
+        assert getattr(args, field) == variant
+        state = _run_state(runnable("claims_timing"), **{field: variant})
+        assert getattr(state.config, field) == variant
+        assert state.results_row()[field] == variant
 
-    def test_an_unknown_routing_is_refused_by_the_parser(self):
+    @pytest.mark.parametrize(("flag", "bogus"), BOGUS_CONDITIONS)
+    def test_a_bogus_value_is_refused_by_the_parser(self, flag, bogus):
         with pytest.raises(SystemExit):
-            _build_parser().parse_args(["run", "--objection-routing", "by_vibes"])
+            _build_parser().parse_args(["run", flag, bogus])
 
 
-class TestTheClosureConditionIsRecorded:
-    """Mirror of TestTheRoutingConditionIsRecorded. `objection_closure` is its own axis and not a
-    third `reviewer_prompt` value, so that closure stays measurable under either prompt rather
-    than only in a bundle with `which_column`."""
+class TestConditionsAreOrthogonal:
+    """Each axis must be settable independently, or its effect can never be separated from
+    another's."""
 
-    def test_the_default_is_the_old_behaviour(self):
-        """Every row committed before 2026-08-28 ran without the rule, so `off` must be the
-        default and must leave the reviewer prompt byte-identical."""
-        args = _build_parser().parse_args(["run"])
-        assert args.objection_closure == "off"
-        assert _run_state(runnable("claims_timing")).config.objection_closure == "off"
-
-    def test_fixture_state_records_the_variant(self):
-        state = _run_state(runnable("claims_timing"), objection_closure="on")
-        assert state.config.objection_closure == "on"
-        assert state.results_row()["objection_closure"] == "on"
-
-    def test_it_is_orthogonal_to_the_prompt_condition(self):
-        """The reason it is not a third `reviewer_prompt` value: both conditions must be settable
-        independently, or the closure effect can never be separated from the which_column one."""
+    def test_closure_is_orthogonal_to_the_prompt_condition(self):
         state = _run_state(
             runnable("claims_timing"), reviewer_prompt="base", objection_closure="on"
         )
         assert state.config.reviewer_prompt == "base"
         assert state.config.objection_closure == "on"
 
-    def test_an_unknown_closure_is_refused_by_the_parser(self):
-        with pytest.raises(SystemExit):
-            _build_parser().parse_args(["run", "--objection-closure", "sometimes"])
-
-
-class TestTheForcedDropReleaseConditionIsRecorded:
-    """`forced_drop_release` is the control arm for the sticky-drop fix, and the ONE condition on
-    this config whose default is not the pre-existing behaviour.
-
-    Every other axis defaults to the arm that reproduces committed rows byte for byte, because each
-    is a real design fork. This one reproduces a defect, so the default is the FIXED rule and the
-    inversion is pinned here as well as in test_state.py -- at the CLI layer too, because that is
-    where a future session would most plausibly "restore consistency" by pattern-matching the
-    surrounding flags.
-    """
-
-    def test_the_default_is_the_fixed_behaviour_and_not_the_old_one(self):
-        args = _build_parser().parse_args(["run"])
-        assert args.forced_drop_release == "withdrawn_only"
-        assert _run_state(runnable("claims_timing")).config.forced_drop_release == "withdrawn_only"
-
-    def test_fixture_state_records_the_variant(self):
-        state = _run_state(runnable("claims_timing"), forced_drop_release="resolved_or_withdrawn")
-        assert state.config.forced_drop_release == "resolved_or_withdrawn"
-        assert state.results_row()["forced_drop_release"] == "resolved_or_withdrawn"
-
-    def test_it_is_orthogonal_to_the_routing_and_closure_conditions(self):
-        """The cell crosses this with `by_category`, so a coupling here would confound it."""
+    def test_forced_drop_release_is_orthogonal_to_routing_and_closure(self):
+        """The benchmark cell crosses this with by_category; a coupling here would confound it."""
         state = _run_state(
             runnable("claims_timing"),
             objection_routing="by_category",
@@ -305,17 +216,9 @@ class TestTheForcedDropReleaseConditionIsRecorded:
         assert state.config.objection_closure == "off"
         assert state.config.forced_drop_release == "resolved_or_withdrawn"
 
-    def test_an_unknown_release_rule_is_refused_by_the_parser(self):
-        with pytest.raises(SystemExit):
-            _build_parser().parse_args(["run", "--forced-drop-release", "eventually"])
-
 
 class TestTheReviewerClient:
-    """`_select_reviewer_model`, untested until the session that spends money on it.
-
-    Same no-network property as `_select_model`'s tests above: `AnthropicModel.__post_init__`
-    only constructs an SDK client.
-    """
+    """`_select_reviewer_model` picks the reviewer's client, reusing the base one when unchanged."""
 
     def test_no_live_returns_the_base_unchanged(self, monkeypatch):
         monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test-key")
@@ -336,8 +239,7 @@ class TestTheReviewerClient:
         assert _select_reviewer_model(config, base) is base
 
     def test_a_differing_reviewer_model_builds_a_second_client(self, monkeypatch):
-        """The Haiku/Sonnet ablation arm. The reviewer's client must be a different object with
-        the Sonnet id while the base keeps Haiku."""
+        """A different reviewer_model builds a distinct client while the base keeps its own."""
         monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test-key")
         base = AnthropicModel(model="haiku")
         config = RunConfig(default_model="haiku", reviewer_model="sonnet")
@@ -357,8 +259,7 @@ class TestTheReviewerClient:
 
 class TestTheResultsWriter:
     def test_a_stub_run_is_refused_not_written(self, tmp_path, capsys):
-        """The same gate the Phase 4 harness applies. A results file that quietly accepted stub
-        rows would look exactly like a results file."""
+        """A stub run must be refused, not written, or it would look like a real results row."""
         state = PipelineState(dataset_id="toy", task_description="x")
         path = tmp_path / "results.jsonl"
 
@@ -388,13 +289,8 @@ class TestTheResultsWriter:
 
 
 class TestTheEvalCommands:
-    """`cmd_eval` and `cmd_eval_diff` are the code path a real benchmark invocation takes.
-
-    The harness and the comparison tool have their own suites; what is pinned here is the wiring
-    between argv and them -- exit codes, flag validation, and the defaults. A benchmark that
-    silently exits 0 having written nothing is the failure this class exists to prevent, because
-    the number that does not appear is the one nobody notices is missing.
-    """
+    """`cmd_eval` and `cmd_eval_diff`: the argv wiring, exit codes, and defaults for a benchmark
+    run."""
 
     def parse(self, *argv):
         return _build_parser().parse_args(argv)
@@ -419,24 +315,20 @@ class TestTheEvalCommands:
         assert args.dry_run is False
 
     def test_eval_requires_a_name(self):
-        """`--name reviewer-haiku`, not `--name test3`: the name is what the results file is
-        called, and a run nobody can identify later is a run nobody can cite."""
+        """The name is what the results file is called; a run cannot be nameless."""
         with pytest.raises(SystemExit):
             self.parse("eval", "--subset", "toy")
 
     @pytest.mark.parametrize(("flag", "value"), [("--replicates", "0"), ("--n", "0")])
     def test_a_sampling_flag_below_one_is_refused_with_exit_2(self, flag, value, capsys):
-        """Zero produces an empty plan and a bare "0 rows written", which reads like the harness
-        broke rather than like the flag was wrong."""
+        """Zero would silently produce an empty plan instead of a clear error."""
         args = self.parse("eval", "--subset", "toy", "--name", "x", flag, value)
 
         assert cmd_eval(args) == 2
         assert "must be at least 1" in capsys.readouterr().err
 
     def test_an_unknown_subset_exits_2_and_lists_what_would_have_worked(self, capsys):
-        """`full` used to be the case this covered, because it raised on purpose. It runs as of
-        2026-09-02, so what is left to defend is that a typo is a clean exit rather than a
-        traceback -- and that the message names the subsets that DO resolve, `full` included."""
+        """A typo is a clean exit 2 naming the real subsets, not a traceback."""
         args = self.parse("eval", "--subset", "fulll", "--name", "x")
 
         assert cmd_eval(args) == 2
@@ -445,9 +337,7 @@ class TestTheEvalCommands:
         assert "full" in err and "bench-tall" in err
 
     def test_the_subset_help_names_every_runnable_subset(self):
-        """The help text named "toy, ci, or full (full is not implemented yet)" for four sessions
-        after `bench-smoke`, `bench-mid` and `bench-tall` shipped, and after `full` became
-        runnable. A flag whose help omits most of its values is how a subset goes unused."""
+        """A flag whose help omits a value is how that subset goes unused."""
         from ds_agents.harness import SUBSETS
 
         eval_parser = _build_parser()._subparsers._group_actions[0].choices["eval"]
@@ -459,8 +349,7 @@ class TestTheEvalCommands:
         assert "not implemented" not in action.help
 
     def test_a_dry_run_exits_0_without_writing(self, tmp_path):
-        """Zero rows is only an error when something was supposed to run. A dry run writing no
-        file is the whole point of it."""
+        """A dry run writes no file and that is not an error."""
         args = self.parse(
             "eval", "--subset", "toy", "--name", "x", "--dry-run", "--out-dir", str(tmp_path)
         )
@@ -477,8 +366,7 @@ class TestTheEvalCommands:
     def test_eval_diff_compares_two_real_files_and_refuses_to_call_it_an_effect(
         self, tmp_path, capsys
     ):
-        """End to end through argv, on rows carrying no `replicate` -- which is every row this
-        project committed before today. The answer has to be "underpowered", not a delta."""
+        """Rows with no `replicate` must report "underpowered", not a delta."""
         row = {"dataset_id": "toy", "naming": "descriptive", "leakage_remediated": True}
         before, after = tmp_path / "b.jsonl", tmp_path / "a.jsonl"
         for path in (before, after):
@@ -489,16 +377,15 @@ class TestTheEvalCommands:
         assert "underpowered" in capsys.readouterr().out
 
     def test_the_default_metrics_are_the_ones_evaldiff_declares(self):
-        """Not a second copy of the list in the parser. `--metrics` had no CLI flag at all until
-        2026-09-02, even though `compare()` accepted the argument from the beginning."""
+        """Not a second copy of the metrics list, sourced from evaldiff instead."""
         from ds_agents.evaldiff import DEFAULT_METRICS
 
         args = self.parse("eval-diff", "b.jsonl", "a.jsonl")
         assert tuple(args.metrics.split(",")) == DEFAULT_METRICS
 
     def test_a_null_predicate_metric_runs_end_to_end(self, tmp_path, capsys):
-        """`halted_at` is null on every healthy run, so a bare `halted_at` would exclude all four
-        rows here and tally 0/0. The predicate is what makes the column askable."""
+        """A `:notnull` predicate must count null rows in the denominator, unlike a bare column
+        name."""
         rows = [
             {"dataset_id": "toy", "naming": "descriptive", "halted_at": None},
             {"dataset_id": "toy", "naming": "descriptive", "halted_at": "profiler"},
@@ -515,10 +402,7 @@ class TestTheEvalCommands:
         assert "before  1/2" in out and "after   1/2" in out, out
 
     def test_an_unknown_predicate_exits_2_before_either_file_is_read(self, tmp_path, capsys):
-        """Checked in `cmd_eval_diff` rather than left to `tally`, so the message appears once and
-        before two results files are loaded. A bad predicate must not fall through as a column
-        name: an unknown column tallies as n=0 and renders as an empty row, which reads as
-        "no data" rather than as a typo."""
+        """A bad predicate must not fall through as a column name and silently tally n=0."""
         before, after = tmp_path / "b.jsonl", tmp_path / "a.jsonl"
         for path in (before, after):
             path.write_text(json.dumps({"dataset_id": "toy"}) + "\n")

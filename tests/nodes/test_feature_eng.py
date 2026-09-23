@@ -203,24 +203,6 @@ def test_the_id_column_is_always_dropped_even_if_the_model_says_nothing():
     assert "customer_id" in tools.code_run[0]
 
 
-def test_an_open_leakage_objection_forces_the_drop():
-    objection = Objection(
-        category="leakage",
-        subcategory="planted_status_code",
-        target_node="feature_eng",
-        columns=["account_status_code"],
-        evidence="91% agreement with the target",
-        severity="high",
-        raised_at_iteration=0,
-    )
-    tools = tools_for()
-    model = empty_plan_model()
-
-    feature_eng(state(objections=[objection]), tools=tools, model=model)
-
-    assert "account_status_code" in tools.code_run[0]
-
-
 def _planted_column_objection() -> Objection:
     return Objection(
         category="leakage",
@@ -242,70 +224,31 @@ def _pass_disposing(objection: Objection, disposition: str, iteration: int = 0) 
     )
 
 
-def test_a_resolved_objection_still_forces_its_drop():
-    """DELIBERATE REVERSAL of `test_a_resolved_objection_does_not_force_a_drop`, which pinned the
-    opposite behaviour from the first day this node handled objections until 2026-08-28. Recorded
-    here rather than in a commit message because the old assertion was right about the mechanism
-    and wrong about the intent, and that distinction is the whole content of the change.
+# (disposition, release_rule, dropped): `withdrawn` is the only disposition that releases a
+# forced drop under the default `withdrawn_only` rule; `resolved_or_withdrawn` also releases
+# `resolved`. `disposition=None` means no review pass ran at all.
+RELEASE_CASES = [
+    pytest.param(None, "withdrawn_only", True, id="no_pass"),
+    pytest.param("resolved", "withdrawn_only", True, id="resolved_stays_forced"),
+    pytest.param("withdrawn", "withdrawn_only", False, id="withdrawn_releases"),
+    pytest.param("not_reviewed", "withdrawn_only", True, id="not_reviewed_stays_forced"),
+    pytest.param("resolved", "resolved_or_withdrawn", False, id="resolved_releases_under_control"),
+]
 
-    The old test guarded that `open_objections()` was read and not the raw `objections` list. That
-    is still guarded -- `binding_objections` folds the same dispositions in the same order. What
-    changed is WHICH disposition releases a column. On this pipeline the fix for a column objection
-    IS the drop, so `resolved` cannot also mean "put it back": `_forced_drops` recomputes on every
-    invocation, so a resolved objection plus a later return to feature_eng for some unrelated
-    reason silently resurrected the leaked column. Harmless across a single pass, which is why the
-    old test read as correct for so long; reachable across two, which `objection_routing=
-    "by_category"` produces routinely and `objection_closure="on"` produces more.
 
-    `withdrawn` is now the only release, and `test_a_withdrawn_objection_releases_its_drop` below
-    is what stops this from meaning "objections are immortal". See DECISIONS.md 2026-08-28 (fourth
-    entry) and evals/results/LOG.md, "A latent bug found while diagnosing this cell".
-    """
+@pytest.mark.parametrize(("disposition", "release", "dropped"), RELEASE_CASES)
+def test_disposition_and_release_rule_decide_whether_the_column_is_dropped(
+    disposition, release, dropped
+):
     objection = _planted_column_objection()
     tools = tools_for()
+    kwargs: dict = {"objections": [objection], "config": RunConfig(forced_drop_release=release)}
+    if disposition is not None:
+        kwargs["review_passes"] = [_pass_disposing(objection, disposition)]
 
-    feature_eng(
-        state(objections=[objection], review_passes=[_pass_disposing(objection, "resolved")]),
-        tools=tools,
-        model=empty_plan_model(),
-    )
+    feature_eng(state(**kwargs), tools=tools, model=empty_plan_model())
 
-    assert "account_status_code" in tools.code_run[0]
-
-
-def test_a_withdrawn_objection_releases_its_drop():
-    """The escape hatch, and the reason the reversal above is not "objections are immortal".
-
-    `withdrawn` means the reviewer no longer thinks it was a problem, which is the opposite claim
-    to `resolved`. It is also the only route back for a false positive: `by_category` dropped
-    `prior_claims_12m`, a legitimate strong feature, in 2 of 10 runs, and without this a reviewer
-    mistake would be permanent for the rest of the run.
-    """
-    objection = _planted_column_objection()
-    tools = tools_for()
-
-    feature_eng(
-        state(objections=[objection], review_passes=[_pass_disposing(objection, "withdrawn")]),
-        tools=tools,
-        model=empty_plan_model(),
-    )
-
-    assert "DROP = ['churned', 'customer_id']" in tools.code_run[0]
-
-
-def test_a_not_reviewed_objection_still_forces_its_drop():
-    """Silence is not release, matching REVIEWER_SYSTEM's rule that leaving an objection out of
-    `dispositions` means "I did not look at it again"."""
-    objection = _planted_column_objection()
-    tools = tools_for()
-
-    feature_eng(
-        state(objections=[objection], review_passes=[_pass_disposing(objection, "not_reviewed")]),
-        tools=tools,
-        model=empty_plan_model(),
-    )
-
-    assert "account_status_code" in tools.code_run[0]
+    assert ("account_status_code" in tools.code_run[0]) == dropped
 
 
 def test_a_resolved_objection_stays_dropped_across_a_second_return():
@@ -328,33 +271,6 @@ def test_a_resolved_objection_stays_dropped_across_a_second_return():
     )
 
     assert "account_status_code" in tools.code_run[0]
-
-
-def test_a_resolved_objection_comes_back_under_the_unsticky_arm():
-    """The control arm reproduces the defect it claims to reproduce, asserted against the real
-    snippet rather than against the state method.
-
-    Without this the sticky-drop cell's control is an assumption: `forced_drop_release` could be
-    recorded on every row and change nothing that reaches the sandbox, and the arm would read as a
-    null result for the wrong reason. The exact strings are the ones from the live diagnosis on
-    2026-08-28 -- with the objection binding the snippet reads `DROP = ['account_status_code',
-    'churned', 'customer_id']`, and with it released, `DROP = ['churned', 'customer_id']`.
-    """
-    objection = _planted_column_objection()
-    tools = tools_for()
-
-    feature_eng(
-        state(
-            config=RunConfig(forced_drop_release="resolved_or_withdrawn"),
-            objections=[objection],
-            review_passes=[_pass_disposing(objection, "resolved")],
-        ),
-        tools=tools,
-        model=empty_plan_model(),
-    )
-
-    assert "DROP = ['churned', 'customer_id']" in tools.code_run[0]
-    assert "account_status_code" not in tools.code_run[0]
 
 
 def test_the_second_return_is_where_the_two_arms_diverge():
@@ -394,17 +310,11 @@ def test_the_second_return_is_where_the_two_arms_diverge():
 
 
 def test_the_drop_justification_is_identical_under_both_release_rules():
-    """The confound guard. The 2026-08-28 fix changed TWO things: the predicate, and the
-    justification string that goes into this node's `already_dropped` facts -- so it reaches the
-    MODEL'S PROMPT, and `dropped_features` on the results row. Reverting the wording under the
-    control arm would give the condition a second application site; leaving it arm-dependent would
-    mean the two arms differ in prompt text as well as in the release rule, and the cell could not
-    attribute its effect to either.
-
-    So the current wording stays in both arms. It is still true in both: under
-    `resolved_or_withdrawn` a forced drop can only come from an objection that is neither resolved
-    nor withdrawn, so "not withdrawn" is correct there, merely weaker than the truth.
-    """
+    """The confound guard: the justification string in `already_dropped` facts reaches the
+    model's prompt, so it must not differ between arms, or the cell could not attribute its
+    effect to the release rule alone. It is true under both: `resolved_or_withdrawn` only forces
+    a drop from an objection that is neither resolved nor withdrawn, so "not withdrawn" is
+    correct there too, merely weaker than the truth."""
     objection = _planted_column_objection()
     prompts = []
     for release in ("withdrawn_only", "resolved_or_withdrawn"):
@@ -425,8 +335,7 @@ def test_the_drop_justification_is_identical_under_both_release_rules():
 
 
 def _misaddressed_importance_objection() -> Objection:
-    """The shape the reviewer actually produced live on 2026-08-28: the right column, in a
-    column-scoped category, addressed to a node with no column lever."""
+    """The right column, in a column-scoped category, addressed to a node with no column lever."""
     return Objection(
         category="implausible_importance",
         subcategory="importance_dominance",
@@ -626,11 +535,9 @@ def test_a_skipped_high_cardinality_column_is_reported_and_counted_as_dropped():
 
 
 def test_a_skip_is_a_decision_not_an_error_so_the_run_is_not_errored():
-    """The `adult` defect, on a fixture. All four `adult` rows in `2026-09-02_bench-tall.jsonl`
-    carry `errored: true` with `halted_at: null`, no objection, verdict `pass` and a
-    `verified_holdout_score` of 0.9244 nothing objected to -- because `feature_eng` recorded a
-    routine one-hot skip as a `PipelineError` and `errored` is `bool(self.errors)`. A table using
-    `errored` as a reliability rate therefore scored `adult` as a 100% failure cell."""
+    """A routine one-hot skip must not be recorded as a `PipelineError`: since `errored` is
+    `bool(self.errors)`, that would score a healthy run as a failure on any table using `errored`
+    as a reliability rate."""
     snippet_out = {
         **SNIPPET_OUT,
         "dropped": ["customer_id", "some_free_text_column"],

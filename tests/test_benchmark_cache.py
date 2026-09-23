@@ -16,8 +16,6 @@ import pytest
 from ds_agents.benchmark import SELECTION_RULE, cached_csv_path, load_manifest
 from ds_agents.nodes.feature_eng import ID_DISTINCTNESS_THRESHOLD, MAX_ONE_HOT_LEVELS
 
-pytestmark = pytest.mark.fast
-
 MANIFEST = load_manifest()
 CACHED = [entry for entry in MANIFEST.datasets if cached_csv_path(entry).exists()]
 
