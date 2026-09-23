@@ -7,7 +7,8 @@ reproduces at HEAD (`evals/results/2026-09-21_claims-repro.jsonl`, n=10, $0.3006
 endpoints matching, `review_loops` to the second decimal). It also surfaced a new one -- the
 profiler's opaque-arm recall on the same fixture reads 2/10, 5/10, then 8/10 across three dates
 (chi-square(2) = 7.20, p = 0.027), a flag and not yet a finding. This session did no new
-measurement; it shortened the docs. The module and CLI flags that captured a run's final state for
+measurement; it shortened the code, tests and docs (about 7,600 lines, see DECISIONS.md
+2026-09-23) with the schemas, prompts and dry-run estimates verified byte-identical. The module and CLI flags that captured a run's final state for
 the walkthrough, and the scripts that rebuilt the walkthrough page from it, are gone;
 `docs/explainers/pipeline-walkthrough.html` stays as a static page. `docs/DECISIONS.md` is now an
 index of one-line summaries; the full text of every decision is in `docs/decisions-archive.md`.
@@ -71,6 +72,8 @@ the dominant column so permutation importance collapses while per-column NMI hol
 - `ds-agents eval` appends to a same-day, same-name file rather than refusing, and `cmd_run` has no
   per-run `try/except`. Both want a decision.
 - `harness.py` and `cli.py` still import each other inside functions.
+- `test_feature_eng.py`'s release-rule table checks only whether the one column is dropped, not
+  the full DROP list. Same pass/fail direction; tighten if that test ever matters.
 - `test_baseline_cost.py`'s synthetic bound is loose by about 1.6x on real data.
 - `register_dataset`'s two grader calls are unbounded under both transports (pinned by test);
   needs a watchdog thread or a signal, exposure is 1.2% of budget.

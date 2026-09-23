@@ -384,7 +384,9 @@ This session dropped the module that captured a run's final state for the walkth
 flags on `ds-agents run` that fed it, the two scripts that rebuilt the walkthrough page from that
 captured data, the HTML template they filled, and the captured data directory itself. The built
 `docs/explainers/pipeline-walkthrough.html` page stays as a static artifact. The history/measurement
-tests were cut down to one guard test each. The full text of every decision moved to
+tests were cut down to one guard test each; the two opt-in timing guards (baseline fit and
+dataset registration against their real timeouts) were kept because they check live code, not
+recorded numbers. The full text of every decision moved to
 `docs/decisions-archive.md`, leaving this file to one-line summaries. Pre-registrations and full
 reasoning for every decision live there; run results and per-run narratives live in
 `evals/results/LOG.md`.
