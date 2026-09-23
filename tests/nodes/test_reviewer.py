@@ -573,35 +573,41 @@ class TestABlockWithNothingToActOn:
     def test_a_block_with_nothing_actionable_retries_once(self, findings, state_kwargs):
         model = QueuedModel(ReviewFinding, findings)
 
-        reviewer(state(**state_kwargs), tools=FakeTools(), model=model)
+        update = reviewer(state(**state_kwargs), tools=FakeTools(), model=model)
 
         assert len(model.calls) == 2
+        assert update["reviewer_claim"] == "block"
+        assert update["objections"][-1].columns == ["account_status_code"]
 
-    # (model, state_kwargs): a block that already has something actionable, so the retry trigger
-    # (the router's own `would_be_open` question) must not fire.
+    # (model, state_kwargs, claim): the response already has something actionable, so the retry
+    # trigger (the router's own `would_be_open` question) must not fire.
     NEVER_RETRY_CASES = [
         pytest.param(
             ScriptedModel({ReviewFinding: finding(claim="block", objections=[])}),
             {"objections": [objection()]},
+            "block",
             id="surviving_prior_open_objection",
         ),
         pytest.param(
             ScriptedModel({ReviewFinding: finding(claim="pass")}),
             {},
+            "pass",
             id="pass_claim",
         ),
         pytest.param(
             ScriptedModel({ReviewFinding: finding(claim="block", objections=[good_proposal()])}),
             {},
+            "block",
             id="surviving_objection",
         ),
     ]
 
-    @pytest.mark.parametrize(("model", "state_kwargs"), NEVER_RETRY_CASES)
-    def test_a_block_with_something_actionable_never_retries(self, model, state_kwargs):
-        reviewer(state(**state_kwargs), tools=FakeTools(), model=model)
+    @pytest.mark.parametrize(("model", "state_kwargs", "claim"), NEVER_RETRY_CASES)
+    def test_a_block_with_something_actionable_never_retries(self, model, state_kwargs, claim):
+        update = reviewer(state(**state_kwargs), tools=FakeTools(), model=model)
 
         assert len(model.calls) == 1
+        assert update["reviewer_claim"] == claim
 
     def test_a_successful_retry_still_records_why_the_first_response_failed(self):
         """The rejection diagnostic is the only evidence of what the model actually got wrong, and

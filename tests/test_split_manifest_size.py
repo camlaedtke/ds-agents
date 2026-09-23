@@ -67,3 +67,15 @@ def test_every_manifest_dataset_fits_under_the_safe_fraction():
         f"{largest / DEFAULT_READ_BYTES:.1%} of the {DEFAULT_READ_BYTES:,}-byte cap -- above the "
         f"{SAFE_FRACTION:.0%} pinned headroom."
     )
+
+
+def test_the_encoding_costs_one_byte_per_agent_row():
+    """Guards the encoding itself: at one byte per row the cap is about a million agent rows away,
+    far past any manifest dataset. Two bytes per row would halve that without failing the test
+    above."""
+    small, large = 1_000_000, 2_000_000
+    agent_delta = (large - small) - int(round((large - small) * WITHHELD_FRACTION))
+    per_row = (
+        project_split_manifest_bytes(large) - project_split_manifest_bytes(small)
+    ) / agent_delta
+    assert per_row == pytest.approx(1.0, abs=0.01)
