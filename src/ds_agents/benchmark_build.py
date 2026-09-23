@@ -15,7 +15,6 @@ Sources, all clean HTTPS and all re-checkable:
   - the frames themselves, via `sklearn.datasets.fetch_openml`, for every measured number
 """
 
-import hashlib
 import json
 import sys
 import urllib.request
@@ -48,6 +47,7 @@ from ds_agents.benchmark import (
 # meant to model. The ban is one-directional: `nodes/` must not import a registry, but a build
 # script reading a node's constants is fine, and `tests/test_fixture_registry.py` already does it.
 from ds_agents.nodes.feature_eng import ID_DISTINCTNESS_THRESHOLD, MAX_ONE_HOT_LEVELS
+from ds_agents.provenance import file_sha256
 
 TIMEOUT_S = 60
 AMLB_RAW = "https://raw.githubusercontent.com/openml/automlbenchmark/{ref}/{path}"
@@ -186,7 +186,7 @@ def _write_csv(frame: pd.DataFrame, path: Path) -> str:
     """
     path.parent.mkdir(parents=True, exist_ok=True)
     frame.to_csv(path, index=False, na_rep="", lineterminator="\n")
-    return hashlib.sha256(path.read_bytes()).hexdigest()
+    return file_sha256(path)
 
 
 @dataclass

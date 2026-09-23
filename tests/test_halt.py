@@ -23,12 +23,12 @@ from pathlib import Path
 
 import pytest
 
-from ds_agents.cli import _toy_state
 from ds_agents.graph import run_pipeline
 from ds_agents.nodes.router import halt_or
 from ds_agents.state import NodeEvent, PipelineError, PipelineState, utc_now
 from ds_agents.tools.llm import StubModel
 from ds_agents.tools.local import LocalTools
+from tests.conftest import _toy_state
 
 TOY = Path(__file__).parent / "fixtures" / "toy" / "toy.csv"
 

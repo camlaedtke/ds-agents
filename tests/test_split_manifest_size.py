@@ -12,8 +12,8 @@ loud, it looked like a measurement.
 That is fixed: the profiler now writes a one-character-per-row fold-assignment string (`"h"` for
 holdout, `"0".."4"` for the fold a row validates in) instead of index lists. See
 `ds_agents/split_manifest.py` for the encoding -- this file does not reimplement it. It builds real
-manifests through `split_manifest.manifest_from` and measures what comes out, which is what stops
-`project_split_manifest_bytes` from being a second, hand-typed answer to the same question.
+manifests through `manifest_from` (tests/conftest.py) and measures what comes out, which is what
+stops `project_split_manifest_bytes` from being a second, hand-typed answer to the same question.
 
 Two things changed alongside the fix, both worth knowing here:
 
@@ -36,12 +36,12 @@ import json
 import numpy as np
 import pytest
 
-from ds_agents import split_manifest
 from ds_agents.benchmark import load_manifest
 from ds_agents.harness import SUBSETS
 from ds_agents.nodes.profiler import HOLDOUT_FRACTION, N_FOLDS
 from ds_agents.runnable import WITHHELD_FRACTION
 from ds_agents.tools.protocol import DEFAULT_READ_BYTES
+from tests.conftest import manifest_from
 
 pytestmark = pytest.mark.fast
 
@@ -63,8 +63,8 @@ SAFE_FRACTION = 0.25
 def project_split_manifest_bytes(n_rows: int, *, seed: int = 20260822) -> int:
     """Bytes the profiler's split manifest would occupy for a dataset of `n_rows` rows.
 
-    Builds a REAL manifest via `split_manifest.manifest_from` and returns its serialized size --
-    not a hand-mirrored structure -- so this measures the one implementation's output rather than
+    Builds a REAL manifest via `manifest_from` (tests/conftest.py) and returns its serialized
+    size -- not a hand-mirrored structure -- so this measures the one implementation's output rather
     offering a second answer to what the manifest looks like. It withholds `WITHHELD_FRACTION`
     before the graph starts, carves `HOLDOUT_FRACTION` off what remains, and splits the rest into
     `N_FOLDS` folds, the same shape `nodes/profiler.py` produces.
@@ -77,7 +77,7 @@ def project_split_manifest_bytes(n_rows: int, *, seed: int = 20260822) -> int:
     train = shuffled[n_holdout:]
     parts = np.array_split(rng.permutation(train), N_FOLDS)
     fold_valid = [part.tolist() for part in parts]
-    manifest = split_manifest.manifest_from(
+    manifest = manifest_from(
         n_rows=agent_rows,
         holdout=holdout,
         fold_valid=fold_valid,
@@ -104,7 +104,7 @@ def _agent_manifest_bytes(agent_rows: int, *, seed: int = 20260822) -> int:
     fold_valid: list[list[int]] = [[] for _ in range(N_FOLDS)]
     for i, row in enumerate(train):
         fold_valid[i % N_FOLDS].append(row)
-    manifest = split_manifest.manifest_from(
+    manifest = manifest_from(
         n_rows=agent_rows,
         holdout=holdout,
         fold_valid=fold_valid,

@@ -21,13 +21,12 @@ from typing import Any
 
 from dotenv import load_dotenv
 
-from ds_agents import capture, rescore
-from ds_agents.fixtures import load_fixture
+from ds_agents import rescore
 from ds_agents.graph import run_pipeline
 from ds_agents.holdout import PreparedDataset, prepare
 from ds_agents.naming import NAMINGS, Naming, rename_map
 from ds_agents.naming import apply as apply_rename
-from ds_agents.provenance import git_commit
+from ds_agents.provenance import REPO_ROOT, git_commit
 from ds_agents.runnable import Runnable, available, resolve
 from ds_agents.state import (
     DEFAULT_LOOP_CAP,
@@ -47,8 +46,6 @@ from ds_agents.tools.local import LocalTools
 from ds_agents.tools.mcp_client import MCPTools, stdio_params
 from ds_agents.tools.pricing import UnknownModelError
 from ds_agents.tools.protocol import Tools
-
-REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 def _run_state(
@@ -100,7 +97,6 @@ def _run_state(
         )
     return PipelineState(
         config=RunConfig(
-            reviewer_enabled=True,
             # Which column names the agents saw. Same reason as `reviewer_model` below: the two
             # naming arms run over byte-identical rows, so a row that did not carry this would be
             # indistinguishable from a row in the other arm.
@@ -164,36 +160,6 @@ def _run_state(
     )
 
 
-def _toy_state(model_name: str = "haiku", reviewer_model_name: str | None = None) -> PipelineState:
-    """The toy fixture's state, by name. Kept as its own function because tests call it."""
-    return _run_state(
-        Runnable.from_fixture(load_fixture("toy")),
-        model_name=model_name,
-        reviewer_model_name=reviewer_model_name,
-    )
-
-
-def _write_state_json(
-    state: PipelineState, run_root: Path, args: argparse.Namespace, index: int
-) -> None:
-    """Write one `--state-json` envelope for run `index`, and say where on stderr.
-
-    Path mirrors the run-root convention `cmd_run` already uses for `--repeat`: at `--repeat 1`
-    the path given on the command line is used verbatim, so a one-off run does not surprise
-    anyone with a suffix it never asked for. At `--repeat > 1`, `.run-{index:0{width}d}` is
-    inserted before the suffix -- same padding as `run_root` itself -- so N replicates write N
-    distinct files instead of clobbering one another.
-    """
-    path = Path(args.state_json)
-    if args.repeat > 1:
-        width = len(str(args.repeat - 1))
-        path = path.with_name(f"{path.stem}.run-{index:0{width}d}{path.suffix}")
-    path.parent.mkdir(parents=True, exist_ok=True)
-    cap = capture.envelope(state, run_root, note=args.state_note)
-    path.write_text(cap.model_dump_json(indent=2) + "\n")
-    print(f"state json: {path}", file=sys.stderr)
-
-
 def _print_trace(state: PipelineState) -> None:
     print("\nnode trace")
     for event in state.node_trace:
@@ -208,6 +174,18 @@ def _print_trace(state: PipelineState) -> None:
         for error in state.errors:
             flag = "recoverable" if error.recoverable else "FATAL"
             print(f"  [{flag}] {error.node}: {error.message}")
+
+
+def _build_live_model(model_name: str) -> AnthropicModel:
+    """`AnthropicModel` for `model_name`, or `SystemExit` naming an unpriced id.
+
+    Shared by `_select_model` and `_select_reviewer_model` so the refusal message and exit code
+    -- `UnknownModelError` becoming `SystemExit(str(exc))` -- exist in exactly one place.
+    """
+    try:
+        return AnthropicModel(model=model_name)
+    except UnknownModelError as exc:
+        raise SystemExit(str(exc)) from exc
 
 
 def _select_model(config: RunConfig, *, no_live: bool = False):
@@ -227,10 +205,7 @@ def _select_model(config: RunConfig, *, no_live: bool = False):
             file=sys.stderr,
         )
         return StubModel()
-    try:
-        return AnthropicModel(model=config.default_model)
-    except UnknownModelError as exc:
-        raise SystemExit(str(exc)) from exc
+    return _build_live_model(config.default_model)
 
 
 def _select_reviewer_model(
@@ -250,10 +225,7 @@ def _select_reviewer_model(
         return base
     if config.reviewer_model == config.default_model:
         return base
-    try:
-        return AnthropicModel(model=config.reviewer_model)
-    except UnknownModelError as exc:
-        raise SystemExit(str(exc)) from exc
+    return _build_live_model(config.reviewer_model)
 
 
 def _select_tools(transport: str, root: Path, dataset: Path, dataset_id: str) -> Tools:
@@ -345,15 +317,13 @@ def cmd_run(args: argparse.Namespace) -> int:
             forced_drop_release=args.forced_drop_release,
         )
 
-        if args.state_json:
-            _write_state_json(state, run_root, args, index)
         if args.repeat == 1:
             print(state.model_dump_json(indent=2, exclude_none=True))
         _print_trace(state)
         _print_summary(state, run_root)
         if args.results:
             _append_results_row(state, Path(args.results))
-        if any(not e.recoverable for e in state.errors):
+        if state.halted():
             exit_code = 1
     return exit_code
 
@@ -754,20 +724,6 @@ def _build_parser() -> argparse.ArgumentParser:
         "publishable() are refused, not written. For one-off cells and debugging: these rows carry "
         "no cell or replicate annotation, so they cannot enter a powered comparison. The harness "
         "is `ds-agents eval`.",
-    )
-    run.add_argument(
-        "--state-json",
-        default=None,
-        help="write one capture.envelope() JSON file per run to this path, for the pipeline-"
-        "walkthrough viewer. At --repeat 1 the path is used verbatim; at --repeat > 1 "
-        ".run-NN is inserted before the suffix, one file per replicate.",
-    )
-    run.add_argument(
-        "--state-note",
-        default="",
-        help="recorded on the envelope as why this replicate was kept. Model nondeterminism is "
-        "the whole variance across --repeat runs, so an interesting run is found by repeating "
-        "and choosing -- and the choice belongs on the record.",
     )
     run.add_argument(
         "--no-live",

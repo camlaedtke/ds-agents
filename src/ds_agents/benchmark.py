@@ -32,7 +32,6 @@ and hands back a typed object. It does no network I/O and imports neither sklear
 that is `benchmark_build.py`, which is the only thing that writes the manifest.
 """
 
-import hashlib
 import sys
 from pathlib import Path
 from typing import Literal
@@ -40,7 +39,8 @@ from typing import Literal
 import yaml
 from pydantic import BaseModel, ConfigDict, Field
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
+from ds_agents.provenance import REPO_ROOT, file_sha256
+
 MANIFEST_PATH = REPO_ROOT / "evals" / "datasets" / "manifest.yaml"
 # Gitignored. The manifest pins each dataset by OpenML data id and upstream md5, so the CSVs are
 # reproducible from it and do not belong in git -- several are tens of thousands of rows, against a
@@ -422,7 +422,7 @@ def require_cached_csv(entry: DatasetEntry, root: Path = DATASET_CACHE) -> Path:
             f"{path}. The cache is gitignored and rebuilt by fetching: "
             f"run `uv run ds-agents datasets refresh`."
         )
-    digest = hashlib.sha256(path.read_bytes()).hexdigest()
+    digest = file_sha256(path)
     if digest != entry.csv_sha256:
         print(
             f"warning: {entry.dataset_id} csv_sha256 does not match the manifest "

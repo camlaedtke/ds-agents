@@ -6,12 +6,21 @@ of the graph. The value lands on the frozen `RunConfig` and from there on the re
 """
 
 import contextlib
+import hashlib
 import os
 import subprocess
 import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+
+
+def file_sha256(path: Path) -> str:
+    """sha256 of a file's bytes on disk, hex-encoded. The one implementation every caller that
+    hashes a CSV or a manifest file shares, so a change to how the digest is taken -- chunked
+    reading, say -- only has to happen once."""
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
 
 GIT_ENV_VAR = "DS_AGENTS_GIT"
 """Which git to shell out to, when the one on PATH is not the one that works.

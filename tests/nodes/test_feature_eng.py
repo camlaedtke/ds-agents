@@ -10,9 +10,8 @@ class, and any open leakage-shaped objection must survive no matter what the mod
 import json
 
 import pytest
-from conftest import FakeTools, ScriptedModel
+from conftest import FakeTools, ScriptedModel, manifest_from
 
-from ds_agents import split_manifest
 from ds_agents.nodes.feature_eng import (
     FeatureDrop,
     FeaturePlan,
@@ -41,7 +40,7 @@ pytestmark = pytest.mark.fast
 # (the complement) is then empty, which is the same degenerate shape the old explicit-list fixture
 # had -- an honest fixture for a node that never looks past `SPLIT["train"]`, not a claim about
 # what a real k-fold split looks like.
-SPLIT_MANIFEST = split_manifest.manifest_from(
+SPLIT_MANIFEST = manifest_from(
     n_rows=200,
     holdout=list(range(160, 200)),
     fold_valid=[list(range(160))],

@@ -25,7 +25,6 @@ so the column stratification reads has the same name in both arms.
 """
 
 import csv
-import hashlib
 import json
 import math
 from collections import defaultdict
@@ -36,6 +35,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from ds_agents.naming import Naming, materialize
 from ds_agents.nodes.profiler import N_FOLDS
+from ds_agents.provenance import file_sha256
 from ds_agents.runnable import Runnable
 
 # Enough rows on the agents' side to build the profiler's 5 folds and still have a fold worth of
@@ -156,7 +156,7 @@ def prepare(
             rename=rename,
             n_agent_rows=_row_count(source),
             n_withheld_rows=0,
-            agent_sha256=hashlib.sha256(source.read_bytes()).hexdigest(),
+            agent_sha256=file_sha256(source),
             withheld_fraction=0.0,
             seed=seed,
         )
@@ -164,7 +164,8 @@ def prepare(
     target = rename.get(runnable.target, runnable.target)
     labels = _labels(source, target)
     withheld = _withhold_rows(labels, runnable.withheld_fraction, seed)
-    agent_labels = [label for index, label in enumerate(labels) if index not in set(withheld)]
+    withheld_set = set(withheld)
+    agent_labels = [label for index, label in enumerate(labels) if index not in withheld_set]
 
     # Refuse rather than mislabel, which is the rule the profiler already follows for an
     # unimplemented split strategy. A carve that leaves the agents one class or a handful of rows
@@ -190,7 +191,7 @@ def prepare(
         # every later run, so the agent frame goes beside it under `into`.
         agent_path = into / f"{runnable.dataset_id}-agent.csv"
     into.mkdir(parents=True, exist_ok=True)
-    _split_csv(source, set(withheld), agent_path, withheld_path)
+    _split_csv(source, withheld_set, agent_path, withheld_path)
     (withheld_into / "withheld_rows.json").write_text(
         json.dumps({"source": str(source), "seed": seed, "rows": withheld}, indent=2)
     )
@@ -202,7 +203,7 @@ def prepare(
         rename=rename,
         n_agent_rows=len(labels) - len(withheld),
         n_withheld_rows=len(withheld),
-        agent_sha256=hashlib.sha256(agent_path.read_bytes()).hexdigest(),
+        agent_sha256=file_sha256(agent_path),
         withheld_fraction=runnable.withheld_fraction,
         seed=seed,
     )

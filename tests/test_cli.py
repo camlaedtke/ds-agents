@@ -15,7 +15,6 @@ import json
 
 import pytest
 
-from ds_agents.capture import Capture
 from ds_agents.cli import (
     _append_results_row,
     _build_parser,
@@ -529,53 +528,3 @@ class TestTheEvalCommands:
         err = capsys.readouterr().err
         assert "unknown metric predicate" in err
         assert "notnul" in err
-
-
-class TestTheStateJsonFlag:
-    """`--state-json` end to end through `cmd_run`, one real (stubbed) toy run.
-
-    Runs the whole graph once against `StubModel` over `--tools local` -- the same no-key,
-    no-network, no-subprocess shape `tests/test_repeat_runs.py` uses -- so this is the one test in
-    this module that is not a pure unit test. It still satisfies `-m fast`'s own definition (fixed
-    fixture, no model calls, no container) at the cost of a few real seconds rather than
-    milliseconds; kept to one invocation rather than `--repeat`'s several for that reason.
-    """
-
-    def _args(self, tmp_path, **overrides):
-        argv = ["run", "--dataset", "toy", "--tools", "local", "--no-live"]
-        for flag, value in overrides.items():
-            argv += [f"--{flag.replace('_', '-')}", str(value)]
-        args = _build_parser().parse_args(argv)
-        args.artifacts_dir = str(tmp_path / "artifacts")
-        return args
-
-    def test_state_json_writes_a_file_that_validates_as_capture(self, tmp_path):
-        state_json_path = tmp_path / "state.json"
-        args = self._args(tmp_path, state_json=str(state_json_path), state_note="smoke test")
-
-        assert cmd_run(args) == 0
-
-        assert state_json_path.exists()
-        cap = Capture.model_validate_json(state_json_path.read_text())
-        assert cap.dataset_id == "toy"
-        assert cap.note == "smoke test"
-        assert cap.state["dataset_id"] == "toy"
-
-    def test_no_flag_writes_no_file(self, tmp_path):
-        """`--state-json` is opt-in: the CLI must not write anything by default."""
-        args = self._args(tmp_path)
-        assert cmd_run(args) == 0
-        assert list(tmp_path.glob("*.json")) == []
-
-    def test_repeat_inserts_run_index_before_the_suffix(self, tmp_path):
-        state_json_path = tmp_path / "state.json"
-        args = self._args(tmp_path, state_json=str(state_json_path), repeat=2)
-
-        assert cmd_run(args) == 0
-
-        run0 = tmp_path / "state.run-0.json"
-        run1 = tmp_path / "state.run-1.json"
-        assert run0.exists() and run1.exists()
-        assert not state_json_path.exists()
-        for path in (run0, run1):
-            Capture.model_validate_json(path.read_text())

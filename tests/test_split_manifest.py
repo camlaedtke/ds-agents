@@ -30,6 +30,7 @@ from sklearn.model_selection import KFold, StratifiedKFold, train_test_split
 
 from ds_agents import split_manifest
 from ds_agents.nodes.profiler import HOLDOUT_FRACTION, N_FOLDS
+from tests.conftest import manifest_from
 
 # Marked per class rather than for the module: the last test in this file launches a subprocess
 # that imports pandas and scikit-learn, and `fast` is what the edit hook runs on every save.
@@ -138,7 +139,7 @@ class TestRoundTrip:
         convenience rather than a second answer to which rows were trained on."""
         n_rows, holdout, folds = _real_split()
 
-        assert split_manifest.manifest_from(
+        assert manifest_from(
             n_rows=n_rows,
             holdout=holdout,
             fold_valid=[sorted(va) for _tr, va in folds],
@@ -290,9 +291,7 @@ class TestShape:
         """The decoder indexes `range(n_folds)` rather than the characters it happens to see. A
         decoder that derived the fold list from `set(assignment)` would silently return four folds
         for a five-fold split and shrink the `n_folds` the modeler reports."""
-        manifest = split_manifest.manifest_from(
-            n_rows=6, holdout=[0], fold_valid=[[1, 2], [3, 4, 5], []]
-        )
+        manifest = manifest_from(n_rows=6, holdout=[0], fold_valid=[[1, 2], [3, 4, 5], []])
         decoded = decode_split(manifest, 6)
 
         assert len(decoded["folds"]) == 3

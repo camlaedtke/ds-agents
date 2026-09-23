@@ -84,8 +84,6 @@ them one implementation under test rather than a mirror, and one non-`fast` test
 source through the real sandbox so the in-process shortcut is never the only evidence.
 """
 
-import hashlib
-
 SPLIT_MANIFEST_VERSION = 1
 ENCODING = "assignment-v1"
 
@@ -246,53 +244,3 @@ def _render(template: str) -> str:
 
 ENCODER_SRC = _render(_ENCODER_TEMPLATE)
 DECODER_SRC = _render(_DECODER_TEMPLATE)
-
-
-def manifest_from(
-    *,
-    n_rows: int,
-    holdout: list[int],
-    fold_valid: list[list[int]],
-    strategy: str = "stratified",
-    seed: int = 0,
-    target: str = "y",
-    holdout_fraction: float = 0.2,
-) -> dict:
-    """A manifest built in the node process, FOR TEST FIXTURES ONLY.
-
-    This is not the implementation -- `ENCODER_SRC` is, and it is the only thing the profiler
-    runs. This exists so a unit-test fixture can say which rows are in which fold in the same
-    vocabulary the old explicit-list fixtures used, instead of a hand-typed 200-character string.
-    `tests/test_split_manifest.py` pins that it agrees with `ENCODER_SRC` on a real split, which is
-    what keeps it a convenience rather than a second answer.
-    """
-    if len(fold_valid) > MAX_FOLDS:
-        raise ValueError(f"n_folds={len(fold_valid)} exceeds {MAX_FOLDS}")
-    slots: list[str | None] = [None] * n_rows
-    for i in holdout:
-        slots[int(i)] = HOLDOUT_CHAR
-    for k, valid in enumerate(fold_valid):
-        for i in valid:
-            slots[int(i)] = str(k)
-    missing = [i for i, c in enumerate(slots) if c is None]
-    if missing:
-        raise ValueError(f"{len(missing)} rows are in no partition (first: {missing[0]})")
-    assignment = "".join(c for c in slots if c is not None)
-    return {
-        "version": SPLIT_MANIFEST_VERSION,
-        "encoding": ENCODING,
-        "fold_train": FOLD_TRAIN_RULE,
-        "strategy": strategy,
-        "seed": seed,
-        "target": target,
-        "n_rows": int(n_rows),
-        "n_folds": len(fold_valid),
-        "holdout_fraction": holdout_fraction,
-        "assignment": assignment,
-        "counts": {
-            "train": sum(1 for c in assignment if c != HOLDOUT_CHAR),
-            "holdout": sum(1 for c in assignment if c == HOLDOUT_CHAR),
-            "folds": [len(valid) for valid in fold_valid],
-        },
-        "assignment_sha256": hashlib.sha256(assignment.encode()).hexdigest(),
-    }

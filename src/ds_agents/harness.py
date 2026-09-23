@@ -37,6 +37,7 @@ from typing import Any
 
 from ds_agents.holdout import PreparedDataset
 from ds_agents.naming import Naming
+from ds_agents.provenance import REPO_ROOT
 from ds_agents.state import (
     DEFAULT_LOOP_CAP,
     ObjectionClosure,
@@ -45,7 +46,6 @@ from ds_agents.state import (
     ReviewerPrompt,
 )
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
 # Where results land unless a caller says otherwise. Named so the CLI can pass the same default
 # explicitly rather than keeping a second copy of the path that could drift from this one.
 RESULTS_DIR = REPO_ROOT / "evals" / "results"

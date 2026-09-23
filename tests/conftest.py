@@ -4,6 +4,7 @@ Node tests use these rather than `LocalTools`, so a node test fails for a reason
 A node test that shells out to a real subprocess is testing pandas.
 """
 
+import hashlib
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -11,9 +12,11 @@ from typing import Any
 import pytest
 from pydantic import BaseModel
 
+from ds_agents import split_manifest
+from ds_agents.cli import _run_state
 from ds_agents.fixtures import load_fixture
 from ds_agents.runnable import Runnable
-from ds_agents.state import ArtifactId
+from ds_agents.state import ArtifactId, PipelineState
 from ds_agents.tools.llm import Completion, StubModel, _payload
 from ds_agents.tools.protocol import ArtifactMeta, ArtifactPayload, RunResult, ToolError
 
@@ -154,6 +157,66 @@ def runnable(name: str) -> Runnable:
     empty answer key on purpose.
     """
     return Runnable.from_fixture(load_fixture(name))
+
+
+def _toy_state(model_name: str = "haiku", reviewer_model_name: str | None = None) -> PipelineState:
+    """The toy fixture's state, by name. Kept as its own function because several test modules
+    call it, and each would otherwise re-derive the same `Runnable`."""
+    return _run_state(
+        Runnable.from_fixture(load_fixture("toy")),
+        model_name=model_name,
+        reviewer_model_name=reviewer_model_name,
+    )
+
+
+def manifest_from(
+    *,
+    n_rows: int,
+    holdout: list[int],
+    fold_valid: list[list[int]],
+    strategy: str = "stratified",
+    seed: int = 0,
+    target: str = "y",
+    holdout_fraction: float = 0.2,
+) -> dict:
+    """A manifest built in the test process, FOR TEST FIXTURES ONLY.
+
+    This is not the implementation -- `split_manifest.ENCODER_SRC` is, and it is the only thing
+    the profiler runs. This exists so a unit-test fixture can say which rows are in which fold in
+    the same vocabulary the old explicit-list fixtures used, instead of a hand-typed
+    200-character string. `tests/test_split_manifest.py` pins that it agrees with `ENCODER_SRC` on
+    a real split, which is what keeps it a convenience rather than a second answer.
+    """
+    if len(fold_valid) > split_manifest.MAX_FOLDS:
+        raise ValueError(f"n_folds={len(fold_valid)} exceeds {split_manifest.MAX_FOLDS}")
+    slots: list[str | None] = [None] * n_rows
+    for i in holdout:
+        slots[int(i)] = split_manifest.HOLDOUT_CHAR
+    for k, valid in enumerate(fold_valid):
+        for i in valid:
+            slots[int(i)] = str(k)
+    missing = [i for i, c in enumerate(slots) if c is None]
+    if missing:
+        raise ValueError(f"{len(missing)} rows are in no partition (first: {missing[0]})")
+    assignment = "".join(c for c in slots if c is not None)
+    return {
+        "version": split_manifest.SPLIT_MANIFEST_VERSION,
+        "encoding": split_manifest.ENCODING,
+        "fold_train": split_manifest.FOLD_TRAIN_RULE,
+        "strategy": strategy,
+        "seed": seed,
+        "target": target,
+        "n_rows": int(n_rows),
+        "n_folds": len(fold_valid),
+        "holdout_fraction": holdout_fraction,
+        "assignment": assignment,
+        "counts": {
+            "train": sum(1 for c in assignment if c != split_manifest.HOLDOUT_CHAR),
+            "holdout": sum(1 for c in assignment if c == split_manifest.HOLDOUT_CHAR),
+            "folds": [len(valid) for valid in fold_valid],
+        },
+        "assignment_sha256": hashlib.sha256(assignment.encode()).hexdigest(),
+    }
 
 
 @pytest.fixture

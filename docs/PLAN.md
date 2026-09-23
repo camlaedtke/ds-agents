@@ -482,11 +482,9 @@ implication for this phase's remaining boxes is that an ablation's two arms must
 which they always did, and that a published number ages against a model nobody pinned, which
 nothing in the repo currently measures. See DECISIONS.md 2026-09-21, fourth and sixth entries.
 
-Scope note: `docs/explainers/pipeline-walkthrough.html` and `src/ds_agents/capture.py` were built
-on 2026-09-09 and are not on any list above. They are documentation rather than measurement -- a
-replay of five captured runs node by node -- but `capture.py` ships in `src/` under fast tests
-because the derivation reads `PipelineState`, and a rename there should break a test rather than
-blank a panel. See DECISIONS.md 2026-09-09.
+Scope note: `docs/explainers/pipeline-walkthrough.html` was built on 2026-09-09 and is not on any
+list above. It is documentation rather than measurement -- a replay of five captured runs node by
+node. See DECISIONS.md 2026-09-09.
 
 ## Out of scope unless the core is done and credits remain
 - non-tabular data, hyperparameter search, a web UI, TypeScript anything, Kubernetes anything

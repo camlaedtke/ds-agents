@@ -14,9 +14,8 @@ these tests from having to re-derive the whole toy run's behaviour.
 
 from pathlib import Path
 
-from conftest import QueuedModel
+from conftest import QueuedModel, _toy_state
 
-from ds_agents.cli import _toy_state
 from ds_agents.graph import run_pipeline
 from ds_agents.nodes.reviewer import DispositionUpdate, ProposedObjection, ReviewFinding
 from ds_agents.state import PipelineState

@@ -20,7 +20,6 @@ Nothing in `nodes/` imports this module, for the reason `fixtures.py` gives and 
 reaches *both* registries, so a node that imported it could read the answer key by name.
 """
 
-import hashlib
 from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -105,11 +104,6 @@ class Runnable(BaseModel):
             withheld_fraction=WITHHELD_FRACTION,
             source="benchmark",
         )
-
-    def sha256(self) -> str:
-        """The bytes on disk. Not `DatasetEntry.csv_sha256`, which is the upstream file -- what
-        belongs on a row is what this run actually read."""
-        return hashlib.sha256(self.csv_path.read_bytes()).hexdigest()
 
 
 def available() -> dict[str, DatasetSource]:

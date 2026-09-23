@@ -182,8 +182,9 @@ class TestResolutionFailures:
     def test_toy_state_is_the_fixture_state_of_the_toy_fixture(self):
         """`_toy_state` is a wrapper the older tests still import. Pin the two together so the
         duplication stays deliberate rather than drifting into two definitions of a toy run."""
-        from ds_agents.cli import _run_state, _toy_state
+        from ds_agents.cli import _run_state
         from ds_agents.runnable import Runnable
+        from tests.conftest import _toy_state
 
         wrapped = _toy_state("haiku")
         direct = _run_state(Runnable.from_fixture(load_fixture("toy")), model_name="haiku")

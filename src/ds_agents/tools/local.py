@@ -55,10 +55,6 @@ class LocalTools:
         return self.store.artifacts_dir
 
     @property
-    def data_dir(self) -> Path:
-        return self.store.data_dir
-
-    @property
     def metrics(self) -> list[tuple[str, str, float]]:
         return self.metric_log.records
 

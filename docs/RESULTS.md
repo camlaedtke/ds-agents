@@ -488,7 +488,7 @@ no guilty column cannot be scored at all.
 
 **On provenance, which is the one asymmetry in the results.** The 52 benchmark rows are uniform: 83
 columns and one commit, `70f7547`. `src/` has changed since that commit, and the changes are
-walkthrough capture tooling, a CLI flag, and three additive result columns. No node and no part of
+walkthrough tooling and three additive result columns. No node and no part of
 the grading path was touched, so the rows still describe the pipeline that runs today. The **145
 fixture rows carrying every leakage finding above are not uniform.** They were written by earlier
 code and carry 36 to 62 columns, missing 23 to 49 of the 83 the benchmark rows have. `commit` is

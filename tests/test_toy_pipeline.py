@@ -16,12 +16,12 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-from ds_agents.cli import _toy_state
 from ds_agents.graph import run_pipeline
 from ds_agents.state import PipelineState
 from ds_agents.tools.llm import StubModel
 from ds_agents.tools.local import LocalTools
 from ds_agents.tools.mcp_client import MCPTools, stdio_params
+from tests.conftest import _toy_state, manifest_from
 
 TOY = Path(__file__).parent / "fixtures" / "toy" / "toy.csv"
 
@@ -303,7 +303,7 @@ def test_a_lower_is_better_metric_reports_scores_in_natural_units(tmp_path: Path
     # second fold whose valid set is the other 30 rows makes fold 0's complement (its train) come
     # out to exactly rows[:30], reproducing the same partition the old explicit-list fixture named
     # directly. See split_manifest.py and the equivalent comment in tests/nodes/test_modeler.py.
-    split = split_manifest.manifest_from(
+    split = manifest_from(
         n_rows=60,
         holdout=rows[45:],
         fold_valid=[rows[30:45], rows[:30]],

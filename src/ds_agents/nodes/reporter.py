@@ -214,17 +214,6 @@ def _model_section(state: PipelineState) -> list[str]:
     return lines
 
 
-def _objection_status(state: PipelineState) -> dict[str, str]:
-    """Latest disposition per objection id, across every pass, defaulting to `not_reviewed`.
-
-    The fold itself lives on `PipelineState.latest_dispositions()`; this keeps the whole history
-    rather than filtering down to what is still open, because the report needs to show resolved
-    and withdrawn objections too, distinguishably from ones the reviewer never revisited. It was
-    a third copy of the ordering rule until 2026-08-28.
-    """
-    return dict(state.latest_dispositions())
-
-
 def _objection_row(o: Objection, status: str) -> list[Any]:
     return [
         o.id,
@@ -249,7 +238,11 @@ def _review_section(state: PipelineState) -> list[str]:
     if not state.config.reviewer_enabled:
         lines += ["_The reviewer was disabled for this run._", ""]
 
-    status = _objection_status(state)
+    # The fold itself lives on `PipelineState.latest_dispositions()`; this keeps the whole
+    # history rather than filtering down to what is still open, because the report needs to show
+    # resolved and withdrawn objections too, distinguishably from ones the reviewer never
+    # revisited.
+    status = dict(state.latest_dispositions())
     if not state.objections:
         lines += ["No objections raised.", ""]
     else:

@@ -212,14 +212,6 @@ because `--subset full`'s rows are `leakage_graded: false` 52/52.
 - **`docs/readme_numbers.py` is a kept tool, not a temporary one.** It picked the new results file
   up with no edit and independently reproduced this session's numbers, which is the argument for
   keeping it. Promote it into `src/ds_agents/` if it earns a CLI entry and tests.
-- **`capture_runs.py` runs the descriptive arm and the walkthrough HTML does not say so.** That is
-  what made a routine capture read as a contradiction of a published result for twelve days. A
-  caption naming the arm on each captured run would have cost one line.
-- **`capture._forced_drop_columns` duplicates `binding_objections`' predicate on purpose.** Until
-  `state.py` blesses a read-only path, two copies can drift.
-- **Untested paths in `capture.py`, accepted as nits:** the reviewer-step crashed-pass headline
-  fallback, `model_artifact` id recovery in `_cited_artifact_ids`, and `envelope()`'s
-  SystemExit-on-missing-fixture path.
 - **`top_importance_n80`'s trailing `return len(positive)` is an untested defensive branch.**
   Unreachable in exact arithmetic; it exists as a floating-point guard.
 - **`n_candidates_failed_to_fit` has never fired.** 0 on 52/52 benchmark rows and 0 on the 10 new

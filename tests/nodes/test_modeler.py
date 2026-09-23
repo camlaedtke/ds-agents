@@ -9,9 +9,8 @@ the state with nothing to check it against.
 import json
 
 import pytest
-from conftest import FakeTools, ScriptedModel
+from conftest import FakeTools, ScriptedModel, manifest_from
 
-from ds_agents import split_manifest
 from ds_agents.nodes.modeler import ModelChoice, modeler
 from ds_agents.state import Objection, PipelineState, RunConfig, TaskSpec
 from ds_agents.tools.protocol import ArtifactMeta, ArtifactPayload, RunResult, ToolError
@@ -28,7 +27,7 @@ FEATURE_CODE = (
 # validates on 128..159" with n_folds=1. A second fold whose valid set is exactly the other 128
 # rows makes fold 0's complement come out to 0..127, which is the same partition the old
 # explicit-list fixture named directly. See split_manifest.py.
-SPLIT_MANIFEST = split_manifest.manifest_from(
+SPLIT_MANIFEST = manifest_from(
     n_rows=200,
     holdout=list(range(160, 200)),
     fold_valid=[list(range(128, 160)), list(range(128))],
