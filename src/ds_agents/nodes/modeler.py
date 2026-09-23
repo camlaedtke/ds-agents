@@ -13,9 +13,9 @@ refit on the pinned train rows and scored on the agents' holdout, with permutati
 on that same holdout with the feature transform inside the estimator pipeline. The model's only
 judgement is which name to pick; `claimed_holdout_score` always comes from the snippet's own
 number, never from the model's rationale, or a model that hallucinates a score could get it onto
-the state. `CANDIDATE_SPECS` is module-level data (not buried in the snippet string) because
-Phase 4's harness refits `chosen_model.name` from it directly, and that refit is only reproducible
-if the recipe lives in exactly one place.
+the state. `CANDIDATE_SPECS` is module-level data (not buried in the snippet string) because the
+harness refits `chosen_model.name` from it directly, and that refit is only reproducible if the
+recipe lives in exactly one place.
 """
 
 import json
@@ -383,8 +383,7 @@ def modeler(state: PipelineState, *, tools: Tools, model: StructuredModel) -> di
         # A truncated manifest is a subset of the pinned split, and the snippet below cannot tell
         # the difference: it would fit and score on fewer rows than `split_artifact` says, and
         # `claimed_holdout_score` would be computed against a holdout that is not the holdout.
-        # `feature_eng` has the symmetric guard; this one was dead while an unbounded read was
-        # possible, and stopped being dead when `read_artifact` gained a default cap.
+        # `feature_eng` has the symmetric guard.
         return run.failure(
             "split manifest artifact was truncated; refusing to fit on a partial split",
             recoverable=False,

@@ -1,31 +1,23 @@
 """The independent number: the modeler's model, scored on rows it never saw.
 
-`chosen_model.claimed_holdout_score` is a claim. It is measured on `split_artifact`'s holdout,
-which the profiler drew, from a strategy intake chose, over the frame the agents were mounted --
-every part of it decided inside the graph. `verified_holdout_score` is the same model measured on
-the rows `holdout.prepare` carved out before the graph started. The signed difference between them
-is `holdout_claim_gap`, and it is the finding this half of the project exists to produce.
+`chosen_model.claimed_holdout_score` is measured on `split_artifact`'s holdout, which is decided
+entirely inside the graph. `verified_holdout_score` is the same model measured on the rows
+`holdout.prepare` carved out before the graph started. The signed difference is
+`holdout_claim_gap`, the finding this half of the project exists to produce.
 
-**No fitted model is persisted anywhere.** `ModelResult.model_artifact` has been declared and never
-written since Phase 1, so scoring the withheld rows means refitting. The recipe comes from
-`modeler.CANDIDATE_SPECS` with the same seed substitution the modeler used -- not from
-`ModelResult.params`, which is a flat merge across every pipeline step and is lossy by
-construction: `logistic_l2`'s `StandardScaler` contributes an empty dict and is invisible in it.
+**No fitted model is persisted anywhere**, so scoring the withheld rows means refitting. The
+recipe comes from `modeler.CANDIDATE_SPECS` with the same seed substitution the modeler used, not
+from `ModelResult.params`, which is a lossy flat merge across pipeline steps.
 
-**The refit is a claim too, so it gets a self-check.** Before the withheld rows are touched, the
-same pipeline is fit on `split["train"]` and scored on `split["holdout"]` -- the agents' own
-holdout -- and compared to what the modeler said it got there. That single comparison validates the
-whole chain at once: transform re-application, seed, positive-class resolution, scorer sign, split
-parsing. Without it, `verified_holdout_score` is a number computed on some rows. With it, it is the
-modeler's model measured on rows it never saw.
+**The refit is a claim too, so it gets a self-check**: before the withheld rows are touched, the
+same pipeline is fit on `split["train"]` and scored on `split["holdout"]`, then compared to what
+the modeler claimed there. That one comparison validates the whole chain at once -- transform
+re-application, seed, positive-class resolution, scorer sign, split parsing.
 
-**Where this runs.** In a sandbox, through its own `LocalTools` rooted under the run, never
-in-process: CLAUDE.md forbids in-process `exec` and the 2026-08-26 entry gives the reason. The
-grader is not an agent, so the transport is `local` even when the run used `mcp` -- MCP exists so
-agents get the standard surface, and a server subprocess per re-score is cost with no property
-attached. A `SandboxError` here is caught rather than propagated: in a node it propagates so a
-broken machine is not filed as an agent mistake, but here the run has already produced everything
-it will, and losing the row would drop exactly the rows a table needs.
+**Where this runs.** In a sandbox, through its own `LocalTools`, never in-process (see
+DECISIONS.md 2026-08-26). The grader is not an agent, so the transport is always `local` even when
+the run used `mcp`. A `SandboxError` here is caught rather than propagated: the run has already
+produced everything it will, and losing the row would drop exactly the rows a table needs.
 """
 
 import json
@@ -152,13 +144,12 @@ single_class = TASK_TYPE == "binary" and len(set(y_withheld.tolist())) < 2
 """Everything the grader's two snippets share, and the reason they share it rather than each
 carrying a copy.
 
-The positive class is resolved here, once. A copy-pasted second resolution that drifted would flip
-one score to `1 - auc` and leave the other alone, and the normalised number built from the two
-would then be comparing two different label mappings with nothing in the output to say so. Same
-argument for `encode`, for `keep`, and for which rows count as usable.
+The positive class, `encode`, `keep`, and which rows count as usable are all resolved here once --
+a copy-pasted second resolution that drifted would flip one score to `1 - auc` and leave the other
+alone, with nothing in the output to say so.
 
-Ends at `single_class`: everything above is a fact about the data, and everything below it in
-either body is a model.
+Ends at `single_class`: everything above is a fact about the data, everything below in either body
+is a model.
 """
 
 _RESCORE_BODY = '''
@@ -232,17 +223,15 @@ be pooled into one normalised distribution, and a reader holding a results file 
 commit. Bump it whenever `_RF` changes.
 """
 
-# OURS. Not AMLB's, and the difference is recorded rather than smoothed over. AMLB publishes the
-# CONVENTION -- normalise from a constant class-prior predictor to a tuned RandomForest -- but its
-# per-dataset numbers live in an object store at openml1.win.tue.nl behind a self-signed
-# certificate, so the grid cannot be re-fetched or re-verified from this repo. Every hyperparameter
-# below was therefore chosen here, which makes this the one number in the benchmark path that is
-# not traceable to something external, and it is labelled that way everywhere it is described.
+# OURS, not AMLB's. AMLB publishes the CONVENTION -- normalise from a constant class-prior
+# predictor to a tuned RandomForest -- but its per-dataset grid cannot be re-fetched or
+# re-verified from this repo, so every hyperparameter below was chosen here. This is the one
+# number in the benchmark path not traceable to something external, and it's labelled that way
+# everywhere it's described.
 #
-# Fixed, not tuned: a tuned baseline needs a search space and a validation protocol, and each of
-# those is another invented choice nobody can cite. `n_estimators=200` rather than the more usual
-# 500 is a COST decision and not a statistical one -- thirteen datasets up to 98k rows, and the
-# unit point is a yardstick rather than a competitor. `n_jobs=1` because the sandbox child owns its
+# Fixed, not tuned: a tuned baseline needs a search space and a validation protocol, each another
+# invented choice nobody can cite. `n_estimators=200` is a COST decision, not a statistical one --
+# the unit point is a yardstick, not a competitor. `n_jobs=1` because the sandbox child owns its
 # process group and is killed with `killpg`; joblib workers inside it make the timeout semantics
 # murky for no benefit here.
 _RF: dict[str, Any] = {
@@ -679,13 +668,9 @@ def apply(
 ) -> PipelineState:
     """Write the grader's result onto the state. Never appends a `PipelineError`.
 
-    The two durations are passed in rather than measured here because `apply` is handed outcomes
-    that were produced elsewhere; timing them at the call site is the only place that can see the
-    work. They stay `None` on the precondition path, where neither half ran at all -- `None` and
-    `0.0` are different claims and the row keeps them apart.
-
-    They are not on `RescoreOutcome` or `BaselineOutcome` because those are frozen records of what
-    was MEASURED, and how long a measurement took is not part of it.
+    The two durations are passed in rather than measured here, since `apply` is handed outcomes
+    produced elsewhere and only the call site can see the work. They stay `None` on the
+    precondition path, where neither half ran -- `None` and `0.0` are different claims.
     """
     update: dict[str, Any] = {
         "verified_holdout_score": outcome.verified_holdout_score,

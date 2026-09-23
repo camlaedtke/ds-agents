@@ -3,8 +3,8 @@
 Reads everything on `PipelineState` except `planted_leakage_columns`, `verified_holdout_score`,
 and the two baseline points. Writes `report_artifact` (plus `node_trace`, and `errors` on the one
 failure path). Tools: `write_artifact` only -- the report cites artifact IDs
-(`feature_code_artifact`, `importance_artifact`) rather than inlining their contents. No model call
-in Phase 1.
+(`feature_code_artifact`, `importance_artifact`) rather than inlining their contents. No model
+call.
 
 Two properties matter more than the prettiness of the markdown:
 
@@ -14,12 +14,11 @@ Two properties matter more than the prettiness of the markdown:
    from the results and every published table biases upward. Every section below guards on
    `None` rather than assuming an upstream node ran.
 2. This node must never render ground truth. `planted_leakage_columns`, `verified_holdout_score`,
-   and the baseline columns are harness-written answer keys that happen to be in scope because
-   the
+   and the baseline columns are harness-written answer keys that happen to be in scope because the
    node receives the whole state. In the real pipeline they are still `None` here (the harness
    fills them in after the graph ends), but nothing below reads them regardless -- writing them
-   into an artifact would leak the answer key into a file a Phase 5 single-generalist arm might
-   read through the artifact store.
+   into an artifact would leak the answer key into a file a single-generalist arm might read
+   through the artifact store.
 """
 
 from typing import Any
@@ -151,16 +150,14 @@ def _feature_section(state: PipelineState) -> list[str]:
 
 
 def _model_note(candidate: ModelResult) -> str:
-    # Two different facts that used to render as one string, because `ModelResult` had nowhere to
-    # put the first. `fit_error` is why the estimator could not be fit at all; empty `cv_scores`
-    # with no error is a fit that produced no score, which has a different cause.
+    # Two different facts, kept separate: `fit_error` is why the estimator could not be fit at
+    # all; empty `cv_scores` with no error is a fit that produced no score, a different cause.
     #
-    # Flattened and escaped BEFORE truncating, because this is the one cell in the report whose
+    # Flattened and escaped BEFORE truncating, since this is the one cell in the report whose
     # content comes from an exception rather than from a field this repo shapes. `_table` joins
-    # cells on `|` and `_fmt` escapes nothing, so a multi-line sklearn message -- a convergence
-    # warning or a shape mismatch, both routine -- would silently break the row it is rendered
-    # into. Truncation alone does not fix that: a newline inside the first 120 characters breaks
-    # the table just as thoroughly as one after them.
+    # cells on `|` and `_fmt` escapes nothing, so a multi-line sklearn message would silently
+    # break the row it renders into -- truncation alone doesn't fix that, since a newline inside
+    # the first 120 characters breaks the table just as thoroughly as one after them.
     if candidate.fit_error:
         flat = " ".join(candidate.fit_error.split()).replace("|", "\\|")
         return f"no successful fit: {flat[:MODEL_NOTE_LIMIT]}"

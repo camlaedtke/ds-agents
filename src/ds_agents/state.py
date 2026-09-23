@@ -125,52 +125,37 @@ ERROR_MESSAGE_LIMIT = 500
 
 ReviewVerdict = Literal["pending", "pass", "block", "exhausted"]
 
-# Which reviewer system prompt the run used. A run condition for the same reason `naming` is:
-# the reviewer's live miss is a confound between "cannot see the leak" and "was never asked which
-# column produced the score", and a reviewer number that does not say which prompt produced it
-# cannot separate them. `base` is the prompt every run before 2026-08-28 used, byte-identical.
+# Which reviewer system prompt the run used. A run condition: "cannot see the leak" and "was
+# never asked which column produced the score" are different failures, and a reviewer number that
+# doesn't record the prompt can't separate them.
 ReviewerPrompt = Literal["base", "which_column"]
 REVIEWER_PROMPTS: tuple[ReviewerPrompt, ...] = ("base", "which_column")
 
-# How the graph decides WHICH NODE ACTS on an objection. Not what the reviewer said: that is
-# `Objection.target_node`, which is recorded verbatim and never rewritten. `as_addressed` obeys it
-# and is what every run committed before 2026-08-28 did. `by_category` gives any objection in
-# COLUMN_SCOPED_CATEGORIES an effective target of `feature_eng` whatever the reviewer chose,
-# because a column is the only thing feature_eng can act on and the modeler has no column lever at
-# all -- every candidate is fit on the one transform feature_eng already froze. The evidence for
-# needing the condition at all: across the 27 rows carrying `route_sequence`, 0 of the 21 runs that
-# never routed to `feature_eng` remediated, against 3 of the 6 that did.
+# How the graph decides WHICH NODE ACTS on an objection, not what the reviewer said (that is
+# `Objection.target_node`, recorded verbatim and never rewritten). `as_addressed` obeys it.
+# `by_category` routes any COLUMN_SCOPED_CATEGORIES objection to `feature_eng` regardless of what
+# the reviewer chose, since a column is the only thing feature_eng can act on.
 ObjectionRouting = Literal["as_addressed", "by_category"]
 OBJECTION_ROUTINGS: tuple[ObjectionRouting, ...] = ("as_addressed", "by_category")
 
-# Whether the reviewer was told what "done" looks like. The observed failure, live on 2026-08-28:
-# across three diagnostic runs the reviewer dispositioned nothing `resolved`, and in the clearest
-# one the pipeline dropped both planted columns, the claimed roc_auc fell 0.986 -> 0.823, the
-# reviewer WROTE that the fall was consistent with removing leakage -- and held the objection open
-# anyway, because the columns "were never validated as non-leaking, only removed". That is an
-# unfalsifiable standard: a reviewer holding one can never let a run pass, so every run grinds to
-# the cap and `exhausted` stops being evidence that the fix did not land. `on` appends one rule
-# pointing at `final_features`, a field the reviewer is already shown.
+# Whether the reviewer was told what "done" looks like. Without it, a reviewer can hold an
+# objection open on an unfalsifiable standard (a column "never validated as non-leaking, only
+# removed") forever, so every run grinds to the cap. `on` appends one rule pointing at
+# `final_features`, a field the reviewer is already shown.
 #
-# Its own axis rather than a third `ReviewerPrompt` value, because the two rules are independent
-# conditions: bundling them would mean closure could never be measured without `which_column`
-# attached, and the two effects could never be attributed separately.
+# Its own axis rather than a third `ReviewerPrompt` value: bundling the two would mean closure
+# could never be measured independent of `which_column`.
 ObjectionClosure = Literal["off", "on"]
 OBJECTION_CLOSURES: tuple[ObjectionClosure, ...] = ("off", "on")
 
-# Which disposition RELEASES a column that an objection forced out of the matrix. Under
-# `resolved_or_withdrawn`, `binding_objections` collapses into `open_objections` exactly -- which is
-# what `feature_eng._forced_drops` read before 2026-08-28: a `resolved` objection stopped forcing
-# its drop, and the next return to that node, for any unrelated reason, put the leaked column back.
+# Which disposition RELEASES a column an objection forced out of the matrix. `withdrawn_only` is
+# the correct rule; `resolved_or_withdrawn` reproduces a defect where a `resolved` objection
+# stopped forcing its drop and the leaked column came back on the next unrelated return to
+# feature_eng.
 #
-# THE DEFAULT IS DELIBERATELY NOT THE OLD BEHAVIOUR, and this is the only axis on RunConfig of which
-# that is true. `naming`, `reviewer_prompt`, `objection_routing` and `objection_closure` all default
-# to the arm that reproduces every committed row byte for byte, because each of those is a real
-# design question with two defensible answers. This one is not: `resolved_or_withdrawn` is a defect,
-# and it is here only because the fix for it is the largest single effect measured in this project
-# (`leakage_remediated` 5/10 -> 9/10 across the code boundary at d5a9a28) and a same-commit control
-# is the only way to confirm that. It is a defect-reproduction switch for one pre-registered cell
-# and must never be the baseline of another arm. See DECISIONS.md 2026-08-28 (fifth entry).
+# The only RunConfig axis whose default is NOT the pre-fix behaviour: it exists only as a
+# same-commit control for one pre-registered cell, never as a general ablation lever. See
+# DECISIONS.md (2026-08-28, fifth entry).
 ForcedDropRelease = Literal["withdrawn_only", "resolved_or_withdrawn"]
 FORCED_DROP_RELEASES: tuple[ForcedDropRelease, ...] = ("withdrawn_only", "resolved_or_withdrawn")
 
@@ -188,10 +173,6 @@ class Contract(BaseModel):
         return cls.model_validate(_strip_computed(cls, data))
 
 
-# The one data seed in the project. Named rather than inlined because two things now read it and
-# they must agree: `RunConfig.random_seed`, which every node's snippet is handed, and
-# `holdout.prepare`, which carves the withheld rows before any node runs. A carve at one seed and a
-# split at another would not be wrong, but it would be two numbers where the file claims one.
 DatasetSource = Literal["fixture", "benchmark"]
 """Which registry a run's dataset came from.
 
@@ -217,16 +198,11 @@ RescoreStatus = Literal[
 ]
 """Why `verified_holdout_score` is or is not on this row.
 
-An enum rather than a bool, and a column rather than a bare null, for the reason `leakage_graded`
-exists: nine leakage columns used to read `None` for two unrelated reasons and a reader had to
-guess which. A null score can mean the dataset had no withheld holdout at all (every fixture row),
-that the graph produced no model to refit, or that the grader's sandbox died -- three facts with
-completely different consequences for a table. `refit_mismatch` is the one value that carries a
-score anyway: the number is kept because deleting it would hide the finding, and flagged because
-pooling it would launder a bug into a result.
+An enum rather than a bare null, so a reader doesn't have to guess whether a null score means no
+withheld holdout existed, no model was produced, or the sandbox died. `refit_mismatch` keeps the
+score but flags it, since pooling it would launder a bug into a result.
 
-Nothing here ever appends a `PipelineError`. `errored` means the RUN went wrong; overloading it
-with "the grader went wrong" is the defect NEXT.md already records against it.
+Never appends a `PipelineError`: `errored` means the RUN went wrong, not the grader.
 """
 
 BaselineStatus = Literal[
@@ -243,27 +219,18 @@ BaselineStatus = Literal[
 ]
 """Why `baseline_zero_score` and `baseline_unit_score` are or are not on this row.
 
-Its own enum rather than a widening of `RescoreStatus`, and this is the whole reason the baseline
-runs in its own process: the yardstick can fail without the measurement failing. A RandomForest
-that dies on a wide frame must not take `verified_holdout_score` with it, and if the two shared a
-status column there would be no way to say so. `unit_point_failed` is the value that exists for
-that case -- `baseline_zero_score` is KEPT on such a row, because the zero point was measured and
-throwing it away would hide the fact that the scale has a floor but no ceiling.
+Its own enum rather than a widening of `RescoreStatus`: the baseline runs in its own process so
+the yardstick can fail without the measurement failing. `unit_point_failed` keeps
+`baseline_zero_score` on the row, since the zero point was measured even when the unit point fit
+did not survive.
 
-`rescore_unavailable` is the coupling that does exist and is stated rather than hidden: the
-baseline is fit on the agents' `split["train"]` and scored on the same withheld rows, so almost
-every reason the re-scorer could not run is also a reason this could not. `baseline_detail` carries
-which `rescore_status` it was.
+`rescore_unavailable` states the one real coupling: the baseline is fit on the agents'
+`split["train"]` and scored on the same withheld rows, so most reasons the re-scorer can't run
+apply here too.
 
-Three things are deliberately NOT statuses. A degenerate scale -- the unit point level with or
-below the zero point -- stays `ok`, because both points really were measured and that is a finding
-about the dataset rather than a failure to measure; `baseline_normalised_score` returns `None` and
-the two raw columns show why. A planted leak leaves both raw scores on the row untouched: only the
-normalised column is suppressed, by the gate in `baseline_normalised_score`. And a scale that is
-real but NARROW is not a status either -- `numerai28_6` measured both points honestly 0.0101 apart
-and read 2.089 normalised, which is a fact about a near-chance dataset rather than a failure. That
-one is why `baseline_separation` exists: the span goes on the row so a reader can see what the
-normalised column was divided by, instead of a status flag asserting that they should not trust it.
+A degenerate or merely narrow scale is not a status -- both points were honestly measured either
+way. `baseline_separation` publishes the span so a reader can judge a narrow scale directly instead
+of trusting a flag.
 """
 
 TOP_IMPORTANCE_N80_THRESHOLD = 0.8
@@ -276,42 +243,35 @@ Named for the field it feeds so the two cannot drift apart silently -- `n80` in 
 TopImportanceStatus = Literal["ok", "no_importances", "no_positive_importance"]
 """Why `top_importance_share` and `top_importance_n80` are or are not on this row.
 
-Two different reasons a reviewer-shape summary can be missing, and the reason `leakage_graded`
-exists applies here too: a bare null does not say which. `no_importances` means `top_importances`
-itself is empty -- no candidate was chosen, or the modeling snippet produced nothing -- and there
-is no distribution to summarise at all. `no_positive_importance` means the list is non-empty but
-every mean importance in it is zero or negative: permutation importance can go negative when
-shuffling a column actually IMPROVES the score, and a set of columns that is entirely
-zero-or-negative has no positive importance mass for a rank-1 share to divide by, or for an
-80%-of-total threshold to sum toward. Both derived columns are `None` under either status; `ok` is
-the only value under which they carry a number.
+Two different reasons a summary can be missing. `no_importances` means `top_importances` itself
+is empty -- no candidate chosen, or modeling produced nothing. `no_positive_importance` means
+every mean importance is zero or negative -- permutation importance can go negative when
+shuffling a column improves the score -- leaving no positive mass to divide or sum toward. Both
+derived columns are `None` under either status.
 
-Computed over the same top `TOP_IMPORTANCES` (15) entries the reviewer is actually shown, not
-every column the modeler fit on -- `top_importances` is already truncated by the time it reaches
-`PipelineState`, and that truncation is the point: these two columns describe the shape of what
-the reviewer's prompt contains, not a property of a ranking nothing downstream ever sees.
+Computed over the same top `TOP_IMPORTANCES` (15) entries the reviewer is actually shown, since
+these two columns describe the shape of what the reviewer's prompt contains, not the full ranking.
 """
 
+# The one data seed in the project. `RunConfig.random_seed` and `holdout.prepare` (which carves
+# the withheld rows before any node runs) must both read this, or the file claims one seed while
+# two different numbers were actually used.
 DEFAULT_RANDOM_SEED = 20260822
 
 DEFAULT_LOOP_CAP = 3
 """How many review passes a run gets before the router gives up and reports.
 
-Here rather than in FOUR places: `RunConfig`, `cli._run_once`, `harness.EvalCell`, and
-`--loop-cap`'s own argparse default, which also wrote the literal into its help text. NEXT.md
-recorded three; the argparse one was found while consolidating the other three. A sweep that
-changed one silently left the rest on the old value -- and `loop_cap` is a recorded condition on
-every results row, so a disagreement between them would not show up as a crash but as two cells
-that claim the same condition and did not run under it.
+Named once and shared by `RunConfig`, `cli._run_once`, `harness.EvalCell` and the `--loop-cap`
+argparse default, since `loop_cap` is a recorded condition on every results row and a duplicated
+literal is a chance for a cell to silently claim a condition it did not run under.
 """
 
 BASELINE_MIN_SEPARATION = 1e-9
 """The smallest `unit - zero` that `baseline_normalised_score` will divide by.
 
-A divide-by-zero guard and nothing more. It is deliberately NOT a power criterion: deciding whether
-a separation is large enough to be meaningful needs `n_withheld_rows` and belongs in `evaldiff`,
-and a computed field that silently withholds numbers on a statistical test is worse than one that
-publishes an unstable number next to the two inputs a reader can check it against.
+A divide-by-zero guard, not a power criterion -- deciding whether a separation is large enough to
+be meaningful needs `n_withheld_rows` and belongs in `evaldiff`. Publishing an unstable number
+beside its two raw inputs is preferred to silently withholding it.
 """
 
 
@@ -337,60 +297,50 @@ class RunConfig(Contract):
     )
     naming: Literal["descriptive", "opaque"] = Field(
         default="descriptive",
-        description="Whether the agents saw the fixture's real column names or `var_NN`. The "
-        "profiler nominates leakage largely off column names, so this sets trap difficulty more "
-        "than any statistical property of the data does. It lives here, on the frozen config, "
-        "because a leakage number without it is not interpretable and the two arms are otherwise "
-        "byte-identical -- see `ds_agents.naming`.",
+        description="Whether the agents saw the fixture's real column names or `var_NN`. Sets "
+        "trap difficulty, since the profiler nominates leakage largely off column names. On the "
+        "frozen config because a leakage number without it is not interpretable. See "
+        "`ds_agents.naming`.",
     )
     reviewer_prompt: ReviewerPrompt = Field(
         default="base",
-        description="Which system prompt the reviewer ran under: `base`, byte-identical to every "
-        "run before 2026-08-28, or `which_column`, which appends one rule asking the reviewer to "
-        "name the column that explains an implausible score. On the frozen config because a "
-        "reviewer-model comparison that does not record the prompt is confounded by it.",
+        description="Which system prompt the reviewer ran under: `base`, or `which_column`, which "
+        "appends one rule asking the reviewer to name the column that explains an implausible "
+        "score. On the frozen config because a reviewer comparison that doesn't record the prompt "
+        "is confounded by it.",
     )
     objection_routing: ObjectionRouting = Field(
         default="as_addressed",
         description="Who the graph asks to act on an objection: `as_addressed`, obeying the "
-        "reviewer's own `target_node` exactly as every run before 2026-08-28 did, or "
-        "`by_category`, which routes a column-scoped objection to `feature_eng` regardless of "
-        "what the reviewer wrote. On the frozen config for the same reason `naming` and "
-        "`reviewer_prompt` are: the two arms remediate at different rates and a row that did not "
-        "carry this would be averaged with rows from the other. Note it changes what `feature_eng` "
-        "and `modeler` are SHOWN as well as where the run goes -- both read "
-        "`open_objections(target)` -- so it is not a pure edge change.",
+        "reviewer's own `target_node`, or `by_category`, which routes a column-scoped objection "
+        "to `feature_eng` regardless of what the reviewer wrote. On the frozen config since the "
+        "two arms remediate at different rates. Changes what `feature_eng` and `modeler` are "
+        "SHOWN, not just where the run goes.",
     )
     objection_closure: ObjectionClosure = Field(
         default="off",
         description="Whether the reviewer was given a termination condition it can check: `off`, "
-        "byte-identical to every prompt before 2026-08-28, or `on`, which appends one rule saying "
-        "an objection about a column is answered when that column is absent from "
-        "`final_features`. On the frozen config for the same reason every other condition is, and "
-        "with a specific hazard of its own: a prompt that buys termination by teaching the "
-        "reviewer to say 'fixed' is worse than no prompt, so `objections_falsely_resolved` is on "
-        "the results row beside it.",
+        "or `on`, which appends one rule saying an objection about a column is answered when that "
+        "column is absent from `final_features`. Hazard: a prompt that buys termination by "
+        "teaching the reviewer to say 'fixed' is worse than none, so `objections_falsely_resolved` "
+        "is tracked beside it.",
     )
     forced_drop_release: ForcedDropRelease = Field(
         default="withdrawn_only",
-        description="Which disposition releases a column that an objection forced out of the "
-        "matrix: `withdrawn_only`, the correct rule and the default, or `resolved_or_withdrawn`, "
-        "which reproduces the pre-2026-08-28 defect where a `resolved` objection stopped forcing "
-        "its drop and the next return to feature_eng put the leaked column back. THE ONLY "
-        "condition here whose default is not the old behaviour, because the old behaviour is a bug "
-        "and not a design alternative. Defect reproduction only: it exists so the largest effect "
-        "in the project has a same-commit control, it is not a general ablation lever, and no "
-        "other arm may use it.",
+        description="Which disposition releases a column an objection forced out of the matrix: "
+        "`withdrawn_only`, the correct rule and the default, or `resolved_or_withdrawn`, which "
+        "reproduces a defect where a `resolved` objection stopped forcing its drop and the leaked "
+        "column came back on the next unrelated return to feature_eng. Defect reproduction only, "
+        "for a same-commit control -- not a general ablation lever.",
     )
     holdout_fraction: float = Field(
         default=0.0,
         ge=0.0,
         lt=0.5,
         description="How much of the dataset was withheld from the agents before the graph "
-        "started. "
-        "0.0 for every fixture, by decision rather than omission -- carving rows out of a 200-row "
-        "toy would change what the agents see and make all 145 committed rows incomparable, for no "
-        "gain, because planted leakage is a column and a random holdout still contains it.",
+        "started. 0.0 for every fixture by decision: planted leakage is a column, so a random "
+        "holdout still contains it, and carving rows out would only make committed rows "
+        "incomparable.",
     )
     dataset_source: DatasetSource = Field(
         default="fixture",
@@ -409,13 +359,10 @@ class RunConfig(Contract):
     )
     commit: str | None = Field(
         default=None,
-        description="Short git hash of the tree that produced this run, `-dirty` suffixed when the "
-        "working tree was not clean. Null when nothing recorded it. On the frozen config for the "
-        "same reason `naming` and `loop_cap` are: which code ran is a run condition no other field "
-        "carries, and every code boundary this project has had to reason about so far -- the "
-        "sticky-drop fix, the naming ablation's schema change, the block-retry -- had to be "
-        "reconstructed from commit messages after the fact. A dirty tree groups as its own cell in "
-        "`eval-diff`, which is correct: a dirty run is not reproducible.",
+        description="Short git hash of the tree that produced this run, `-dirty` suffixed when "
+        "the working tree was not clean. Null when nothing recorded it. Which code ran is a run "
+        "condition no other field carries. A dirty tree groups as its own cell in `eval-diff`, "
+        "correctly: a dirty run is not reproducible.",
     )
 
 
@@ -495,10 +442,8 @@ class ModelResult(Contract):
     fit_error: str | None = Field(
         default=None,
         description="Why this candidate could not be fit at all, as 'Type: message'. NOT "
-        "derivable from cv_scores: an empty list also means fit-but-scored-nothing, which is a "
-        "different event with a different cause. The snippet records this per candidate and the "
-        "node also raises a PipelineError for it -- the field is a companion to that error, not "
-        "a replacement, because a candidate that will not fit is a genuine anomaly.",
+        "derivable from cv_scores: an empty list also means fit-but-scored-nothing, a different "
+        "event with a different cause. A companion to the node's PipelineError, not a replacement.",
     )
     model_artifact: ArtifactId | None = None
 
@@ -619,9 +564,8 @@ class PipelineState(Contract):
     feature_summary: str | None = None
     final_features: list[str] | None = Field(
         default=None,
-        description="Columns that survived into the matrix the model was fit on. This is what "
-        "makes 'the reviewer caught it' and 'the leak was removed' two different numbers. SOURCE "
-        "column names, never one-hot expansions: `results_row()` intersects this with "
+        description="Columns that survived into the matrix the model was fit on. SOURCE column "
+        "names, never one-hot expansions: `results_row()` intersects this with "
         "`planted_leakage_columns`, which are source names, so storing 'colour=red' here would "
         "empty the intersection and score every run as remediated.",
     )
@@ -629,11 +573,9 @@ class PipelineState(Contract):
     skipped_high_cardinality: list[str] = Field(
         default_factory=list,
         description="Columns dropped because they have more distinct values than the one-hot "
-        "encoder will expand. A recorded DECISION, not a `PipelineError`: it is what the node is "
-        "supposed to do at that cardinality, nothing downstream is degraded by it, and recording "
-        "it in `errors` made `errored` -- which is `bool(self.errors)` -- read true on four "
-        "completely healthy `adult` runs, so any table using `errored` as a rate scored that "
-        "cell as a 100% failure. SOURCE column names, and a subset of `dropped_features`.",
+        "encoder will expand. A recorded DECISION, not a `PipelineError`: counting it in `errors` "
+        "made `errored` read true on completely healthy runs. SOURCE column names, and a subset "
+        "of `dropped_features`.",
     )
 
     # modeler
@@ -692,9 +634,8 @@ class PipelineState(Contract):
         default_factory=dict,
         description="Handoff, not history: the reviewer's raw disposition-per-objection-id from "
         "its most recent pass, overwritten wholesale on every pass (deliberately not "
-        "`operator.add`). The router is the sole reader -- it folds this into the `ReviewPass` it "
-        "mints and never clears it. `ReviewPass.dispositions` is the durable record; this field is "
-        "just how the disposition gets from the reviewer to the router within one invocation.",
+        "`operator.add`). The router folds this into the `ReviewPass` it mints; "
+        "`ReviewPass.dispositions` is the durable record.",
     )
     review_verdict: ReviewVerdict = Field(
         default="pending",
@@ -772,9 +713,7 @@ class PipelineState(Contract):
     baseline_seconds: float | None = Field(
         default=None,
         description="Wall seconds the two baseline points spent, separate from rescore_seconds "
-        "because they are a separate process with a separate timeout and can fail alone. This is "
-        "the term the yardstick's wall cost lives in -- 0.2s at credit_g's shape and about a "
-        "minute at the manifest's largest -- and that nothing recorded until 2026-09-01.",
+        "because they are a separate process with a separate timeout and can fail alone.",
     )
 
     # bookkeeping
@@ -824,19 +763,12 @@ class PipelineState(Contract):
         """How long the baseline scale is: `unit - zero`, sign-corrected so bigger is always wider.
 
         The denominator `baseline_normalised_score` divides by, published as its own column so a
-        reader can see it. Without it a normalised score is uncheckable: `numerai28_6` returns
-        2.089 not because the run was extraordinary but because the two reference points are
-        0.0101 apart on a near-chance dataset, and nothing on the row said so.
+        reader can see it -- a normalised score is otherwise uncheckable when the scale itself is
+        narrow (see `BASELINE_MIN_SEPARATION`).
 
-        Deliberately NOT a suppression and NOT a `baseline_status` value. `BASELINE_MIN_SEPARATION`
-        already records why -- withholding a number on a statistical test is worse than publishing
-        an unstable one beside the inputs a reader can check it against -- and a status value would
-        overload a column whose job is why the two raw scores ARE or ARE NOT here, when on a narrow
-        scale both were measured perfectly well.
-
-        Not suppressed on a planted leak either, unlike the normalised score. The two raw points
-        stay on such a row because they are honest measurements, and the distance between them is a
-        property of the dataset and the recipe rather than of the run's grade.
+        Not suppressed on a planted leak, unlike the normalised score: the two raw points are
+        honest measurements and the distance between them is a property of the dataset, not the
+        run's grade.
         """
         if self.spec is None:
             return None
@@ -852,43 +784,32 @@ class PipelineState(Contract):
 
         `(verified - zero) / (unit - zero)`. 0.0 means the run did no better than predicting the
         class prior; 1.0 means it matched the RandomForest; above 1.0 means it beat it. This is
-        AMLB's normalisation and NOT a ratio -- `verified / baseline` disagrees with it about what
-        1.0 means, and on a metric whose floor is not zero it is meaningless. r2 is the example
-        that settles it: a predict-the-train-mean baseline scores slightly NEGATIVE on a holdout,
-        not 0.0, because the r2 denominator is the holdout's variance about its own mean.
+        AMLB's normalisation and NOT a ratio -- `verified / baseline` disagrees about what 1.0
+        means, and is meaningless on a metric whose floor isn't zero (e.g. r2).
 
-        Written as a difference the formula is already direction-invariant -- for a lower-is-better
-        metric both differences flip sign together and the quotient is unchanged -- so the explicit
-        branch below buys only the sign guard, and `tests/test_state.py` pins that the two forms
-        agree so a future simplification cannot reintroduce the bug the ratio had.
+        Written as a difference so the formula is already direction-invariant; `tests/test_state.py`
+        pins that the ratio form would agree, so a future simplification can't reintroduce that bug.
 
-        Never raises, for the reason the retired `score_ratio` gave: a computed field that raises
-        takes `model_dump_json()` and `results_row()` down with it, and ARCHITECTURE.md requires a
-        row for every dataset even on hard failure.
+        Never raises: a computed field that raises takes `model_dump_json()` and `results_row()`
+        down with it, and every dataset needs a row even on hard failure.
         """
         if self.verified_holdout_score is None or self.spec is None:
             return None
-        # Implied by `baseline_separation` being None below, and restated because the numerator
-        # subtracts `baseline_zero_score` directly and a reader should not have to follow a
-        # property into another property to see that it cannot be None there.
+        # Restated rather than left implicit in `baseline_separation` below, so a reader doesn't
+        # have to follow a property into another property to see the numerator can't be None here.
         if self.baseline_zero_score is None or self.baseline_unit_score is None:
             return None
-        # SUPPRESSED ON A PLANTED LEAK, and this is the pooling hazard's whole resolution. The
-        # baseline is fit on every raw column, including the trap the pipeline was supposed to
-        # drop. On a labelled dataset a pipeline that correctly drops it therefore scores BELOW a
-        # baseline that kept it -- so a value under 1 would be evidence of GOOD behaviour there and
-        # of BAD behaviour on an unlabelled dataset, the same number meaning opposite things with
-        # nothing on the row to separate them. Gated exactly as the nine leakage columns are gated
-        # on `graded_for_leakage`, for the mirror-image reason. Both raw points STAY on the row:
-        # they are honest measurements, and a reader who knows about the trap can use them.
+        # SUPPRESSED ON A PLANTED LEAK. The baseline is fit on every raw column, including the
+        # trap the pipeline was supposed to drop, so a pipeline that correctly drops it scores
+        # BELOW a baseline that kept it -- the same value under 1 means opposite things on a
+        # labelled vs. unlabelled dataset. Gated like the leakage columns; raw points stay on the
+        # row since they are honest measurements.
         if self.planted_leakage_columns:
             return None
         separation = self.baseline_separation
-        # `<=`, not `abs(...) < eps`. A NEGATIVE separation means the RandomForest did worse than
-        # the class prior, which inverts the scale: a run that beat the prior would come out
-        # negative and a reader would take that for "worse than the prior". Reachable rather than
-        # hypothetical -- f1 with a minority positive class has a zero point of exactly 0.0, and a
-        # dataset with no signal at all separates the two points by noise in either direction.
+        # `<=`, not `abs(...) < eps`: a NEGATIVE separation means the RandomForest did worse than
+        # the class prior, which inverts the scale, and this is reachable (f1 with a minority
+        # positive class has a zero point of exactly 0.0).
         if separation is None or separation <= BASELINE_MIN_SEPARATION:
             return None
         numerator = self.verified_holdout_score - self.baseline_zero_score
@@ -979,23 +900,13 @@ class PipelineState(Contract):
         """
         leak_categories = frozenset({"leakage", "contamination"})
         planted = set(self.planted_leakage_columns)
-        # `planted` is a COMPLETE ground-truth list or it is nothing at all.
+        # `planted` is a COMPLETE ground-truth list or it is nothing at all. A fixture has one by
+        # construction; an external benchmark dataset has none (`manifest.yaml` marks it
+        # `leakage_labelled: false`). Left ungated, an empty `planted` would make the leakage
+        # columns below assert "no leak" and "reviewer missed it" with no evidence for either, so
+        # they report `None` instead and `evaldiff` excludes `None` from its denominators.
         #
-        # On a fixture it is complete by construction -- `generate.py` writes the manifest at the
-        # moment it writes the CSV. On an external benchmark dataset there is no such list, and
-        # nobody has enumerated the leaks in `adult` or `nomao`; `evals/datasets/manifest.yaml`
-        # says so per entry with `leakage_labelled: false`. Left ungated, an empty `planted` makes
-        # eight columns below assert two things this project has no evidence for at once: that the
-        # dataset contains no leak, and that the reviewer failed to find it. `leakage_caught` would
-        # read False, and every column the reviewer flagged would be counted a false alarm.
-        #
-        # So they report `None` -- not measured -- exactly as `leakage_remediated` and the three
-        # `*_recall` columns already do on the same reasoning. `evaldiff` excludes `None` metrics
-        # from its denominators, so a dataset with no answer key drops out of a rate rather than
-        # dragging it down.
-        #
-        # Deliberately derived rather than stored: a `leakage_ground_truth` field on the state
-        # would be a second source of truth for something `planted` already says.
+        # Derived rather than stored, so there is no second source of truth for what `planted` says.
         graded_for_leakage = bool(planted)
         flagged = self.objected_columns(leak_categories)
         standing = self.objected_columns(leak_categories, standing_only=True)
@@ -1009,21 +920,17 @@ class PipelineState(Contract):
         if planted and self.final_features:
             remediated = not (planted & set(self.final_features))
 
-        # The profiler's nominations, scored separately from the reviewer's objections. They are
-        # different questions with different answers: on the trap fixtures the profiler nominates
-        # the planted column and the reviewer, shown the same run, says nothing. Folding them into
-        # one `leakage_caught` would report a team that catches leaks while hiding which member
-        # caught it, and the name-transparency arm moves this number and not the reviewer's.
+        # The profiler's nominations, scored separately from the reviewer's objections: they can
+        # disagree (profiler flags a column, reviewer says nothing), and folding them into one
+        # `leakage_caught` would hide which team member actually caught it.
         nominated: set[str] | None = None
         if self.profile is not None:
             nominated = {c.column for c in self.profile.leakage_candidates}
 
         # The reviewer's columns over ALL column-scoped categories, `implausible_importance`
-        # included. `flagged` above stays a two-category number on purpose: the committed
-        # naming-ablation rows were written under that definition, and widening it would silently
-        # redefine the only published results file. `None` when no pass completed: the
-        # reviewer-off arm still runs the node as a no-op, and a 0.0 recall from a reviewer that
-        # never looked would average in with one that looked and declined.
+        # included -- `flagged` above stays a two-category number so it doesn't redefine the
+        # published results file. `None` when no pass completed, so a reviewer-off no-op run
+        # doesn't average in as a 0.0 recall against one that looked and declined.
         objected: set[str] | None = None
         if self.config.reviewer_enabled and self.review_passes:
             objected = self.objected_columns()
@@ -1032,15 +939,10 @@ class PipelineState(Contract):
             by_category[objection.category] += 1
 
         # Why a run that caught the trap still shipped it. `objections_by_category` says what the
-        # reviewer objected to; these four say whether anything could act on it. They are derived
-        # here rather than recorded by the nodes for the same reason every other outcome is: a node
-        # that wrote down its own remediation would be a node reporting its own score.
-        # `target_node` is read RAW here, deliberately, and `effective_target` is only used to
-        # count the disagreements. This is what makes `objection_routing="by_category"` a recorded
-        # condition rather than a thumb on the scale: the reviewer's own dispatch judgement stays
-        # measurable in the arm that overrides it, and `objections_rerouted` says how often the
-        # graph disagreed with it. Reading the effective target into this counter instead would
-        # delete the only evidence that the override was ever needed.
+        # reviewer objected to; these four say whether anything could act on it. `target_node` is
+        # read RAW here, deliberately -- `effective_target` is only used to count disagreements --
+        # so the reviewer's own dispatch judgement stays measurable even in the arm that overrides
+        # it, and `objections_rerouted` says how often the graph disagreed with it.
         by_target_node = dict.fromkeys(get_args(RoutableNode), 0)
         rerouted = 0
         for objection in self.objections:
@@ -1048,29 +950,22 @@ class PipelineState(Contract):
             if self.effective_target(objection) != objection.target_node:
                 rerouted += 1
 
-        # The caught-versus-remediated gap as a list of names. A column-scoped objection whose
-        # column is still in the matrix at the end was raised and not acted on, whatever the
-        # verdict says. `None` in two cases, and both are the same distinction the fields above
-        # draw: when feature_eng produced nothing (an empty matrix is not a clean one, matching
-        # `leakage_remediated`), and when no reviewer pass completed (the reviewer-off arm runs
-        # the node as a no-op, and an empty list there would read as "objected and remediated"
-        # rather than "never objected", which is the opposite finding).
+        # The caught-versus-remediated gap as a list of names: a column-scoped objection whose
+        # column is still in the matrix at the end was raised and not acted on. `None` when
+        # feature_eng produced nothing, or when no reviewer pass completed -- same reasoning as
+        # `leakage_remediated` and `objected` above.
         unremediated: list[str] | None = None
         if objected is not None and self.final_features:
             unremediated = sorted(objected & set(self.final_features))
 
         # Closure, as something measured rather than hoped for. `objections_open_at_end` says how
-        # many were never closed; these say HOW the closed ones closed and whether the closure was
-        # honest. `resolved` and `withdrawn` are split because they are opposite claims about the
-        # reviewer -- one says the fix landed, the other says the objection was wrong -- and
-        # because `binding_objections` now acts on that difference, so a row that conflated them
-        # could not be used to reason about what feature_eng actually dropped. No committed row
-        # before 2026-08-28 splits them, which is why the sticky-drop screen of those rows could
-        # not be resolved past "at risk".
+        # many were never closed; these say HOW the closed ones closed. `resolved` and `withdrawn`
+        # are split because they are opposite claims about the reviewer -- one says the fix landed,
+        # the other says the objection was wrong -- and `binding_objections` acts on that
+        # difference.
         #
         # Gated exactly as `reviewer_nominated` and friends are. A reviewer that ran and closed
-        # nothing is a REAL 0, not a `None`: that 0 is the entire pre-closure finding, and
-        # collapsing it into "not measured" would delete the control's result.
+        # nothing is a REAL 0, not a `None`.
         latest = self.latest_dispositions()
         by_id = {o.id: o for o in self.objections}
         n_resolved: int | None = None
@@ -1079,17 +974,13 @@ class PipelineState(Contract):
         if self.config.reviewer_enabled and self.review_passes:
             n_resolved = sum(1 for d in latest.values() if d == "resolved")
             n_withdrawn = sum(1 for d in latest.values() if d == "withdrawn")
-            # The failure mode `objection_closure="on"` creates and nothing before it could: an
-            # objection marked `resolved` whose column is still in the matrix. A prompt that buys
-            # termination by teaching the reviewer to say "fixed" is worse than no prompt, and
-            # this is the only column that would catch it. Counted over objections rather than
-            # columns because the unit being scored is the reviewer's judgement act, and over
-            # column-scoped categories only -- a `resolved` `overfit` objection names no column
-            # and cannot be checked this way.
+            # Catches the failure mode `objection_closure="on"` creates: an objection marked
+            # `resolved` whose column is still in the matrix. Counted over objections, not
+            # columns, since the unit being scored is the reviewer's judgement act, and only over
+            # column-scoped categories -- a `resolved` `overfit` objection names no column.
             #
-            # `None` on an empty matrix for the same reason as `leakage_remediated`: an empty
-            # matrix contains no column, so every resolution would score honest, and the
-            # inflation would flatter the arm under test.
+            # `None` on an empty matrix, same reasoning as `leakage_remediated`: every resolution
+            # would score honest there, flattering the arm under test.
             if self.final_features:
                 final = set(self.final_features)
                 falsely_resolved = sum(
@@ -1137,19 +1028,16 @@ class PipelineState(Contract):
             "verified_holdout_score": self.verified_holdout_score,
             "holdout_claim_gap": gap,
             "metric": self.spec.metric if self.spec else None,
-            # Why the two columns above do or do not carry a number, and what the number was
-            # measured on. `rescore_status` is to the score what `leakage_graded` is to the nine
-            # leakage columns: the reason a null is null, said outright instead of inferred.
+            # Why the two columns above do or do not carry a number: the reason a null is null,
+            # said outright instead of inferred.
             "rescore_status": self.rescore_status,
             "rescore_detail": self.rescore_detail[:ERROR_MESSAGE_LIMIT],
             "refit_claim_gap": self.refit_claim_gap,
             "n_withheld_rows": self.n_withheld_rows,
             # The scale `verified_holdout_score` is read against: a constant class-prior
-            # predictor at 0 and a RandomForest at 1, both fit on the agents' train split and
-            # scored on the same withheld rows. Published as two raw points plus the
-            # normalisation, rather than as one `baseline_score`, because a single number cannot
-            # say which end of the scale it is -- and because the normalised column is suppressed
-            # on a dataset with a planted leak while the two raw points are not.
+            # predictor at 0 and a RandomForest at 1. Published as two raw points plus the
+            # normalisation, not one `baseline_score`, since the normalised column is suppressed
+            # on a planted leak while the two raw points are not.
             "baseline_zero_score": self.baseline_zero_score,
             "baseline_unit_score": self.baseline_unit_score,
             "baseline_normalised_score": self.baseline_normalised_score,
@@ -1157,14 +1045,9 @@ class PipelineState(Contract):
             "baseline_status": self.baseline_status,
             "baseline_detail": self.baseline_detail[:ERROR_MESSAGE_LIMIT],
             "baseline_recipe": self.baseline_recipe,
-            # leakage, as a set comparison against ground truth
-            #
-            # Stated outright rather than left to be inferred from nine separate `None`s. This is
-            # the same defect docs/NEXT.md already records against `errored`, whose two meanings
-            # can only be separated by string-matching an error prefix -- a column whose absence
-            # of a value carries information needs a companion that says so. A reader pooling
-            # `leakage_caught` across a results file can filter on this instead of guessing why a
-            # null is null.
+            # leakage, as a set comparison against ground truth. `leakage_graded` states outright
+            # why a null is null, so a reader pooling `leakage_caught` can filter on it instead of
+            # guessing.
             "leakage_graded": graded_for_leakage,
             "leakage_planted": sorted(planted),
             "leakage_flagged": sorted(flagged),
@@ -1178,36 +1061,23 @@ class PipelineState(Contract):
             "false_alarm": len(false_positives) if graded_for_leakage else None,
             "leakage_flagged_standing": sorted(standing),
             "false_alarm_standing": len(standing - planted) if graded_for_leakage else None,
-            # How wide the matrix the run actually shipped is. `leakage_remediated` is None on an
-            # EMPTY matrix but True on a one-column one, so without this a run that remediated by
-            # force-dropping most of the fixture is indistinguishable from one that dropped only
-            # the trap. `objection_routing="by_category"` turns a reviewer false positive into a
-            # real dropped column, so this is the price tag on that arm.
+            # How wide the matrix the run actually shipped is. Without it, a run that remediated
+            # by force-dropping most of the fixture is indistinguishable from one that dropped
+            # only the trap.
             "n_final_features": (
                 len(self.final_features) if self.final_features is not None else None
             ),
-            # A routine decision, on the row as a count rather than as an error. `feature_summary`
-            # names the columns but never reaches a results row, so before this column the only
-            # trace a skip left in `evals/results/` was the `errored` flag it wrongly set.
+            # A routine decision, on the row as a count rather than as an error.
             "n_skipped_high_cardinality": len(self.skipped_high_cardinality),
-            # Which candidates could not be fit at all, as a count and its names beside the
-            # denominator that makes them readable -- the `false_alarm` / `false_alarm_columns`
-            # shape. Before these columns the fact reached `evals/results/` only as prose inside
-            # `errors`, so "an estimator would not fit" and any of the other twenty-one
-            # `PipelineError` sites were the same `errored: true`.
-            #
-            # `n_candidates` is not decoration. A run halted at `feature_eng` writes a row with no
-            # candidates at all, and without the denominator its zero numerator reads as "every
-            # candidate fit fine" on a run where none was ever attempted. Third time this repo has
-            # paid for that rule, after `leakage_graded` and `baseline_separation`.
+            # Which candidates could not be fit at all, as a count and names beside the
+            # denominator that makes them readable. `n_candidates` is not decoration: without it a
+            # run halted before any candidate was attempted reads as "every candidate fit fine".
             "n_candidates": len(self.candidates),
             "n_candidates_failed_to_fit": sum(1 for c in self.candidates if c.fit_error),
             "candidates_failed_to_fit": sorted(c.name for c in self.candidates if c.fit_error),
             # The shape of the permutation-importance distribution the REVIEWER is shown --
             # `top_importances`, truncated to `TOP_IMPORTANCES`, is the only per-column evidence
-            # in its prompt, and until these two columns existed nothing on the row summarised it.
-            # `top_importance_status` says why the other two are null when they are, exactly as
-            # `leakage_graded`, `rescore_status` and `baseline_status` do for theirs.
+            # in its prompt. `top_importance_status` says why the other two are null when they are.
             "top_importance_share": self.top_importance_share,
             "top_importance_n80": self.top_importance_n80,
             "top_importance_status": self.top_importance_status,
@@ -1256,33 +1126,23 @@ class PipelineState(Contract):
             "new_objections_per_pass": [len(rp.new_objection_ids) for rp in passes],
             # cost and reliability
             "wall_seconds": self.wall_seconds,
-            # The grader's own wall cost, which `wall_seconds` cannot see: `ended_at` is stamped
-            # when the graph returns and the re-scorer and baseline run after it. Two columns and
-            # not one, because they are two processes with two timeouts that fail independently.
+            # The grader's own wall cost, which `wall_seconds` cannot see: the re-scorer and
+            # baseline run after the graph returns, as two processes with independent timeouts.
             "rescore_seconds": self.rescore_seconds,
             "baseline_seconds": self.baseline_seconds,
-            # Which node the wall time actually went to. `NodeEvent` has carried this since Phase 1
-            # but only `ds-agents run` ever printed it -- the harness calls `_run_once` directly, so
-            # every committed row discarded it. Summed over repeats, because a node that ran three
-            # times cost three times.
+            # Which node the wall time actually went to, summed over repeats, since a node that
+            # ran three times cost three times.
             "node_seconds": self.node_seconds,
             "cost_usd": self.total_cost_usd,
             "errored": bool(self.errors),
             # WHICH node's refusal ended the run, or None if none did. `errored` is one bit and
-            # cannot separate "a column name could not be associated with the target" from "this
-            # dataset cannot be run at all" -- and until the graph learned to halt, the second case
-            # produced a row that read like a measurement. Non-null is the greppable "this cell did
-            # not run" flag. Fourth instance of the same fix, after `leakage_graded`,
-            # `rescore_status` and `baseline_status`: a status column beside the number rather than
-            # a row silently withheld, because the reporter exists precisely so the hardest
-            # datasets still land in the results file.
+            # can't separate a recoverable node error from "this dataset cannot be run at all";
+            # non-null here is the greppable "this cell did not run" flag.
             "halted_at": self.halted_at(),
-            # What went wrong, not just that something did. `errored` is one bit for every failure
-            # mode a run has, which is why the zero-objection `block` bug was invisible in the
-            # committed results files and had to be counted by hand off `route_sequence`. Always a
-            # list: zero errors is a real 0, and `None` would be indistinguishable from a row
-            # written before this column existed. Truncated here and not in the state, because the
-            # row is a line someone greps and a client's exception repr can carry an HTTP body.
+            # What went wrong, not just that something did. Always a list: zero errors is a real
+            # 0, and `None` would be indistinguishable from a row written before this column
+            # existed. Truncated here, not in the state, since a client's exception repr can carry
+            # an HTTP body.
             "errors": [
                 {
                     "node": e.node,
@@ -1297,12 +1157,9 @@ class PipelineState(Contract):
         """Which node this run will actually route the objection to.
 
         The one place `config.objection_routing` is applied. `Objection.target_node` is never
-        rewritten -- the reviewer's own dispatch choice stays on the record, so
-        `objections_by_target_node` keeps measuring its judgement even in the arm that overrides
-        it. That is what makes `by_category` a recorded condition rather than a thumb on the
-        scale, and it means the raw field and this method answer different questions: callers
-        asking who ACTS come through `open_objections(target)`, which is this method's only
-        caller inside the graph. `results_row` asks it directly, once, to count the disagreements.
+        rewritten, so the reviewer's own dispatch choice stays on the record and
+        `objections_by_target_node` keeps measuring it even in the arm that overrides it. Callers
+        asking who ACTS come through `open_objections(target)`.
         """
         if (
             self.config.objection_routing == "by_category"
@@ -1314,14 +1171,11 @@ class PipelineState(Contract):
     def open_objections(self, target_node: RoutableNode | None = None) -> list[Objection]:
         """Objections whose LAST disposition is not resolved or withdrawn.
 
-        Order matters and a set union loses it. The router can send a run back to feature_eng, so
-        an objection resolved in pass 2 and marked `still_open` again in pass 3 is reachable; a
-        union over all passes would report it closed and the run would end with
-        `objections_open_at_end: 0` while the problem is still there.
+        Order matters and a set union loses it: an objection resolved in pass 2 and marked
+        `still_open` again in pass 3 is reachable, and a union over all passes would report it
+        closed when the problem is still there.
 
-        `target_node` here means who ACTS, not who the reviewer addressed. Under
-        `config.objection_routing="by_category"` a column-scoped objection answers to
-        `feature_eng` whatever the reviewer wrote; see `effective_target`.
+        `target_node` here means who ACTS, not who the reviewer addressed -- see `effective_target`.
         """
         closed = {
             oid
@@ -1342,19 +1196,14 @@ class PipelineState(Contract):
     ) -> list[Objection]:
         """`open_objections`, asked against the state as it is ABOUT to be.
 
-        `open_objections` folds only the dispositions already recorded in `review_passes`. Two
-        callers need the question asked one step earlier, against objections this pass is adding
-        and dispositions this pass has not handed to the router yet: the router, deciding where a
-        `block` goes, and the reviewer, deciding whether its own `block` has anything to act on at
-        all. One implementation, because two would eventually disagree about whether a `block` is
-        actionable -- and a reviewer and a router disagreeing about that is the zero-objection
-        `block` bug's whole shape.
+        `open_objections` folds only dispositions already recorded in `review_passes`. Two callers
+        need the question asked one step earlier, against objections this pass is adding and
+        dispositions not yet handed to the router: the router, deciding where a `block` goes, and
+        the reviewer, deciding whether its own `block` has anything to act on. One implementation,
+        so the two can never disagree about whether a `block` is actionable.
 
-        `dispositions` can only CLOSE here, never reopen: it is applied by removing the ids it
-        resolves or withdraws from the already-open set, rather than by overwriting
-        `latest_dispositions`. That mirrors `_route_for_block`'s pre-2026-08-29 arithmetic exactly,
-        and it is unreachable to do otherwise through the graph -- the reviewer keys its
-        dispositions to ids that were open when the pass began.
+        `dispositions` can only CLOSE here, never reopen: applied by removing the ids it resolves
+        or withdraws from the already-open set, never by overwriting `latest_dispositions`.
         """
         closing_now = {oid for oid, d in dispositions.items() if d in {"resolved", "withdrawn"}}
         pending = [o for o in self.open_objections(target_node) if o.id not in closing_now]
@@ -1369,10 +1218,8 @@ class PipelineState(Contract):
     def latest_dispositions(self) -> dict[str, Disposition]:
         """Last-write-wins disposition per objection id, folded in iteration order.
 
-        One implementation of the fold, because there were three: this, `open_objections`, and
-        `reporter._objection_status`. The ordering is load-bearing rather than incidental -- see
-        `open_objections` for the pass-2-resolved, pass-3-reopened case that a set union gets
-        wrong -- so three copies were three chances to get it wrong differently.
+        Shared by `open_objections` and the reporter. The ordering matters: see `open_objections`
+        for the pass-2-resolved, pass-3-reopened case a set union gets wrong.
         """
         latest: dict[str, Disposition] = {}
         for review in sorted(self.review_passes, key=lambda r: r.iteration):
@@ -1382,39 +1229,29 @@ class PipelineState(Contract):
     def binding_objections(self, target_node: RoutableNode | None = None) -> list[Objection]:
         """Objections whose named columns must stay OUT of the feature matrix.
 
-        NOT the same question as `open_objections`, and the difference is the whole point of the
-        method existing. `open_objections` answers "what is still being complained about" and
-        closes on `resolved` OR `withdrawn`. This answers "what must stay dropped" and releases
-        only on `withdrawn`.
+        NOT the same question as `open_objections`. `open_objections` answers "what is still being
+        complained about" and closes on `resolved` OR `withdrawn`. This answers "what must stay
+        dropped" and releases only on `withdrawn`.
 
-        The reason is that on this pipeline the fix for a column objection IS the drop.
-        `feature_eng._forced_drops` recomputes from scratch on every entry, so while it read
-        `open_objections`, an objection the reviewer marked `resolved` stopped forcing its drop and
-        the next return to that node -- for any unrelated reason -- silently put the leaked column
-        back in the matrix. `resolved` would have un-fixed itself. `withdrawn` is the reviewer
-        saying it was never a problem, which is the opposite claim, and it is the only route back
-        for a false positive: `objection_routing="by_category"` dropped a legitimate strong feature
-        in 2 of 10 runs, and without a release that mistake would be permanent for the rest of the
-        run. `not_reviewed` binds, for the same reason REVIEWER_SYSTEM forbids silence-as-approval.
+        On this pipeline the fix for a column objection IS the drop, and `feature_eng._forced_drops`
+        recomputes from scratch on every entry -- so if a `resolved` objection released its column,
+        the next unrelated return to that node would silently put a leaked column back.
+        `withdrawn` is the reviewer saying it was never a problem, the opposite claim, and the only
+        route back for a false positive. `not_reviewed` binds, for the same reason silence is never
+        treated as approval.
 
-        This has exactly ONE caller in the graph, `feature_eng._forced_drops`, and that is the
-        invariant to check before adding a second. The router's `_route_for_block` and the
-        reviewer's own `_user_message` must keep asking `open_objections`: a resolved objection
-        that still routed the run upstream would loop to the cap on every run and make `exhausted`
-        structurally guaranteed, and one still shown to the reviewer would be re-adjudicated
-        forever. Either would destroy the signal the closure arm exists to make honest.
+        Exactly ONE caller in the graph, `feature_eng._forced_drops` -- check that invariant before
+        adding a second. The router and the reviewer's own prompt must keep asking
+        `open_objections`: a resolved objection that still routed the run upstream would loop to
+        the cap on every run.
 
-        `target_node` means who ACTS, resolved through `effective_target`, so this inherits
+        `target_node` means who ACTS, resolved through `effective_target`, inheriting
         `config.objection_routing` rather than becoming a second answer to that question.
 
-        `config.forced_drop_release` is read HERE AND NOWHERE ELSE. It is not a design fork: the
-        default `withdrawn_only` is the rule described above, and `resolved_or_withdrawn` makes this
-        method exactly `open_objections` again -- the pre-2026-08-28 predicate, reproduced so the
-        effect of fixing it has a same-commit control. That equality is pinned by
-        `test_the_unsticky_arm_is_exactly_open_objections_again` rather than asserted here, and the
-        single-caller invariant above is enforced by
-        `test_binding_objections_has_exactly_one_caller_in_the_graph` rather than left to this
-        docstring. See DECISIONS.md 2026-08-28 (fifth entry).
+        `config.forced_drop_release` is read HERE AND NOWHERE ELSE. `resolved_or_withdrawn` makes
+        this method exactly `open_objections` again -- the pre-fix predicate, reproduced as a
+        same-commit control (`test_the_unsticky_arm_is_exactly_open_objections_again`). See
+        DECISIONS.md (2026-08-28, fifth entry).
         """
         releasing: set[Disposition] = (
             {"withdrawn"}
@@ -1434,22 +1271,18 @@ class PipelineState(Contract):
     def placeholder_models(self) -> list[str]:
         """Model names in the trace that are placeholders rather than a real client.
 
-        `StubModel` answers intake from column-name convention and nominates zero leakage
-        candidates by design. A results row built from those events would look like a working
-        pipeline that found nothing, which is indistinguishable in a table from a real reviewer
-        that missed the leak. The harness calls this and refuses the row; see
-        `publishable()`.
+        `StubModel` nominates zero leakage candidates by design, so a row built from its events
+        would look like a real reviewer that missed the leak. The harness calls this and refuses
+        the row; see `publishable()`.
         """
         return sorted({e.model for e in self.node_trace if e.model in PLACEHOLDER_MODEL_NAMES})
 
     def fatal_errors(self) -> list[PipelineError]:
         """Errors a node marked `recoverable=False`, in the order they were raised.
 
-        `errors` uses an `operator.add` reducer, so the first fatal error is on the state for the
-        rest of the run and a halted run can never un-halt. That is correct by the definition of
-        `recoverable=False` -- the node said nothing downstream can produce a trustworthy result --
-        but it is a property of the reducer rather than of this method, so it is written down here
-        rather than left to be inferred.
+        `errors` uses an `operator.add` reducer, so the first fatal error stays on the state for
+        the rest of the run and a halted run can never un-halt -- correct, since
+        `recoverable=False` means the node said nothing downstream can be trusted.
         """
         return [e for e in self.errors if not e.recoverable]
 

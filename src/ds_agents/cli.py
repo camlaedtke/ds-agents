@@ -64,27 +64,18 @@ def _run_state(
 ) -> PipelineState:
     """The starting state for one run of `runnable` under one naming condition.
 
-    Takes a `Runnable` rather than a `Fixture` so a manifest dataset can reach a run at all,
-    and takes it as one object rather than as loose fields for the reason the star below
-    exists: `planted_columns` travelling separately from the dataset it describes is how a
-    run gets graded against the wrong answer key. The empty list a benchmark dataset carries
-    is not special-cased here -- `results_row()` reads the emptiness and returns `None` from
-    every leakage rate rather than scoring one.
+    Takes a `Runnable` rather than a `Fixture` so a manifest dataset can reach a run at all, and
+    as one object rather than loose fields, since `planted_columns` travelling separately from
+    the dataset it describes is how a run gets graded against the wrong answer key.
 
-    Everything after `runnable` is keyword-only. Every parameter here is a run condition, they are
-    mostly strings, and `_run_once` passed all of them positionally: one transposition would have
-    published a run under the wrong arm's label with nothing to catch it, because every value is
-    individually valid and `RunConfig` is frozen at construction. The parking lot carried this as
-    a hazard for two sessions; the star is the fix.
+    Everything after `runnable` is keyword-only: every parameter is a run condition and mostly a
+    string, so a positional transposition would publish a run under the wrong arm's label with
+    nothing to catch it.
 
-    The rename map is derived here from `naming` rather than passed in alongside it. An earlier
-    version took both and let the caller supply them, which meant `naming="opaque"` with an empty
-    map was constructible: the config would claim the opaque arm while the ground truth still
-    carried the fixture's real column names, every objection would be compared against columns that
-    do not exist in that arm's data, and the arm would score a silent zero. That is precisely the
-    failure this whole change exists to prevent, so the two cannot be separate arguments.
-    `rename_map` is pure and reads one line of the CSV, and its determinism is pinned by test, so
-    deriving it twice costs nothing and cannot disagree with what `materialize` wrote.
+    The rename map is derived here from `naming` rather than passed in alongside it, so
+    `naming="opaque"` with a stale or empty map can't be constructed -- that combination would
+    claim the opaque arm while the ground truth still carried real column names, and every
+    objection would compare against columns absent from that arm's data.
     """
     rename = rename_map(runnable, naming)
     # Derived from the SAME object the agents were mounted on, not recomputed from `runnable`.
@@ -97,65 +88,47 @@ def _run_state(
         )
     return PipelineState(
         config=RunConfig(
-            # Which column names the agents saw. Same reason as `reviewer_model` below: the two
-            # naming arms run over byte-identical rows, so a row that did not carry this would be
-            # indistinguishable from a row in the other arm.
+            # Which column names the agents saw. The two naming arms run over byte-identical
+            # rows, so a row that didn't carry this would be indistinguishable from the other arm.
             naming=naming,
-            # Recorded, not decorative. `results_row()` reports `reviewer_model` straight off this
-            # object, so a config that says "haiku" while --model sonnet ran would publish a
-            # Sonnet-everywhere run under a Haiku label and silently corrupt the ablation table.
-            # ARCHITECTURE.md's rule is that a row is self-describing from the state alone.
+            # `results_row()` reports `reviewer_model` straight off this object, so a config that
+            # says "haiku" while --model sonnet ran would silently corrupt the ablation table.
             default_model=model_name,
             reviewer_model=reviewer_model_name or model_name,
-            # Same rule again: the two prompt arms are byte-identical except for one appended
-            # bullet in the reviewer's system prompt, so an unrecorded prompt would confound
-            # every reviewer-model number written after it existed.
+            # The two prompt arms differ by one appended bullet in the reviewer's system prompt;
+            # an unrecorded prompt would confound every reviewer-model number after it existed.
             reviewer_prompt=reviewer_prompt,
-            # Set at construction because `RunConfig` is frozen, and recorded for the same reason
-            # every other condition is: the cap decides how many chances feature_eng gets to act
-            # on an objection, so two rows written under different caps are not comparable and
-            # must not be averaged by anyone who has forgotten which was which.
+            # The cap decides how many chances feature_eng gets to act on an objection, so rows
+            # under different caps are not comparable.
             loop_cap=loop_cap,
-            # Recorded for the same reason as everything above it, and with a sharper edge: the
-            # two arms differ in whether a column-scoped objection can be acted on at all, so
-            # their remediation rates are not comparable and averaging them would report a
-            # capability the `as_addressed` arm does not have.
+            # The two arms differ in whether a column-scoped objection can be acted on at all, so
+            # their remediation rates are not comparable.
             objection_routing=objection_routing,
-            # Recorded because the arm's whole claim is about the reviewer's behaviour, and a
-            # row that did not carry it would average a reviewer that was told what done
-            # looks like with one that was not.
+            # The arm's whole claim is about the reviewer's behaviour, so a row that didn't carry
+            # this would average a reviewer told what "done" looks like with one that wasn't.
             objection_closure=objection_closure,
-            # Recorded, and the one condition here whose default is NOT the pre-2026-08-28
-            # behaviour: `resolved_or_withdrawn` reproduces a defect rather than offering a second
-            # defensible design. The two arms differ in whether a resolved objection's column can
-            # come back into the matrix, so their remediation rates are not comparable and
-            # averaging them would report a capability the control arm does not have.
+            # The one condition whose default is NOT the pre-fix behaviour: `resolved_or_withdrawn`
+            # reproduces a defect, not a second design. See DECISIONS.md (2026-08-28, fifth entry).
             forced_drop_release=forced_drop_release,
             # Which tree ran. Not a condition anyone sets, but the only field that can tell two
-            # rows apart when the difference between them is a bug fix rather than a flag -- which
-            # is every unconditional change this project has made, the block-retry included.
+            # rows apart when the difference between them is a bug fix rather than a flag.
             commit=commit,
             # What the agents were actually shown: how much was held back, which registry it came
-            # from, and the hash of the exact bytes. Without the first, a benchmark row and a
-            # fixture row look like the same kind of measurement; without the third, two rows
-            # under one `dataset_id` that saw different files are indistinguishable.
+            # from, and the hash of the exact bytes actually mounted.
             holdout_fraction=prepared.withheld_fraction if prepared else 0.0,
             dataset_source=runnable.source,
             dataset_hash=prepared.agent_sha256 if prepared else None,
         ),
         dataset_id=runnable.dataset_id,
         # No `spec`: naming the target is intake's job, and pre-filling it here would skip the
-        # node under test. The description is what a person would actually say.
+        # node under test.
         task_description=runnable.task_description,
         # Ground truth, written at construction so a bare run can grade itself. Nodes never set
-        # this; the reviewer must find the leak without being told where it is. Renamed to match
-        # what the agents were actually shown -- without the map applied here, `results_row()`
-        # would compare objections against names that do not exist in the opaque arm's data and
-        # every opaque run would score a silent zero.
+        # this. Renamed to match what the agents were actually shown, or `results_row()` would
+        # compare objections against names absent from the opaque arm's data.
         planted_leakage_columns=apply_rename(runnable.planted_columns, rename),
         # Recorded at construction so a run that never reaches the grader still says how many rows
-        # were held back from it. `rescore.apply` overwrites it with what was actually scored,
-        # which is smaller wherever a withheld row had no label.
+        # were held back. `rescore.apply` overwrites it with what was actually scored.
         n_withheld_rows=prepared.n_withheld_rows if prepared else None,
     )
 
@@ -286,17 +259,12 @@ def cmd_run(args: argparse.Namespace) -> int:
 
     exit_code = 0
     width = len(str(args.repeat - 1))
-    # Once, before the first run, not once per run: `--results` makes the tree dirty by writing to
-    # it, so a per-run read would record run 0 at `<hash>` and every later run at `<hash>-dirty`
-    # and split one cell in two. See `_run_once`.
+    # Once, before the first run, not once per run: `--results` dirties the tree by writing to
+    # it, so a per-run read would split one cell into `<hash>` and `<hash>-dirty`. See `_run_once`.
     commit = git_commit()
     for index in range(args.repeat):
-        # One artifact store per run, because the store is per-run: a shared root would let run 2
-        # read run 1's artifact ids, which is the one way these repetitions could stop being
-        # independent.
-        # Always its own directory, even at `--repeat 1`. The grader writes under the run root
-        # too, and a run root that is sometimes the invocation root is a second layout for the
-        # containment test to have to know about.
+        # Its own directory even at `--repeat 1`, since a shared root would let run 2 read run 1's
+        # artifact ids and the repetitions would stop being independent.
         run_root = root / f"run-{index:0{width}d}"
         if args.repeat > 1:
             print(f"\n=== run {index + 1} of {args.repeat} ===", file=sys.stderr)
@@ -341,36 +309,28 @@ def _run_once(
     """One pipeline run, start to finish. Extracted so `--repeat` is a loop and not a second path.
 
     `prepared` rather than `runnable.csv_path`: the agents see a materialised copy with a
-    rewritten header under `--naming opaque`, and on a benchmark dataset they see a copy with 20%
-    of the rows removed as well. Nothing below this line knows either -- both happen above the
-    tools boundary, which is why no node, tool or MCP change was needed for either of them.
+    rewritten header under `--naming opaque`, and on a benchmark dataset a copy with rows removed
+    too. Nothing below this line knows either -- both happen above the tools boundary.
 
-    The grader runs here rather than in the caller, after `run_pipeline` returns and before the
-    run's tools close, because `read_inputs` needs the run's own store and nothing else does. Its
-    result is written onto the state with `rescore.apply`, which never appends a `PipelineError`:
-    `errored` means the run went wrong, and a grader that could not grade is a different fact.
+    The grader runs here, after `run_pipeline` returns and before the run's tools close, because
+    `read_inputs` needs the run's own store. Its result is written onto the state with
+    `rescore.apply`, which never appends a `PipelineError`: a grader that couldn't grade is a
+    different fact from the run going wrong.
 
-    Takes keywords rather than the `argparse.Namespace` it used to, so the harness can call it
-    without inventing a fake namespace. `conditions` is forwarded straight to `_run_state`,
-    whose parameters are keyword-only -- the transposition guard that star exists for survives the
-    hop, and the two callers cannot drift into two different ideas of what a run condition is.
+    Takes keywords so the harness can call it without inventing a fake `argparse.Namespace`.
+    `conditions` is forwarded straight to `_run_state`, whose parameters are keyword-only, so the
+    transposition guard survives the hop.
 
-    `commit` is a required keyword rather than a `git_commit()` call in the body, and it has no
-    default, because the default was wrong in a way only a multi-run invocation could show. Reading
-    provenance per run meant every run after the first saw a tree that the harness had itself
-    dirtied by writing the results file, so run 0 recorded `<hash>` and runs 1..N recorded
-    `<hash>-dirty`. Since `commit` is one of `evaldiff.CONDITION_FIELDS`, that split a single cell
-    into two, which is the one thing the field exists to prevent. Callers snapshot it once before
-    the first run: provenance describes the tree that produced the INVOCATION, and this is the same
-    once-per-invocation rule `_live_run` already follows for `materialize`. `None` stays a
-    legitimate value (git missing, not a checkout), which is why there is no sentinel default.
+    `commit` is a required keyword with no default, since reading provenance per run would let a
+    later run in the same invocation see a tree the harness had itself dirtied by writing the
+    results file, splitting one cell into two under `evaldiff.CONDITION_FIELDS`. Callers snapshot
+    it once before the first run. `None` stays a legitimate value (git missing), so there is no
+    sentinel default.
     """
     tools = _select_tools(transport, root, prepared.agent_csv, runnable.dataset_id)
     state = _run_state(runnable, prepared=prepared, commit=commit, **conditions)
-    # Said out loud for the same reason the StubModel warning is: this arm reproduces a known
-    # defect, and a run that produced numbers under it without anyone noticing would be worse than
-    # no run. A stderr line reads nothing any node reads, so the condition still has exactly one
-    # application site -- the release set in `PipelineState.binding_objections`.
+    # Said out loud: this arm reproduces a known defect, and numbers produced under it without
+    # anyone noticing would be worse than no run.
     if state.config.forced_drop_release != "withdrawn_only":
         print(
             f"WARNING: --forced-drop-release {state.config.forced_drop_release} reproduces a known "
@@ -397,25 +357,21 @@ def _run_once(
         # Read while the run's store is still open; there is nothing to read it from afterwards.
         inputs = rescore.read_inputs(state, tools)
     finally:
-        # Releases this run's claim on the tools. Under `local` that leaves the shared sandbox
-        # worker running, which is the point of sharing it -- it exits with this process. Under
-        # `mcp` it disconnects the session and the server subprocess, and its worker, exit with it.
+        # Releases this run's claim on the tools. Under `local` the shared sandbox worker keeps
+        # running and exits with this process; under `mcp` this disconnects the session and its
+        # server subprocess.
         tools.close()
 
-    # Grading is two independent measurements, in two sandboxes, in this order. The re-scorer
-    # produces the number; the baseline produces the scale it is read against, and is given the
-    # re-scorer's outcome because there is no scale to place a number on when there is no number.
-    # A baseline failure never reaches the score -- see `rescore.BaselineStatus`.
+    # Grading is two independent measurements: the re-scorer produces the number, the baseline
+    # produces the scale it's read against, and a baseline failure never reaches the score -- see
+    # `rescore.BaselineStatus`.
     if isinstance(inputs, rescore.RescoreOutcome):
-        # No feature code or no split. Neither the re-scorer nor the baseline can run, and neither
-        # touches a sandbox to establish it; the call shape stays uniform so `baseline_status` is
-        # written on every row rather than only on the rows that got that far. Both durations stay
-        # None: nothing ran, which is not the same claim as "ran in no time".
+        # No feature code or no split. Neither can run, and neither touches a sandbox to establish
+        # that; the call shape stays uniform so `baseline_status` is written on every row.
         return rescore.apply(state, inputs, rescore.baseline_precondition(prepared, inputs))
-    # Timed here rather than inside either function, because this is the only place that sees both
-    # halves and neither of them is allowed to raise. `wall_seconds` stops when the graph returns,
-    # so without these two numbers the grader's cost is invisible on the row -- which is how a
-    # 72s-on-higgs baseline could hide behind a 4s run-to-run latency spread.
+    # Timed here, not inside either function, since this is the only place that sees both halves
+    # and neither is allowed to raise. `wall_seconds` stops when the graph returns, so without
+    # these two numbers the grader's own cost is invisible on the row.
     started = time.perf_counter()
     outcome = rescore.rescore(state, prepared, inputs, root=root / "rescore")
     rescored_at = time.perf_counter()
@@ -435,15 +391,13 @@ def _append_results_row(
 ) -> bool:
     """One JSONL line per run, behind the gate the harness and `--results` both apply.
 
-    `publishable()` is checked here and not by the caller because this is the only place a number
-    leaves a run and lands in a file someone will later average. A stub run refused at this line is
-    the difference between a results file and a file that looks like one. Returns whether it wrote,
-    so the harness can count refusals -- a refused row changes a cell's denominator.
+    `publishable()` is checked here, not by the caller, since this is the only place a number
+    leaves a run and lands in a file someone will later average. Returns whether it wrote, so the
+    harness can count refusals -- a refused row still changes a cell's denominator.
 
-    `extra` carries the harness's write-time annotations (`cell`, `replicate`, ...), which are facts
-    about the sampling design of an invocation rather than about what the run did. Everything that
-    describes the RUN comes from `results_row()` off the frozen config, where no node could have
-    read it and nothing outside the run can disagree with it.
+    `extra` carries the harness's write-time annotations (`cell`, `replicate`, ...), facts about
+    the sampling design of an invocation rather than about what the run did. Everything describing
+    the RUN comes from `results_row()` off the frozen config.
     """
     publishable, reason = state.publishable()
     if not publishable:
@@ -459,9 +413,8 @@ def _append_results_row(
 def _print_summary(state: PipelineState, root: Path) -> None:
     """What the run produced, and whether it may be published.
 
-    The publishable line is the whole point of printing a summary: it is the same gate the Phase 4
-    harness applies, shown on every manual run so a placeholder run is obvious before anyone
-    quotes a number off it.
+    The publishable line is the whole point of printing a summary: the same gate the harness
+    applies, shown on every manual run so a placeholder run is obvious before anyone quotes it.
     """
     print("\nresult", file=sys.stderr)
     if state.chosen_model:
@@ -495,15 +448,12 @@ def _print_summary(state: PipelineState, root: Path) -> None:
 
 
 def cmd_eval(args: argparse.Namespace) -> int:
-    """The benchmark harness. Imports are deferred to the call for a real reason: `harness` imports
-    `_run_once` and `_append_results_row` from this module, so a top-level import here would be a
-    cycle. The clean fix is a `runner.py` holding the pieces both need; it is logged in DECISIONS
-    as the refactor to take when it earns its keep, rather than churning three test modules today.
+    """The benchmark harness. Imports are deferred to the call: `harness` imports `_run_once` and
+    `_append_results_row` from this module, so a top-level import here would be a cycle.
     """
     from ds_agents.harness import RESULTS_DIR, run_eval
 
-    # Caught here beside `cmd_run`'s `--repeat` and `--loop-cap` checks, and for the same reason: a
-    # zero here produces an empty plan and a bare "0 rows written", which reads like the harness
+    # A zero here produces an empty plan and a bare "0 rows written", which reads like the harness
     # failed rather than like the flag was wrong.
     for flag, value in (("--replicates", args.replicates), ("--n", args.n)):
         if value < 1:
@@ -686,36 +636,34 @@ def _build_parser() -> argparse.ArgumentParser:
         type=int,
         default=DEFAULT_LOOP_CAP,
         help=f"how many completed reviewer passes a run may have (default: {DEFAULT_LOOP_CAP}). "
-        "The cap permits "
-        "N passes and N-1 returns upstream; a block at the cap becomes the `exhausted` verdict, "
-        "never a pass. This is the Phase 5 loop-cap ablation lever.",
+        "The cap permits N passes and N-1 returns upstream; a block at the cap becomes the "
+        "`exhausted` verdict, never a pass. This is the loop-cap ablation lever.",
     )
     run.add_argument(
         "--objection-routing",
         default="as_addressed",
         choices=OBJECTION_ROUTINGS,
-        help="who acts on an objection: as the reviewer addressed it (default, and what every run "
-        "before 2026-08-28 did), or by_category, which sends a column-scoped objection to "
-        "feature_eng whatever the reviewer chose. This is the objection-routing ablation.",
+        help="who acts on an objection: as the reviewer addressed it (default), or by_category, "
+        "which sends a column-scoped objection to feature_eng whatever the reviewer chose. This "
+        "is the objection-routing ablation.",
     )
     run.add_argument(
         "--objection-closure",
         default="off",
         choices=OBJECTION_CLOSURES,
-        help="whether the reviewer is told what 'done' looks like: off (default, and what every "
-        "run before 2026-08-28 did), or on, which appends one rule saying an objection about a "
-        "column is answered when that column is absent from final_features. This is the "
-        "objection-closure ablation.",
+        help="whether the reviewer is told what 'done' looks like: off (default), or on, which "
+        "appends one rule saying an objection about a column is answered when that column is "
+        "absent from final_features. This is the objection-closure ablation.",
     )
     run.add_argument(
         "--forced-drop-release",
         default="withdrawn_only",
         choices=FORCED_DROP_RELEASES,
         help="which disposition releases a column an objection forced out of the matrix: "
-        "withdrawn_only (default, and correct), or resolved_or_withdrawn, which reproduces the "
-        "pre-2026-08-28 defect where a resolved objection stopped forcing its drop. The second "
-        "value is a known bug, not a design alternative: it exists only as the control arm of the "
-        "sticky-drop cell and must not be the baseline of anything else.",
+        "withdrawn_only (default, and correct), or resolved_or_withdrawn, which reproduces a "
+        "defect where a resolved objection stopped forcing its drop. The second value is a known "
+        "bug, not a design alternative: it exists only as a control arm and must not be the "
+        "baseline of anything else.",
     )
     run.add_argument(
         "--results",
@@ -738,10 +686,9 @@ def _build_parser() -> argparse.ArgumentParser:
         default="ci",
         help=(
             "which cells to run: toy, ci, claims-repro, bench-smoke, bench-mid, bench-tall, or "
-            "full. `claims-repro` is the single `ci` claims cell on its own, for re-running the "
-            "arm RESULTS.md Result 3 rests on at a later commit. `full` is all 13 manifest "
-            "datasets and costs about $1.10 at --replicates 2 --n 2; --dry-run first. "
-            "See harness.SUBSETS."
+            "full. `claims-repro` reruns one `ci` cell alone, to check it still reproduces at a "
+            "later commit. `full` is all manifest datasets and costs about $1.10 at "
+            "--replicates 2 --n 2; --dry-run first. See harness.SUBSETS."
         ),
     )
     ev.add_argument(

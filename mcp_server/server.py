@@ -1,20 +1,16 @@
 """The four tools over the MCP protocol.
 
 This is a skin, not an implementation. It constructs a `LocalTools` -- the same in-process binding
-of `SandboxPool` and `ArtifactStore` that the graph used through Phase 1 -- and exposes its four
-methods as MCP tools. Nothing here decides anything about how a snippet runs, what an artifact id
-looks like, or when a read is truncated. That is the whole point: "we swapped the shim for the
-server" has to mean the transport changed, not that a second implementation appeared and matched
-the first by inspection. If a rule needs changing it changes in `store.py` or `sandbox.py` and
-both bindings move together.
+of `SandboxPool` and `ArtifactStore` the graph has always used -- and exposes its four methods as
+MCP tools. Nothing here decides anything about how a snippet runs, what an artifact id looks like,
+or when a read is truncated: "we swapped the shim for the server" has to mean the transport
+changed, not that a second implementation appeared and matched the first by inspection.
 
 **One server process per run.** The store is run state -- it owns the artifact index and the run's
 directories -- while the sandbox worker is deliberately process-wide and holds none. The
 alternative was one long-lived server keyed by `run_id`, which needs a fifth tool (or a run_id
-argument on the other four) to open a run, and that changes the agent-facing tool surface. Since
-the surface is exactly what the single-agent-vs-team ablation holds constant, it does not get an
-extra tool for our convenience. The cost of a process per run is one 0.87s worker boot per
-dataset, which a Phase 4 benchmark pays once per dataset against minutes of fitting.
+argument on the other four) to open a run, changing the agent-facing tool surface the
+single-agent-vs-team ablation holds constant.
 
 **Two failure channels squeezed into one.** MCP reports failure as an error result carrying a
 string, so a snippet that failed and a sandbox that could not run would arrive identically. They
@@ -22,10 +18,10 @@ are different findings -- one is about the agent, one is about us -- so `Sandbox
 with `SANDBOX_ERROR_PREFIX` and `tools/mcp_client.py` raises it back as itself.
 
 Run it with `uv run mcp-server --root <dir> [--dataset <csv> --dataset-id <name>]`, which is also
-the command an external MCP client (Claude Code, for the Phase 5 generalist baseline) is pointed
-at. Requests are line-delimited JSON-RPC over stdin/stdout, so nothing this module writes may go
-to stdout: `print` here corrupts the protocol channel the same way a snippet writing to fd 1
-would corrupt the sandbox's.
+the command an external MCP client (e.g. Claude Code, for the generalist baseline) is pointed at.
+Requests are line-delimited JSON-RPC over stdin/stdout, so nothing this module writes may go to
+stdout: `print` here corrupts the protocol channel the same way a snippet writing to fd 1 would
+corrupt the sandbox's.
 """
 
 import argparse

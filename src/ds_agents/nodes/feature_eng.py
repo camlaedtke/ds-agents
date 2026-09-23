@@ -47,14 +47,12 @@ MAX_ONE_HOT_LEVELS = 20
 ID_DISTINCTNESS_THRESHOLD = 0.98
 
 # The categories whose whole point is "this column is the problem" are `COLUMN_SCOPED_CATEGORIES`,
-# imported rather than restated. This file used to keep its own byte-identical copy; the two are now
-# load-bearing together, because `objection_routing="by_category"` routes on the state.py set while
-# the forced drop below gates on this one. Had they ever diverged, the router would have sent a run
-# to feature_eng for an objection `_forced_drops` then skipped -- the same dead end this session
-# removed, reintroduced one layer down. All three are folded into a forced FeatureDrop with
-# reason="leakage": the schema has no separate bucket for contamination or implausible-importance,
-# and none of the alternatives ("constant", "high_missing", "redundant", "other") describe why a
-# reviewer objection forces a drop.
+# imported rather than restated: `objection_routing="by_category"` routes on the state.py set
+# while the forced drop below gates on this one, and a divergent copy here would let the router
+# send a run to feature_eng for an objection `_forced_drops` then silently skips. All three are
+# folded into a forced FeatureDrop with reason="leakage", since the schema has no separate bucket
+# for contamination or implausible-importance, and none of the alternatives ("constant",
+# "high_missing", "redundant", "other") describe why a reviewer objection forces a drop.
 
 FEATURE_SNIPPET = '''
 import json, os
@@ -273,12 +271,9 @@ def _forced_drops(state: PipelineState) -> list[FeatureDrop]:
                     column=column,
                     reason="leakage",
                     # "not withdrawn" rather than "open": a resolved objection still binds, so
-                    # calling it open here would be false. Where the string actually goes, since
-                    # this comment named two places it does not: the model's PROMPT, via the
-                    # `already_dropped` block of `_facts_json`, and `feature_summary`. It reaches
-                    # neither the snippet (which is handed a bare `drop` list of names) nor
-                    # `dropped_features` on the results row (column names only), and
-                    # `feature_summary` is not a results row column at all.
+                    # calling it open here would be false. Reaches the model's prompt (via the
+                    # `already_dropped` block of `_facts_json`) and `feature_summary`, never the
+                    # snippet or `dropped_features`, which only carry column names.
                     justification=(
                         f"reviewer objection {objection.id} ({objection.category}), "
                         f"not withdrawn: {objection.evidence}"
@@ -488,11 +483,8 @@ def feature_eng(state: PipelineState, *, tools: Tools, model: StructuredModel) -
     # levels than the encoder will expand is what this node is SUPPOSED to do at that cardinality:
     # nothing downstream is degraded, no objection is warranted, and `_build_summary` already names
     # every one of them in its `Dropped (...)` line with a `high_cardinality` reason. Recording it
-    # in `errors` as well made `errored` -- which is `bool(self.errors)` -- read true on four
-    # completely healthy `adult` runs, so a table using `errored` as a reliability rate scored that
-    # cell as a 100% failure. `halted_at` had already separated fatal from non-fatal; the fix for
-    # recoverable-and-not-a-problem is not a sixth companion column, it is not calling a routine
-    # decision an error in the first place.
+    # in `errors` too would make `errored` -- `bool(self.errors)` -- read true on a completely
+    # healthy run, scoring a routine decision as a reliability failure.
     skipped = result.get("skipped_high_cardinality") or []
 
     n_nan = result.get("n_nan_in_matrix", 0)

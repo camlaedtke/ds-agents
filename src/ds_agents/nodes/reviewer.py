@@ -23,11 +23,11 @@ the reviewer's call:
 2. **The claim is never repaired.** A `claim: "block"` that ends up with nothing open after
    filtering and dispositions is not silently promoted to `pass` here -- that is the router's
    documented terminal-block path (an error, routed to the reporter), not something this node gets
-   to paper over. What the node does instead, as of 2026-08-29, is ASK AGAIN once: such a block is
-   a dead end the router will refuse, so the model is shown the reasons its objections did not
-   survive and given one chance to name something real or claim `pass` itself. The distinction is
-   the point -- re-asking the model is not the node overruling it, and a second empty answer still
-   reaches the router as the `block` the model claimed. See `_nothing_to_act_on`.
+   to paper over. What the node does instead is ASK AGAIN once: such a block is a dead end the
+   router will refuse, so the model is shown why its objections did not survive and given one
+   chance to name something real or claim `pass` itself. Re-asking is not the node overruling the
+   model -- a second empty answer still reaches the router as the `block` the model claimed. See
+   `_nothing_to_act_on`.
 
 Column filtering follows the profiler's own rule: a proposed objection's columns are checked
 against the profile's columns minus the target, and a column-scoped category (`leakage`,
@@ -83,12 +83,9 @@ feature_eng or modeler to act on.
 - You are not the modeler or feature_eng. State the problem; do not propose the fix."""
 
 # Appended to REVIEWER_SYSTEM under `reviewer_prompt="which_column"`, never substituted for it.
-# The observed failure this targets, live on 2026-08-27: at a claimed roc_auc of 0.9886 the
-# reviewer raised `implausible_importance` naming the two NOISE columns, whose importance was near
-# zero, while the planted traps sat at the top of the same ranking. It had the number that says
-# the score is too good and searched the wrong end of the list. This asks the question nothing in
-# the base prompt asks. It names no fixture, no column and no trap type -- a hint about WHERE the
-# answer is would make the ablation arm measure the hint.
+# Targets a reviewer that has the number saying a score is too good but searches the wrong end of
+# `top_importances` for why. Names no fixture, no column and no trap type -- a hint about WHERE
+# the answer is would make the ablation arm measure the hint.
 WHICH_COLUMN_RULE = """
 - If the claimed holdout score is higher than the task plausibly supports, do not stop at saying \
 the number is not credible. Say which column produced it: read `top_importances` from the top and \
@@ -98,25 +95,18 @@ cause a high score, so it is not an answer to this question."""
 
 
 # Appended under `objection_closure="on"`, after WHICH_COLUMN_RULE when both are on, never
-# substituted for either. The observed failure this targets, live on 2026-08-28: across three
-# diagnostic runs the reviewer dispositioned nothing `resolved`. In the clearest of them the
-# pipeline dropped both planted columns and the claimed roc_auc fell 0.986 -> 0.823; the reviewer
-# wrote that the fall "is consistent with removing leakage" and held the objection open anyway, on
-# the grounds that the columns "were never validated as non-leaking, only removed". That is an
-# unfalsifiable standard, and a reviewer holding one can never let a run pass: every run grinds to
-# the cap, and `exhausted` stops being evidence that the fix did not land. The reviewer had no
-# termination condition it could check, so it invented one it could never meet.
+# substituted for either. Targets a reviewer with no termination condition it can check, which
+# invents an unfalsifiable one instead (a column "never validated as non-leaking, only removed")
+# and holds every objection open forever, guaranteeing `exhausted`.
 #
-# The rule points only at `final_features`, a field the reviewer is already shown, and names no
-# fixture, no column and no trap type -- the same line WHICH_COLUMN_RULE draws between repairing a
-# prompt and injecting the answer. It states the standard, not the answer.
+# Points only at `final_features`, a field the reviewer is already shown, and names no fixture, no
+# column and no trap type -- the same line WHICH_COLUMN_RULE draws between repairing a prompt and
+# injecting the answer.
 #
-# What is deliberately NOT here: a bullet saying `withdrawn` is the only disposition that lets the
-# pipeline put a column back. That is true as of the sticky-drop fix, and it is a pipeline
-# mechanic, not an observable field; putting it here would break the rule this comment just
-# claimed. REVIEWER_SYSTEM already defines `withdrawn` correctly, and `objections_withdrawn` is on
-# the results row so that whether the reviewer finds the escape hatch unaided is measured rather
-# than assumed.
+# Deliberately NOT here: a bullet saying `withdrawn` is the only disposition that lets a column
+# come back. That is a pipeline mechanic, not an observable field, and REVIEWER_SYSTEM already
+# defines `withdrawn` correctly -- `objections_withdrawn` measures whether the reviewer finds that
+# escape hatch unaided.
 CLOSURE_RULE = """
 - An objection about a column is answered when that column is no longer in the matrix. Before you \
 disposition, check each open objection's `columns` against `final_features`. If none of them \
@@ -129,10 +119,10 @@ later step said it would act. And a column listed in `final_features` is still i
 whatever any summary says; while it is there, that objection is `still_open`."""
 
 
-# The stable prefix on every error the block-retry writes. Results rows carry error text as of
-# 2026-08-29, so this string is how a cell counts how often the bug fired and how often the retry
-# rescued it -- there is deliberately no `block_retries` column, because a counter derived by
-# string-matching our own messages is the kind of metric state.py's rule 2 rejects.
+# The stable prefix on every error the block-retry writes, so a results row can be grepped for how
+# often the bug fired and how often the retry rescued it -- there is deliberately no
+# `block_retries` column, since a counter derived by string-matching messages is the kind of
+# metric state.py's rule 2 rejects.
 BLOCK_RETRY_PREFIX = "block-retry"
 
 

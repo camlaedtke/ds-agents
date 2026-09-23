@@ -25,12 +25,9 @@ def file_sha256(path: Path) -> str:
 GIT_ENV_VAR = "DS_AGENTS_GIT"
 """Which git to shell out to, when the one on PATH is not the one that works.
 
-Set to an absolute path. This exists because a real run lost its provenance to it: on a macOS
-machine with an unaccepted Xcode license, bare `git` resolves to `/usr/bin/git`, which answers
-every invocation with a license notice on stderr and a non-zero exit. `git_commit` did what it
-promises and returned `None`, and ten benchmark rows produced at a clean `46bd4ed` recorded no
-commit at all. An override is the fix a session can apply to itself; `sudo xcodebuild -license` is
-the fix to the machine.
+Set to an absolute path. Exists because `git` on PATH can resolve to a broken binary (e.g. an
+unaccepted Xcode license on macOS answering every invocation with a non-zero exit), which makes
+`git_commit` silently return `None`. An override is the fix a session can apply to itself.
 """
 
 _GIT_TIMEOUT_S = 5
@@ -95,9 +92,9 @@ def git_commit(root: Path = REPO_ROOT, *, warn: bool = True) -> str | None:
     provenance helper that can take a benchmark run down is worse than a null field: the row would
     be lost entirely to record something that is only ever read afterwards.
 
-    It now says so on stderr, once per process, rather than returning `None` silently. Silence is
-    what let a run set up specifically to close a provenance gap write ten rows with no commit on
-    them and report success. `warn=False` is for tests and for callers that print their own.
+    Warns on stderr once per process rather than returning `None` silently, so a run missing its
+    provenance is never mistaken for a clean success. `warn=False` is for tests and callers that
+    print their own message.
 
     The `-dirty` suffix is part of the same string rather than a second boolean so the cell key
     stays one value wide, and so a dirty run groups as its own cell in `eval-diff`. That is the

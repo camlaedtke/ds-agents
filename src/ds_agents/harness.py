@@ -1,29 +1,20 @@
-"""The Phase 4 benchmark harness: cells, a plan, and one loop that turns a plan into rows.
+"""The benchmark harness: cells, a plan, and one loop that turns a plan into rows.
 
 A `Cell` is one point in the benchmark grid -- a dataset plus the run conditions `_fixture_state`
 needs to reproduce it. `SUBSETS` names groups of cells worth running together. `plan()` expands a
 subset into an ordered list of individual runs, replicated and indexed. `run_eval()` walks that
 plan, calling a `Runner` for each entry and writing every publishable result through
-`cli._append_results_row` -- the same gate `--results` uses, so a results file from this harness
-and a results file from `ds-agents run --results` cannot silently disagree about what counts as a
-result.
+`cli._append_results_row` -- the same gate `--results` uses, so a harness result and a
+`ds-agents run --results` result cannot silently disagree about what counts as a result.
 
 `cli.py` imports this module inside `cmd_eval`, and this module imports `cli` inside its own
-functions rather than at module scope. `cli` will need `run_eval`, `run_eval` needs `cli._run_once`
-and `cli._append_results_row`, and a top-level `import ds_agents.cli` on either side of that would
-be circular. Deferring the import to call time breaks the cycle at no real cost, since both call
-sites are function bodies, not import-time code.
+functions rather than at module scope, to avoid a circular top-level import between the two.
 
 `random_seed` never appears as a `Cell` field, a `plan()` parameter, or a `run_eval()` argument, and
-it should not gain one. It is a DATA seed -- it fixes the train/test split and the estimators'
-internal seeding on `RunConfig`, not anything about which model answered. Moving it between cells
-would fold split variance into a number this project reports as model variance, and it would break
-comparability with all 84 rows already committed under `random_seed=20260822`. `replicates` exists
-instead: a replicate reruns the SAME seed, so the spread it measures is model nondeterminism alone.
-That distinction is not academic -- it is the entire finding of 2026-08-28's forced-drop-release
-session, where two cells at identical configuration and the identical seed returned
-`leakage_remediated` 9/10 and 6/10, and a single 10-run cell turned out to be unable to resolve a
-4/10 difference from noise.
+should not gain one. It fixes the train/test split and estimator seeding on `RunConfig`, not which
+model answered; moving it between cells would fold split variance into what this project reports as
+model variance. `replicates` reruns the SAME seed instead, so the spread it measures is model
+nondeterminism alone. See DECISIONS.md (2026-08-28).
 """
 
 import re
@@ -65,17 +56,13 @@ class Cell:
     """One point in the benchmark grid: a dataset plus the run conditions that reproduce it.
 
     Every field except `name`, `dataset` and `est_cost_usd` mirrors a keyword `_fixture_state`
-    accepts, so `conditions()` can hand them straight to `cli._run_once` with no translation layer
-    to drift out of sync. `est_cost_usd` is planning-only -- it feeds the cost cap check before a
-    run and the printed plan, and it is never written to a results row, because a row that carried
-    an estimate next to `cost_usd` would invite averaging the two.
+    accepts, so `conditions()` can hand them straight to `cli._run_once` with no translation layer.
+    `est_cost_usd` is planning-only: it feeds the cost cap check and the printed plan, and is never
+    written to a results row, so it can never be mistaken for a measured `cost_usd`.
 
-    Deliberately absent: `forced_drop_release`. It is a `Literal["withdrawn_only",
-    "resolved_or_withdrawn"]` on `RunConfig` whose off value reproduces a known defect rather than
-    offering a second design (see `docs/NEXT.md`'s parking lot and DECISIONS.md 2026-08-28, fifth
-    entry) -- it exists for exactly one same-commit control, already run. A `Cell` field for it
-    would invite a second use, so `Cell.conditions()` never mentions it and `_fixture_state` falls
-    back to its correct default (`withdrawn_only`) every time.
+    Deliberately absent: `forced_drop_release`. It exists on `RunConfig` for one same-commit
+    control already run (see DECISIONS.md 2026-08-28, fifth entry), not as a second design a `Cell`
+    should offer. `_fixture_state` falls back to its correct default (`withdrawn_only`) instead.
     """
 
     name: str
@@ -92,9 +79,8 @@ class Cell:
     def conditions(self) -> dict[str, Any]:
         """Keyword arguments for `cli._fixture_state` / `cli._run_once`.
 
-        Named `model_name` / `reviewer_model_name` here because that is what `_fixture_state`
-        calls them -- `Cell.model` stays short because it is read constantly while defining
-        `SUBSETS` below.
+        Renamed to `model_name` / `reviewer_model_name` to match `_fixture_state`'s signature;
+        `Cell.model` stays short since it's read constantly while defining `SUBSETS` below.
         """
         return {
             "model_name": self.model,
@@ -107,27 +93,8 @@ class Cell:
         }
 
 
-# The `ci` subset: one cell per registered fixture, all at loop_cap=3 and objection_closure="off"
-# (both are the dataclass defaults, so neither is written out below). `claims-opaque-which` and
-# `reissued-opaque-which` both run the naming and routing conditions together because that is the
-# combination `docs/NEXT.md` flags as the one worth a regression gate: opaque naming is what made
-# the trap findable at all, and `by_category` routing is what let a caught trap actually get
-# dropped. Costs are rough per-run estimates for the cost-cap check, not a promise.
-#
-# The three estimates below are MEASURED means from the 2026-08-31 `ci` baseline (n=10 a cell,
-# `evals/results/2026-08-31_ci-baseline.jsonl`), replacing the guesses they shipped with. They are
-# rounded up to the nearest $0.001, because this number's job is to stop the cap being overrun and
-# a mean that is right half the time is the wrong side to be wrong on. The originals were 0.010 /
-# 0.030 / 0.025: the whole subset came in at $0.7291 against a $0.65 estimate, a 12% under-count of
-# which `toy-default` is about 63% and `reissued-opaque-which` about 42% (`claims-opaque-which` was
-# the one good guess, over by 1%). The spread within a cell is what makes a mean a poor guarantee
-# here -- a run that takes the review loop three times costs around 2.5x one that passes first
-# time. `est_cost_usd` is planning-only and never reaches a results row, so changing it revises no
-# published number -- it only changes where a future cap truncates.
-# The cell Result 3 of docs/RESULTS.md rests on, lifted out of the `ci` tuple so that the
-# `claims-repro` subset below can name the SAME object rather than a copy of its arguments. A
-# reproduction check whose conditions are retyped is a check of the typing; sharing the object
-# makes "identical conditions" a property of the module instead of a promise in a commit message.
+# Shared by the `ci` and `claims-repro` subsets so "identical conditions" is enforced by the
+# object, not retyped.
 CLAIMS_OPAQUE_WHICH = Cell(
     name="claims-opaque-which",
     dataset="claims_timing",
@@ -139,6 +106,9 @@ CLAIMS_OPAQUE_WHICH = Cell(
 
 SUBSETS: dict[str, tuple[Cell, ...]] = {
     "toy": (Cell(name="toy-default", dataset="toy", est_cost_usd=0.015),),
+    # Regression gate: one cell per fixture. The two claims cells run opaque naming + by_category
+    # routing together, the combination that makes the leakage trap findable and droppable.
+    # Costs are measured means from evals/results/2026-08-31_ci-baseline.jsonl, rounded up.
     "ci": (
         Cell(name="toy-default", dataset="toy", est_cost_usd=0.015),
         CLAIMS_OPAQUE_WHICH,
@@ -151,195 +121,36 @@ SUBSETS: dict[str, tuple[Cell, ...]] = {
             est_cost_usd=0.029,
         ),
     ),
-    # One cell, ten runs, one question: does the arm RESULTS.md quotes still behave at HEAD the way
-    # its committed rows say? The `ci` subset would answer it at n=4 for $0.30 while spending two
-    # thirds of that on `toy` and `reissued_ids`; this spends all of it on the cell that carries
-    # Result 3. It is not an ablation and has no second arm -- the comparison is against
-    # `evals/results/2026-08-31_ci-baseline.jsonl` (n=10, same cell, commit `8a629bf-dirty`), which
-    # means it crosses a commit boundary and `commit` is an eval-diff condition field, so eval-diff
-    # will report the two sides as separate cells and the pooling has to be stated by hand.
+    # Ten runs of the Result 3 cell only, to check it still reproduces at HEAD. Compares against
+    # evals/results/2026-08-31_ci-baseline.jsonl; crosses a commit boundary, so eval-diff treats
+    # the two sides as separate cells and the pooling has to be stated by hand.
     "claims-repro": (CLAIMS_OPAQUE_WHICH,),
-    # The first subset that names a dataset nobody here wrote. One cell, one dataset, on purpose:
-    # `credit_g` is the cheapest thing in the manifest at 1000 rows, and the point is to prove the
-    # run-and-grade path end to end before thirteen of them are paid for. `est_cost_usd` is a
-    # measurement like every number above it: the 4-row 2026-08-31 `credit-g-smoke` invocation
-    # averaged $0.0168 per run. The pre-run guess was 0.040, wrong by more than a factor of two and
-    # wrong in the cheap direction -- which is why the other twelve get measured before `full`.
+    # Cheapest manifest dataset, run alone to prove the run-and-grade path before paying for the
+    # rest. Price is the measured mean from the 2026-08-31 credit-g-smoke invocation, rounded up.
     "bench-smoke": (Cell(name="credit-g-default", dataset="credit_g", est_cost_usd=0.017),),
-    # The subset that exists to price the rest of the manifest. Four cells forming a 2x2 over the
-    # TWO cost axes this project had been treating as one: wall clock tracks ROWS (fits), token cost
-    # tracks COLUMNS (schema, profile summaries and importance lists all reach a prompt). `credit_g`
-    # is small on both, which is why one measurement of it could price nothing else.
-    #
-    #                    few columns              many columns
-    #   few rows         phoneme   5404 x 5       jasmine  2984 x 144
-    #   many rows        amazon   32769 x 9       nomao   34465 x 118
-    #
-    # Crossed on purpose. With only a wide-and-tall cell the two axes stay confounded and a timeout
-    # there is uninterpretable; with the cross, `jasmine` vs `nomao` separates width from length and
-    # `phoneme` vs `amazon` separates length from width.
-    #
-    # `adult` is NOT here. Not because it can't be run any more -- the split manifest fix
-    # (2026-09-01, `ds_agents/split_manifest.py`) landed after this cell was already run, and
-    # `adult`, `bank_marketing`, `higgs` and `numerai28_6` are all runnable now. It is absent
-    # because this is a measurement, not a subset definition: these four numbers are what
-    # `bench-mid`'s 2026-09-01 invocation actually cost on the datasets it actually ran, and
-    # `adult` was not one of them. Pricing it, and the other three, is what `bench-tall` below does.
-    #
-    # MEASURED means from the 2026-09-01 run (n=2 a cell,
-    # `evals/results/2026-09-01_bench-mid.jsonl`), rounded up to the nearest $0.001, replacing the
-    # guesses they shipped with. The guesses were 0.020 / 0.060 / 0.030 / 0.065 and every one was
-    # HIGH -- the invocation came in at $0.2120 against a $0.35 estimate. That is the opposite of
-    # `bench-smoke`'s error and it is the safe direction to be wrong in, but it is still a 40% miss.
-    #
-    # One caveat that a mean cannot carry: all 8 runs took the review loop exactly once and none
-    # raised an objection, so these are the cost of a run that passes first time.
-    #
-    # `amazon_employee_access` was $0.013 until 2026-09-02 and is $0.014 now. Not a re-measurement:
-    # its mean is $0.013007, and rounding that UP -- the rule this comment has always stated, for
-    # the stated reason that an estimate must never be optimistic -- gives $0.014. It had been
-    # rounded to nearest instead, which put it $0.000007 below the mean. Found by
-    # `tests/test_cost_model.py`, which derives every price here from the results files rather than
-    # trusting the literal, on the first run of that test. `est_cost_usd` never reaches a results
-    # row, so no published number moves. The `ci` comment
-    # above records that a run looping three times costs about 2.5x one that does not, and nothing
-    # here has been observed looping.
+    # Prices four datasets crossing rows x columns, since wall clock tracks rows and token cost
+    # tracks columns: phoneme/amazon are short/tall, jasmine/nomao are few/many columns.
+    # Prices are measured means from evals/results/2026-09-01_bench-mid.jsonl, rounded up.
     "bench-mid": (
         Cell(name="phoneme-narrow-short", dataset="phoneme", est_cost_usd=0.011),
         Cell(name="jasmine-wide-short", dataset="jasmine", est_cost_usd=0.042),
         Cell(name="amazon-narrow-tall", dataset="amazon_employee_access", est_cost_usd=0.014),
         Cell(name="nomao-wide-tall", dataset="nomao", est_cost_usd=0.041),
     ),
-    # The subset that prices the last four datasets, and the one that tests the cost model rather
-    # than just applying it. `bench-mid` fitted `cost ~= a + b * n_features` on four points and the
-    # project started quoting new runs against it; this is the arm that asks whether that model
-    # survives contact with anything it was not fitted on.
-    #
-    # WHAT THIS IS, LITERALLY: a line along the ROW axis. 45k to 98k rows, extending 2.9x beyond the
-    # tallest thing the model was fitted on (`nomao`, 34,465) at widths of 14 to 28, which is
-    # interpolation on the fitted 5-to-144 range. Within these four, rows and column count are
-    # nearly rank-identical (45k/16, 49k/14, 96k/21, 98k/28), so they are CONFOUNDED and no residual
-    # computed inside `bench-tall` alone separates them.
-    #
-    # WHAT NOBODY CHOSE, AND IT IS THE INTERESTING PART: all four datasets the cost model was fitted
-    # on have ZERO categorical columns. `phoneme`, `jasmine`, `amazon_employee_access` and `nomao`
-    # are entirely numeric, so `feature_eng` one-hot encodes nothing on any of them and `LEVELS` in
-    # the emitted transform is empty in all four. That fell out of picking a 2x2 on rows x columns,
-    # because dtype was not one of the two axes anyone was thinking about. Both out-of-sample points
-    # measured since are categorical and both came in ABOVE the model: `credit_g` (13 categorical,
-    # 54 one-hot levels) +$0.0015, `adult` (7 categorical + 1 skipped, 58 levels) +$0.0019.
-    # `credit_g` has 1000 rows, so that residual cannot be a row term.
-    #
-    # There is a mechanism. The reviewer reads `feature_code_artifact` into its prompt, and that
-    # artifact carries `LEVELS`, `FEATURE_ORDER` and `COLUMN_SOURCE`, which grow with one-hot level
-    # count and not with rows -- and `feature_eng` additionally reasons in prose about cardinality,
-    # which a fully numeric dataset never triggers.
-    #
-    # These four separate the two hypotheses, because rows and categoricals are ANTI-CORRELATED
-    # across them:
-    #
-    #                     categorical                     numeric
-    #   ~45-49k rows      adult 7 cat / 58 levels
-    #                     bank_marketing 9 cat / 44 levels
-    #   ~96-98k rows                                      numerai28_6 0 cat
-    #                                                     higgs 0 cat
-    #
-    # So H_rows (the model needs a row term) predicts `numerai28_6` and `higgs` run high, and
-    # H_categorical predicts `adult` and `bank_marketing` do. Opposite orderings, one $0.24 run.
-    # That is luck rather than design and it is worth saying so: had the four been correlated, this
-    # would have cost the same and settled nothing.
-    #
-    # A 2x2 over rows x categoricals DOES exist, but only by pooling with committed cells
-    # (short+numeric = phoneme/jasmine, tall+numeric = amazon/nomao/numerai/higgs,
-    # short+categorical = credit_g, tall+categorical = adult/bank_marketing -- these two fill the
-    # empty corner). It crosses a `commit` boundary, `commit` is an `evaldiff.CONDITION_FIELDS`
-    # field, and `eval-diff` will refuse the comparison. It is a table you may draw by hand with the
-    # boundary named, never one the tooling blesses.
-    #
-    # MEASURED means from the 2026-09-02 run (n=4 a cell, 16 rows, $0.3021,
-    # `evals/results/2026-09-02_bench-tall.jsonl`), rounded up to the nearest $0.001, replacing the
-    # four predictions they shipped with. The predictions were $0.014 / $0.014 / $0.016 / $0.017
-    # from `a + b * n_features`; measured $0.0159 / $0.0178 / $0.0172 / $0.0246.
-    #
-    # WHAT THE ARM SETTLED, and it is not either pre-registered hypothesis.
-    #
-    #   cell               cols  rows   cat  predicted  measured   residual   band +/-$0.0026
-    #   adult                14  48.8k    7    $0.0139   $0.0159    +$0.0020  inside
-    #   bank_marketing       16  45.2k    9    $0.0144   $0.0178    +$0.0034  ABOVE
-    #   numerai28_6          21  96.3k    0    $0.0155   $0.0172    +$0.0017  inside
-    #   higgs                28  98.1k    0    $0.0172   $0.0246    +$0.0074  ABOVE
-    #
-    # H_categorical predicted the two categorical cells high; one was and one was not.
-    # H_rows predicted the two tall cells high; one was and one was not, and `bank_marketing` at
-    # 45k ran higher than `numerai28_6` at 96k, which a row term cannot order. So neither
-    # pre-registered ordering appeared.
-    #
-    # What DID appear is simpler and was not one of the two options: **all four residuals are
-    # positive**, as is `credit_g`'s +$0.0015, so the column-only model has under-predicted 5 of 5
-    # datasets outside the four it was fitted on (sign test p=0.031). Refitting on all nine measured
-    # datasets, a row term cuts the residual sd from $0.00296 to $0.00224 while a categorical-count
-    # term makes it WORSE ($0.00320) and adds nothing once rows are in ($0.00206 for both).
-    # **H_categorical is refuted**: the mechanism was plausible -- the reviewer reads a transform
-    # artifact whose `LEVELS` grow with one-hot count -- and the data says it is not worth a term.
-    # H_rows survives as a term but not as the clean ordering it was registered as.
-    #
-    # The nine-dataset refit, which is what `full` below is priced from for the datasets that have
-    # never been run:  cost ~= $0.010163 + $0.000230 * n_features + $0.005609 * (n_rows / 1e5).
-    #
-    # The caveat a mean cannot carry, and it is the same one `bench-mid` recorded: all 16 runs
-    # raised ZERO objections, took the review loop exactly once and returned `pass`. At the time
-    # this was written, nothing in this project had ever been observed looping on a manifest
-    # dataset, and the `ci` comment above records that a run that loops three times costs about
-    # 2.5x. Every number in this dict is the cost of a run that passes first time.
-    #
-    # THAT STOPPED BEING TRUE THE SAME DAY. `evals/results/2026-09-02_full.jsonl` (52 rows, all 13
-    # manifest datasets, n=4 a cell) is where looping actually showed up: 6/52 runs took more than
-    # one review pass, an 11.5% rate (Clopper-Pearson 95% CI [4.3%, 23.4%] -- 6 events out of 52
-    # runs is not many to bound a rate with). It does not spread evenly across the manifest:
-    # `australian` looped 3/4, `kr_vs_kp` 2/4, `sylvine` 1/4, and the other ten datasets are 0/4.
-    # Within a dataset, cost against that dataset's own 1-loop mean runs about x1.80 at 2 loops
-    # (n=2: one `australian` row, one `sylvine` row) and about x2.46 at 3 loops (n=4: two
-    # `australian` rows, two `kr_vs_kp` rows) -- pinned in `tests/test_cost_model.py` as
-    # `FULL_2026_09_02_LOOP_MULTIPLIER_AT_2_LOOPS` / `_AT_3_LOOPS`, a record of what happened on
-    # that date rather than a model of what happens next.
-    #
-    # A global loop-rate term on the size model was considered here and rejected. The 11.5% rate
-    # as an expected multiplier (1.1431, from the empirical mix of 1/2/3-loop runs) applied to the
-    # $1.104 `full` estimate predicts $1.2620 against an actual $1.2165 -- close, but for the wrong
-    # reason: it would over-price the ten never-looping datasets by about 17.3% while still
-    # under-pricing the three that do loop, because 3 of 13 datasets carry all 6 loop events and 6
-    # events is not enough to fit a rate at all, let alone a single global one. No coefficient
-    # above changes for this. Budget roughly $0.05-$0.15 of contingency on a `full` run under this
-    # reviewer config instead, held as slack against `australian` / `kr_vs_kp` / `sylvine` rather
-    # than smeared across all thirteen cells.
+    # Prices the remaining four datasets and tests whether the bench-mid cost model generalizes
+    # out of sample; it under-predicts on all four (see DECISIONS.md 2026-09-02, first entry, for
+    # the full analysis). Prices are measured means from evals/results/2026-09-02_bench-tall.jsonl,
+    # rounded up.
     "bench-tall": (
         Cell(name="adult-categorical-tall", dataset="adult", est_cost_usd=0.016),
         Cell(name="bank-categorical-tall", dataset="bank_marketing", est_cost_usd=0.018),
         Cell(name="numerai-numeric-tall", dataset="numerai28_6", est_cost_usd=0.018),
         Cell(name="higgs-numeric-tall", dataset="higgs", est_cost_usd=0.025),
     ),
-    # Every binary dataset in the manifest, one cell each. This entry exists as of 2026-09-02,
-    # when the last four datasets were priced; before that `_resolve_subset` raised a bespoke error
-    # for the name, and the blocker that error described moved four times.
-    #
-    # It does NOT move a fifth time, because it is no longer a code or a costing problem. Nine of
-    # the thirteen numbers below are measured means from real invocations. The other four are
-    # modelled, and they are the four SMALLEST shapes in the manifest -- `australian` (690 rows),
-    # `kc1` (2,109), `sylvine` (5,124), `kr_vs_kp` (3,196) -- priced from the nine-dataset refit
-    # recorded in the `bench-tall` comment plus one residual sd ($0.0022) and rounded up, because
-    # the one thing that arm established about this model is that it under-predicts out of sample.
-    # The cap, not the estimate, is what protects the budget from them being wrong.
-    #
-    # `kr_vs_kp` is the one to watch: 36 columns, ALL categorical, 73 one-hot levels, which is more
-    # than any dataset anyone has run. H_categorical was refuted as a cost term at 7 to 13
-    # categorical columns and that is not the same as refuted at 36, so its $0.022 is the softest
-    # number here.
-    #
-    # WHAT RUNNING THIS COSTS, which is the thing that was never written down while the blocker was
-    # always something else: 13 cells at $0.276 a full pass. At the `--replicates 2 --n 2` that
-    # /run-eval requires for anything comparative, that is 52 runs, about **$1.10 and 45-70
-    # minutes**. Nothing technical stands in the way of that. It is a budget decision and it has
-    # never been put to anyone, which is now the honest content of the blocker.
+    # All thirteen manifest datasets. Nine prices are measured means; the four smallest
+    # (australian, kc1, sylvine, kr_vs_kp) are modelled from the bench-tall refit plus one
+    # residual sd, rounded up -- the cap, not the estimate, protects against them being wrong.
+    # Full pass: ~52 runs at --replicates 2 --n 2, about $1.10 and 45-70 minutes.
     "full": (
         # measured
         Cell(name="phoneme", dataset="phoneme", est_cost_usd=0.011),
@@ -361,15 +172,7 @@ SUBSETS: dict[str, tuple[Cell, ...]] = {
 
 
 def _resolve_subset(subset: str) -> tuple[Cell, ...]:
-    """`SUBSETS[subset]`, or a `ValueError` listing what would have resolved.
-
-    `full` used to get a bespoke message of its own, rewritten four times as its blocker moved --
-    the manifest, then the run-and-grade path, then the split manifest, then cost. As of 2026-09-02
-    it is an ordinary entry in `SUBSETS` and needs no special case, because the last four datasets
-    are priced. What is left is not a blocker this function can describe: running `full` properly is
-    52 runs at about $1.10, and whether to spend that is a decision for a person. The comment on the
-    entry itself says so, which is where a reader who is about to spend the money will be looking.
-    """
+    """`SUBSETS[subset]`, or a `ValueError` listing what would have resolved."""
     if subset in SUBSETS:
         return SUBSETS[subset]
     available = ", ".join(sorted(SUBSETS))
@@ -391,16 +194,9 @@ def plan(cells: Sequence[Cell], *, replicates: int, n: int) -> list[PlannedRun]:
     """Expand `cells` into an ordered list of runs: every cell's replicate 1 first (n runs each),
     then every cell's replicate 2, and so on.
 
-    Replicate-major, not cell-major. `run_eval`'s cost cap can bind partway through a plan, and
-    whichever ordering is chosen decides who gets shortchanged when it does. A cell-major plan --
-    finish cell A's N runs, then cell B's, ... -- means a cap that binds mid-run leaves every cell
-    before the cut at full strength and drops every cell after it to zero. That is exactly what
-    happened to the Sonnet reviewer cells in the 2026-08-28 reviewer-ablation run: budgeted at n=8,
-    they landed at n=4 and n=3 because the cap bound inside the first cell's replicate loop and the
-    later cell never started, and an unequal n=4-vs-n=3 pairing could not be quoted as a clean 2x2.
-    Replicate-major ordering means a cap that binds after k runs drops roughly the same fraction
-    from every cell, because it walks one full pass across all cells before starting the next
-    replicate of any of them.
+    Replicate-major, not cell-major, so that `run_eval`'s cost cap, if it binds partway through a
+    plan, drops roughly the same fraction of runs from every cell instead of zeroing out whichever
+    cells come later in the list. See DECISIONS.md (2026-08-28) for the ablation this fixed.
     """
     runs: list[PlannedRun] = []
     seq = 0
@@ -437,12 +233,8 @@ class HarnessReport:
     rows_refused: int
     runs_failed: int
     spend_usd: float
-    # How much of `spend_usd` is an estimate rather than a measurement. A run that raises took its
-    # partial cost with it -- the tokens were spent, but the `PipelineState` holding the count never
-    # came back -- so the failed run is charged its cell's estimate instead. Reported separately
-    # because a spend figure that silently mixes measured and guessed dollars is the kind of number
-    # this project refuses to publish, and because under-counting here would let a run of failures
-    # walk straight through the cost cap.
+    # Portion of spend_usd that is a cell's est_cost_usd charged to a failed run rather than
+    # measured, so a spend figure never silently mixes measured and guessed dollars.
     charged_estimate_usd: float
     stopped_early: str | None  # None | "cost cap" | "consecutive failures"
     per_cell: dict[str, CellTally]
@@ -451,27 +243,17 @@ class HarnessReport:
 def _live_run(artifacts_root: Path, *, transport: str, no_live: bool) -> Runner:
     """The real runner: materializes each (dataset, naming) pair once, then calls `cli._run_once`.
 
-    Caching is keyed on (dataset, naming) rather than done once per cell, because two cells in a
-    subset can share both -- `claims-opaque-which` and a hypothetical second `claims_timing` cell
-    at the same naming would otherwise rewrite the same file twice. Materializing once per
-    invocation, not once per run, is the same rule `cmd_run --repeat` follows for `--naming opaque`:
-    every run that is supposed to see the same bytes has to actually see the same bytes, and
-    rewriting the file N times is N chances for it not to.
+    Caching is keyed on (dataset, naming) rather than done once per cell, since two cells can share
+    both and every run that's supposed to see the same bytes has to actually see the same bytes.
 
-    Provenance is read here, once, under exactly that rule, and the 2026-08-31 `ci` baseline is
-    what proved it belongs here rather than inside `_run_once`. The results file is untracked until
-    someone commits it, so writing row 0 dirties the tree, and a per-run read recorded run 0 at
-    `8a629bf` and runs 1..29 at `8a629bf-dirty`. `commit` is one of `evaldiff.CONDITION_FIELDS`, so
-    that fragmented `toy-default` into cells of n=1 and n=9 -- the harness contaminating its own
-    provenance with its own output. One read, before any row exists, cannot.
+    Provenance is read here, once, before any row exists -- reading it per-run would let the
+    harness's own output (writing row 0 dirties the tree) change `commit` partway through a plan
+    and fragment a cell in eval-diff. See DECISIONS.md (2026-08-31).
 
-    `describe_commit` rather than `git_commit`, and the warning is this function's own rather than
-    the one `git_commit` prints. Two reasons: the consequence differs (a null `commit` on a
-    benchmark invocation means these rows cannot be pooled with any committed cell, which is worth
-    stopping for and is not worth stopping for on a one-off `ds-agents run`), and it must be said
-    before the first run rather than once per process. So it is deliberately NOT behind
-    `provenance._warned`: a second `_live_run` in one process is a second invocation whose rows
-    will also lack a commit, and it should say so again.
+    Uses `describe_commit`, not `git_commit`, and prints its own warning rather than
+    `git_commit`'s: a null `commit` here means these rows can't be pooled with any committed cell,
+    which is worth stopping for on a benchmark run and not on a one-off `ds-agents run`. Not
+    behind `provenance._warned`, so a second `_live_run` in one process warns again.
     """
     # Deferred import: see the module docstring for why this cannot be a top-level import.
     from ds_agents import cli
@@ -580,35 +362,27 @@ def run_eval(
 ) -> HarnessReport:
     """Run `subset` and append every publishable result to a dated JSONL file.
 
-    `name` must match `^[a-z0-9][a-z0-9-]*$`, checked before anything else runs, so a name with a
-    path separator or a typo'd flag is caught before a cent is spent rather than surfacing as a
-    write to some unintended path.
+    `name` must match `^[a-z0-9][a-z0-9-]*$`, checked up front so a bad name is caught before
+    anything is spent rather than surfacing as a write to some unintended path.
 
-    Prints the plan and the cost estimate before running anything, live or not. `dry_run` returns
-    right after that print, with `path=None` and every counter at zero -- it calls `runner` zero
-    times, which is the property that makes `--dry-run` actually free.
+    Prints the plan and cost estimate before running anything. `dry_run` returns right after that,
+    with `path=None` and every counter at zero, calling `runner` zero times.
 
     The cost cap is invocation-level, not per-cell: before each run, if `spend + cell.est_cost_usd`
-    would exceed `max_cost_usd`, the run does not start and `stopped_early` becomes `"cost cap"`.
-    `spend` is tracked in ACTUAL dollars for every run that completes, off `state.total_cost_usd`.
-    A run that RAISES is the exception, and it is charged its cell's estimate instead: the tokens it
-    burned before failing are unrecoverable, because the state holding the count never came back.
-    Guessing high is the safe direction -- ignoring failed runs would let a cell that fails late,
-    after paying for most of a pipeline, walk straight through the cap -- and the guessed portion is
-    reported separately as `charged_estimate_usd` so no one reads a mixed figure as a measurement.
+    would exceed `max_cost_usd`, the run does not start. A run that raises is charged its cell's
+    estimate instead of a measurement, since the tokens it burned are unrecoverable and guessing
+    high is the safe direction; that portion is reported separately as `charged_estimate_usd`.
 
-    Each run is wrapped in its own `try/except Exception`: a run that raises is printed, counted in
-    `runs_failed`, and the loop moves on to the next one. `SystemExit` is not caught here and
-    propagates, because `cli._run_once` raises it to mean the run never started at all (an unknown
-    fixture, a tool server that would not launch) -- and whatever stopped run 7 from starting will
-    stop run 8 the same way, so there is nothing to gain by continuing. Three CONSECUTIVE ordinary
-    failures abort the whole invocation with `stopped_early="consecutive failures"`, so a broken
-    config cannot silently burn the entire cost cap one exception at a time.
+    Each run is wrapped in its own `try/except Exception` and counted in `runs_failed`; three
+    CONSECUTIVE failures abort the invocation so a broken config can't burn the whole cap one
+    exception at a time. `SystemExit` is not caught -- `cli._run_once` raises it to mean the run
+    never started at all, and whatever stopped one run from starting will stop the next the same
+    way.
 
     Every written row carries the harness's own annotations under `extra=`: `cell`, `replicate`,
-    `run_index`, `eval_subset`, `eval_name`. A row that `publishable()` refuses is not written, but
-    it still increments `rows_refused` -- a refused row is load-bearing, because it changes a
-    cell's denominator just as surely as a written one changes its numerator.
+    `run_index`, `eval_subset`, `eval_name`. A row `publishable()` refuses is not written but still
+    increments `rows_refused`, since it changes a cell's denominator just as a written row changes
+    its numerator.
     """
     if not _NAME_RE.match(name):
         raise ValueError(
@@ -679,10 +453,7 @@ def run_eval(
             )
             runs_failed += 1
             per_cell[cell.name].runs_failed += 1
-            # The tokens this run spent before it raised are unrecoverable -- the state that
-            # counted them never came back -- so it is charged its cell's estimate. Guessing high
-            # is the safe direction: a cap that ignored failed runs entirely would let a cell that
-            # fails late, after paying for most of a pipeline, spend without limit.
+            # Charged its cell's estimate, not a measurement -- see run_eval's docstring.
             spend += cell.est_cost_usd
             charged_estimate += cell.est_cost_usd
             per_cell[cell.name].spend_usd += cell.est_cost_usd

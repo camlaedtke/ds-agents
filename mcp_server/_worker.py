@@ -1,10 +1,10 @@
 """The warm sandbox worker. Runs as a bare script, never as an importable part of this project.
 
 One of these is launched per run with a stripped environment. It pays the pandas/scikit-learn
-import cost once (~0.9s), then forks a fresh child per snippet, which inherits those imports
-through copy-on-write and starts in ~0.01s. Every snippet still gets its own process: globals do
-not survive between calls, a crash cannot take the worker with it, and a timeout is a `SIGKILL`
-to the child's process group.
+import cost once, then forks a fresh child per snippet, which inherits those imports through
+copy-on-write and starts near-instantly. Every snippet still gets its own process: globals do not
+survive between calls, a crash cannot take the worker with it, and a timeout is a `SIGKILL` to the
+child's process group.
 
 Three properties this file exists to guarantee, all of them tested in tests/mcp_server/:
 

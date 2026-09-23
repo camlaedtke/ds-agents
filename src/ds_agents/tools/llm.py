@@ -8,8 +8,8 @@ The LangChain-vs-direct fork is settled: `AnthropicModel` below calls the Anthro
 `langgraph` already pulls in `langchain-core` and `langsmith`, so tracing was never the thing
 LangChain would have bought us. Going direct buys constrained decoding via `messages.parse`
 (a schema the server enforces, not a tool call we hope validates) and `response.usage` verbatim,
-which matters because token counts are a published output of this project rather than an
-implementation detail. See docs/DECISIONS.md, 2026-08-26.
+which matters because token counts are a published output of this project. See DECISIONS.md
+(2026-08-26).
 
 `StubModel` is NOT a model. It is a placeholder so the graph is runnable with no API key, and it
 is deliberately bad at the thing this project measures: it nominates no leakage candidates at all.
@@ -66,7 +66,7 @@ class ModelRefusal(RuntimeError):
 class StubModel:
     """Offline placeholder. Mechanical, deterministic, and no substitute for a model.
 
-    It answers only the schemas Phase 1 needs, from the prompt payload the node passes as JSON.
+    It answers only the schemas the nodes need, from the prompt payload the node passes as JSON.
     Anything else raises, so a new node cannot silently inherit fake answers.
     """
 
@@ -228,7 +228,7 @@ def api_key_present() -> bool:
 
     Lives here rather than in a node because nodes never read the environment -- that rule is what
     lets `tools/local.py` hand the sandbox a stripped env with no key in it. Only `cli.py` and the
-    Phase 4 harness call this.
+    harness call this.
     """
     return bool(os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_AUTH_TOKEN"))
 

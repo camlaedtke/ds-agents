@@ -1,12 +1,12 @@
 """The tool surface, as a Protocol.
 
-These four signatures are the contract in docs/ARCHITECTURE.md under "MCP server (ours)". Phase 1
-satisfies them in-process (`local.py`); Phase 2 satisfies them over MCP. Nodes type-hint against
+These four signatures are the contract in docs/ARCHITECTURE.md under "MCP server (ours)",
+satisfied in-process (`local.py`) and over MCP (`tools/mcp_client.py`). Nodes type-hint against
 `Tools` and never import a concrete implementation, so the two arms of the single-agent-vs-team
 ablation are guaranteed the same surface.
 
 Everything crossing this boundary is JSON-shaped on purpose. A shim that handed a node a DataFrame
-would work fine in Phase 1 and be impossible to reproduce over MCP in Phase 2.
+would work fine in-process and be impossible to reproduce over MCP.
 """
 
 from typing import Any, Protocol, runtime_checkable

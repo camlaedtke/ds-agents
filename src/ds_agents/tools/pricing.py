@@ -11,9 +11,9 @@ cost-per-caught-leak number and the Haiku-vs-Sonnet reviewer ablation are both r
 2. Prices are written per million tokens exactly as published, and converted here. Pre-dividing
    them into per-token floats in the table would make them uncheckable against the price page.
 
-Prices verified 2026-08-26 against the published Anthropic API rates. They are a snapshot: if a
-committed results file needs to survive a price change, the fix is to record the rate alongside
-the run, not to backfill this table.
+Prices are a snapshot of the published Anthropic API rates: if a committed results file needs to
+survive a price change, the fix is to record the rate alongside the run, not to backfill this
+table.
 """
 
 from dataclasses import dataclass
@@ -36,10 +36,9 @@ class UnknownModelError(LookupError):
 class ModelPrice:
     """USD per million tokens, as published.
 
-    Cache tiers are carried even though Phase 1 sends no `cache_control`, because the profiler and
-    reviewer prompts repeat a large fixed block per run and Phase 4 will want them. Costing a
-    cached read at the full input rate would overstate the benchmark's cost by roughly the cache
-    hit rate.
+    Cache tiers are carried even before anything sends `cache_control`, since the profiler and
+    reviewer prompts repeat a large fixed block per run and will want them. Costing a cached read
+    at the full input rate would overstate the benchmark's cost by roughly the cache hit rate.
     """
 
     input_: float

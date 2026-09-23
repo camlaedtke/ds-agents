@@ -10,9 +10,9 @@ The manifest is a GENERATED file. `.claude/settings.json` denies Edit and Write 
 That is not an inconvenience to route around -- it is the mechanism that makes every number in the
 file traceable. A manifest is exactly the shape of file that invites a plausible-looking number to
 be typed into it, and a wrong published baseline is unfalsifiable and would silently poison every
-table in the Phase 5 writeup. So: every number in the manifest is either a field of an API
-response or a measurement taken on the fetched frame, and every sentence a person chose is a
-constant in THIS file, where review and the fast-test hook can see it.
+published table. So: every number in the manifest is either a field of an API response or a
+measurement taken on the fetched frame, and every sentence a person chose is a constant in THIS
+file, where review and the fast-test hook can see it.
 
 Two rules this module exists to keep, both pinned by test in `tests/test_benchmark_manifest.py`:
 

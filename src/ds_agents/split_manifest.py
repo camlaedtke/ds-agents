@@ -27,19 +27,15 @@ other partition is derived:
 ## Why one character per row
 
 The previous form listed every index explicitly -- `train`, `holdout`, and five folds of
-(train, valid), so roughly six times the agent row count in integers. `read_artifact` caps every
-read at `DEFAULT_READ_BYTES`, and above ~36k rows those collided: four of the thirteen benchmark
-datasets could not complete a run. This form is `n_rows` bytes plus ~380 of header: 78,831 B
-measured on `higgs` against 2,690,410 B, which is 7.5% of the cap, with headroom to roughly a
-million rows.
+(train, valid) -- roughly six times the agent row count in integers, large enough to collide with
+`read_artifact`'s `DEFAULT_READ_BYTES` cap on the manifest's larger datasets. This form is `n_rows`
+bytes plus a small header, since the digit string is already one printable byte per row.
 
-Measured alternatives, on a 5,000-row stratified 5-fold split: base64 of a byte array is 6,668 B,
-1.33x WORSE than the 5,000 B digit string, because the digit string is already one printable byte
-per row. Run-length as JSON pairs is 41,340 B, 8.3x worse -- mean run length 1.21, since a shuffled
-fold assignment is incompressible by construction. Re-deriving the split from the seed inside each
-snippet is smaller still and is refused twice over: the split stops being a recorded object, and it
-would make the partition depend on the installed sklearn version, which `holdout._withhold_rows`
-already refuses to do for the withheld carve.
+Base64 of a byte array measured worse, since it does not beat one printable byte per row.
+Run-length measured far worse, since a shuffled fold assignment is incompressible by construction.
+Re-deriving the split from the seed inside each snippet is refused twice over: the split stops
+being a recorded object, and it would make the partition depend on the installed sklearn version,
+which `holdout._withhold_rows` already refuses to do for the withheld carve.
 
 ## What `fold_train: "complement"` is doing here
 
@@ -56,9 +52,8 @@ the rule is written down and the decoder refuses any other value.
 Fold ORDER. The splitter returns membership in permutation order; an assignment array can only
 carry membership. `SPLIT_SNIPPET` sorts the fold lists in the same change that introduced this
 encoding, so the loss is paid in one visible line rather than discovered later. It costs nothing
-measurable here: `modeler.CANDIDATE_SPECS` holds `LogisticRegression`, `HistGradientBoosting` and
-`Ridge`, none of which is order-sensitive, and the one bootstrap estimator in the repo -- the
-baseline's RandomForest -- fits on `train`, which was already sorted.
+here: none of `modeler.CANDIDATE_SPECS`'s estimators are order-sensitive, and the baseline's
+RandomForest fits on `train`, which was already sorted.
 
 ## Why the guards below are not paranoia
 
@@ -94,10 +89,8 @@ HOLDOUT_CHAR = "h"
 
 # One character per fold, so the alphabet IS the ceiling: at eleven folds `str(k)` is two
 # characters, the assignment runs longer than the frame, and every row after the first two-digit
-# fold is mislabelled by a drifting offset with no exception anywhere. `N_FOLDS` is a module
-# constant a plausible ablation touches, so the ceiling is asserted rather than assumed. Raising
-# it means extending `FOLD_DIGITS`, which is the honest requirement -- and both source strings
-# below are built from these two names, so there is one number rather than three drifting copies.
+# fold is mislabelled with no exception anywhere. The ceiling is asserted rather than assumed;
+# raising it means extending `FOLD_DIGITS`, which both source strings below are built from.
 FOLD_DIGITS = "0123456789"
 MAX_FOLDS = len(FOLD_DIGITS)
 

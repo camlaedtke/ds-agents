@@ -13,32 +13,23 @@ The router exists because the reviewer is a model under test and cannot be trust
 own cap, certify its own outcome, or decide where its own claim sends the run. Four things here are
 load-bearing:
 
-1. **The counter increments BEFORE the cap is checked.** `loop_cap=3` therefore permits at most
-   three completed reviewer invocations and two returns upstream (to `feature_eng` or `modeler`):
-   pass 1 and pass 2 can still come back as `block`, pass 3 is compared against the cap only after
-   being counted and is forced to `exhausted` if it still wants to block. A reviewer that raised
-   its own counter, or a router that checked the cap before incrementing, could buy the model one
-   extra loop it was not entitled to.
-2. **`block` at the cap becomes `exhausted`, never `pass`.** Otherwise a weak reviewer that simply
-   gives up and starts emitting "pass" once it hits the cap is indistinguishable, in a results
-   table, from a reviewer that actually cleared every objection on merit. `exhausted` is a
-   published eval outcome (see docs/DECISIONS.md), not an implementation detail.
+1. **The counter increments BEFORE the cap is checked.** `loop_cap=3` permits at most three
+   completed reviewer invocations and two returns upstream: passes 1 and 2 can come back as
+   `block`, and pass 3 is compared against the cap only after being counted, forced to `exhausted`
+   if it still wants to block.
+2. **`block` at the cap becomes `exhausted`, never `pass`.** Otherwise a reviewer that simply gives
+   up at the cap is indistinguishable, in a results table, from one that cleared every objection on
+   merit. `exhausted` is a published eval outcome, not an implementation detail.
 3. **The router mints the whole `ReviewPass`, including `routed_to`.** `route_target` (the
-   conditional edge) does not re-derive a destination from `open_objections()` -- it just reads the
-   `routed_to` the router already decided, off the latest pass. The router and the edge function
-   run against different states (the router sees the state as of its own invocation; the edge sees
-   the state after that update has been merged), so a second, independent derivation of "where does
-   a block go" could disagree with the first. Single authority avoids that.
+   conditional edge) reads that decision rather than re-deriving a destination, since the router
+   and the edge function see the state differently and a second derivation could disagree.
 4. **`routed_to` is computed against the PROJECTED post-pass open set**, not the raw
-   `open_objections()`: this pass's `reviewer_dispositions` are applied on top of the objections
-   that were open going in. Using the raw pre-pass set would send a run back to `feature_eng` for
-   an objection this very pass just resolved.
+   `open_objections()`. Using the raw pre-pass set would send a run back to `feature_eng` for an
+   objection this very pass just resolved.
 
-A fifth, smaller thing: when there is no claim at all (`reviewer_claim is None`), the verdict is
-`pending`, not `pass`, and no `ReviewPass` is minted. This keeps the reviewer-disabled arm
-distinguishable from a run where the reviewer was supposed to answer and silently did not --
-"never adjudicated" and "adjudicated and cleared" must never collapse into the same verdict, or a
-crashed reviewer scores as a clean pass.
+A fifth, smaller thing: with no claim at all (`reviewer_claim is None`), the verdict is `pending`,
+not `pass`, and no `ReviewPass` is minted -- "never adjudicated" and "adjudicated and cleared" must
+never collapse into the same verdict, or a crashed reviewer scores as a clean pass.
 """
 
 from collections.abc import Callable
@@ -176,21 +167,18 @@ def halt_or(destination: NodeName) -> Callable[[PipelineState], NodeName]:
     """What a straight-line edge in `graph.py` does: go to `destination`, or to the reporter.
 
     A node that returns `recoverable=False` has said nothing downstream can produce a trustworthy
-    result. Until this existed, nothing in the graph or the router read `recoverable` at all, so
-    the run carried on through every remaining node, spent a full run's tokens and wrote a row that
-    looked like a measurement. Four of the thirteen benchmark datasets failed exactly that way.
+    result; without this check a halted run would carry on through every remaining node and write
+    a row that looked like a measurement.
 
-    To `reporter` and not `END`, because `nodes/reporter.py` is written for this path -- its
-    docstring says the harness needs a row for every dataset including the ones that blew up, or
-    the hardest datasets vanish and every published table biases upward. The reporter calls no
-    model, so halting is cheap.
+    To `reporter`, not `END`: the harness needs a row for every dataset, including the ones that
+    blew up, or the hardest datasets vanish and every published table biases upward. The reporter
+    calls no model, so halting is cheap.
 
-    The router's OWN conditional edges are deliberately not wrapped. The router is unreachable once
-    a fatal error is on the state, since every edge that could reach it halts first, and a `block`
-    verdict minted with no `ReviewPass` is the state `route_target` calls unreachable.
+    The router's OWN conditional edges are deliberately not wrapped -- the router is unreachable
+    once a fatal error is on the state, since every edge that could reach it halts first.
 
-    It lives beside `route_target` rather than in `graph.py` for the reason `graph.py`'s docstring
-    gives: that file is wiring, and this is a decision about where a run goes.
+    Lives beside `route_target` rather than in `graph.py`, which is wiring only; this is a decision
+    about where a run goes.
     """
 
     def edge(state: PipelineState) -> NodeName:

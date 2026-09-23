@@ -1,15 +1,13 @@
 """In-process adapter over the sandbox and the artifact store.
 
-This used to be a standalone shim that ran each snippet with `subprocess.run`. It is now a thin
-binding of `mcp_server.sandbox.SandboxPool` and `mcp_server.store.ArtifactStore` to the `Tools`
-Protocol, which is the point: when the MCP client arrives in the next session it binds the *same*
-two objects over the protocol, so "we swapped the shim for the server" cannot quietly mean "we
-wrote a second implementation and hoped it matched."
+A thin binding of `mcp_server.sandbox.SandboxPool` and `mcp_server.store.ArtifactStore` to the
+`Tools` Protocol. `mcp_server/server.py` binds the *same* two objects over the MCP protocol, so
+"the same tool surface, over a different transport" is a fact about the code rather than a hope.
 
-What it still is not: a container. There is no memory cap and no network block. What it does keep,
-and now enforces more strictly than the subprocess version did, is the isolation the thesis rests
-on -- snippets run in a forked child of a worker that has never imported `ds_agents`, with the
-repo pruned off `sys.path` and an environment built from nothing. See `mcp_server/_worker.py`.
+What it is not: a container. There is no memory cap and no network block. What it does keep is the
+isolation the thesis rests on -- snippets run in a forked child of a worker that has never
+imported `ds_agents`, with the repo pruned off `sys.path` and an environment built from nothing.
+See `mcp_server/_worker.py`.
 """
 
 from pathlib import Path

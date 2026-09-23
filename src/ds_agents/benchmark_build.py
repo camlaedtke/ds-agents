@@ -238,11 +238,9 @@ def measure(candidate: Candidate) -> Measured:
 
     # Everything below is measured on the CSV AS RE-READ, not on the frame that was fetched. The
     # CSV is what gets mounted at $DS_DATASET, so it is what the pipeline actually sees, and the
-    # round trip is not lossless: kc1's target arrives from OpenML as the category levels 'true'
-    # and 'false' and comes back out of pandas as the bools True and False. A manifest that
-    # recorded 'true' would name a positive class no run could ever match, and `positive_rate`
-    # would describe a file nobody reads. Dtypes shift the same way, which also moves
-    # `n_usable_features` -- the number that decides whether the matrix reaches the modeler.
+    # round trip is not lossless: a categorical target's levels can come back out of pandas as
+    # bools. A manifest recording the pre-round-trip label would name a positive class no run
+    # could match. Dtypes shift the same way, which also moves `n_usable_features`.
     frame = pd.read_csv(csv_path, low_memory=False)
 
     labels = frame[target]
@@ -256,11 +254,9 @@ def measure(candidate: Candidate) -> Measured:
     measured["positive_rate"] = positive_rate
 
     # A hand-authored `known_leakage` entry must name a column that actually exists in the frame
-    # the pipeline will see, and this check exists because it caught a real one: `bank_marketing`
-    # was first recorded against `duration`, the name UCI uses, but OpenML data 1461 ships
-    # anonymised headers (V1..V16) and no such column exists. Loud failure at build time, because
-    # a leak entry pointing at a phantom column is worse than no entry -- it reads as documented
-    # ground truth and can never fire.
+    # the pipeline will see -- OpenML sometimes ships anonymised headers that differ from a
+    # source's documented names. Loud failure at build time, because a leak entry pointing at a
+    # phantom column is worse than no entry: it reads as documented ground truth and can never fire.
     known = KNOWN_LEAKAGE.get(dataset_id, [])
     missing = [leak.column for leak in known if leak.column not in frame.columns]
     if missing:

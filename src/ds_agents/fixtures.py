@@ -9,7 +9,7 @@ the CSV, so the two cannot drift apart without the fixture tests noticing.
 This module is deliberately dumb. It resolves paths, validates the manifest shape, and hands back a
 typed object. It does not read the CSV, and nothing in `nodes/` imports it -- a node that could load
 a manifest could read the answer key, and `planted_leakage_columns` would stop measuring anything.
-Only `cli.py` (and, in Phase 4, the harness) calls in here.
+Only `cli.py` and the harness call in here.
 """
 
 import json

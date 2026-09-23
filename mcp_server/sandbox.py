@@ -1,16 +1,14 @@
 """Parent side of the sandbox: one warm worker per process, a fresh forked child per snippet.
 
 Why a warm worker at all: every `run_python` call used to pay a fresh pandas + scikit-learn
-import, measured at 0.90s against 0.013s for a bare interpreter. A toy run makes four such calls
-and takes about 16s wall, so imports alone were a quarter of it, and a Phase 4 benchmark
-multiplies that by every dataset. Forking from a pre-imported worker takes the per-call cost to
-~0.04s including a RandomForest fit. See docs/DECISIONS.md 2026-08-27.
+import, which dwarfed a bare interpreter's startup cost and was multiplied by every call in every
+run. Forking from a pre-imported worker cuts that to near-zero. See DECISIONS.md (2026-08-27).
 
 Why the worker is shared across runs rather than one per run: it holds no run state. The
 environment a snippet sees, its working directory, and its output paths all ride on the request,
 so two runs sharing a worker are as isolated from each other as two snippets in one run -- which
 is to say completely, because each gets its own forked process. Booting one per `SandboxPool`
-instead cost 0.87s per unit test and would cost that again per dataset in a benchmark.
+instead would pay the import cost again per dataset in a benchmark.
 
 The isolation properties live in `_worker.py`. This module owns process lifetime, the request
 protocol, and the outer deadline.
@@ -209,9 +207,9 @@ class SandboxPool:
         self._io_dir.mkdir(parents=True, exist_ok=True)
         if self.worker is None:
             self.worker = shared_worker()
-        # PATH and HOME are part of what a snippet sees, not of how the worker is launched. The
-        # Phase 1 shim gave snippets both, and a snippet whose HOME is unset writes dotfiles into
-        # whatever directory it happens to be standing in.
+        # PATH and HOME are part of what a snippet sees, not of how the worker is launched. A
+        # snippet whose HOME is unset writes dotfiles into whatever directory it happens to be
+        # standing in.
         self.base_env = {
             "PATH": os.defpath,
             "HOME": str(self.work_dir),

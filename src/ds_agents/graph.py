@@ -90,8 +90,8 @@ def run_pipeline(
     """Run the graph and hand back a `PipelineState`, not a dict.
 
     `ended_at` is stamped here rather than by the last node, because `wall_seconds` is supposed to
-    include graph and tool overhead that node events miss, and because the last node changes every
-    time a phase lands.
+    include graph and tool overhead that node events miss, and because which node is last can
+    change as the graph evolves.
     """
     # LangGraph's default recursion_limit is 25 and knows nothing about `loop_cap`. At
     # loop_cap=6 the cycle overruns it and the run dies with GraphRecursionError and NO results

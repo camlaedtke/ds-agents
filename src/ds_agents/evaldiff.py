@@ -1,26 +1,19 @@
 """Compare two eval runs without letting sampling noise pass as a finding.
 
-This exists because of one number. `leakage_remediated` moved 5/10 -> 9/10 across the sticky-drop
-fix and was quoted as this project's largest effect for one session (DECISIONS.md 2026-08-28,
-fourth entry). A same-commit control -- the same code, the same condition, run again -- came back
-7/10 vs 6/10: the wrong sign. Once that control existed, four cells stood at the same nominal
-configuration, and two of them running byte-identical behaviour returned 9/10 and 6/10. Model
-nondeterminism alone moves a 10-run count on this benchmark by about 3. Every 10-run count this
-project has published therefore carries error bars roughly +/-0.25 wide on the underlying rate, and
-a single cell per arm cannot resolve a 4/10 difference -- it never could have. This module's job is
-to refuse to call such a difference an effect.
+This exists because model nondeterminism alone moves a 10-run count on this benchmark by about 3,
+so every published 10-run count carries error bars roughly +/-0.25 wide on the underlying rate,
+and a single cell per arm cannot resolve a small difference -- it never could have. This module's
+job is to refuse to call such a difference an effect. See DECISIONS.md (2026-08-28, fourth entry)
+for the headline this project retired over exactly this mistake.
 
-A pooled Wilson interval alone would already have caught the retired headline for free, before a
-single one of the runs that eventually falsified it: 5/10 is [0.237, 0.763] and 9/10 is
-[0.596, 0.982], and those overlap on [0.596, 0.763]. So why also require two replicates before
-computing one? Because a Wilson interval assumes the 10 runs behind a count are independent
-Bernoulli draws with one fixed success probability, and that assumption is exactly what running the
-same cell twice tests. A model whose behaviour drifts, a fixture whose difficulty depends on which
-split it drew, or a bug that fires in bursts would all break the assumption invisibly, and a broken
-assumption makes the interval a lie rather than merely wide. The replicate requirement is not about
-shrinking the interval -- it is about earning the right to compute one at all. That is why `Count`
-carries `per_replicate` printed beside the pooled count rather than folded into it: a reader can see
-whether the replicates agree with each other before trusting what their sum implies.
+A pooled Wilson interval alone is not enough: it assumes the runs behind a count are independent
+Bernoulli draws with one fixed success probability, and that assumption is exactly what running
+the same cell twice tests. A model whose behaviour drifts, a fixture whose difficulty depends on
+which split it drew, or a bug that fires in bursts would all break the assumption invisibly, and a
+broken assumption makes the interval a lie rather than merely wide. The replicate requirement is
+not about shrinking the interval -- it is about earning the right to compute one at all. That is
+why `Count` carries `per_replicate` printed beside the pooled count rather than folded into it: a
+reader can see whether the replicates agree with each other before trusting what their sum implies.
 """
 
 from __future__ import annotations

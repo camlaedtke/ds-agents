@@ -1,9 +1,9 @@
 """The artifact store and the metric log, extracted so one implementation serves both callers.
 
-`tools/local.py` uses these in-process today and the MCP server will use the same objects behind
-the protocol next session. That is the point of the extraction: if the store's rules lived in the
-shim, the Phase 2 swap would silently be a *reimplementation*, and the single-agent-vs-team
-ablation would be comparing two stores that only look alike.
+`tools/local.py` and the MCP server use the same objects, in-process and behind the protocol. That
+is the point of the extraction: if the store's rules lived in the shim, swapping transports would
+silently be a *reimplementation*, and the single-agent-vs-team ablation would be comparing two
+stores that only look alike.
 
 Two rules the store enforces, both load-bearing rather than tidiness:
 
@@ -142,17 +142,14 @@ class ArtifactStore:
     def path_of(self, artifact_id: ArtifactId) -> Path:
         """Where a snippet can `open()` the artifact.
 
-        The split manifest used to be the argument for this: rendering an artifact into snippet
-        source is O(n_rows) in the snippet text, and the old index-list encoding ran to about 7 MB
-        on a 100k-row Phase 4 dataset. It doesn't any more -- the fold-assignment encoding
-        (`ds_agents/split_manifest.py`) is one character per row plus a small header, ~79 KB on
-        `higgs`, the largest dataset in the manifest -- and that shrink was deliberate so the split
-        manifest could stay readable through `read_artifact` rather than move behind
+        Rendering an artifact into snippet source is O(n_rows) in the snippet text, which is why
+        the split manifest's fold-assignment encoding (`ds_agents/split_manifest.py`) was kept
+        small enough to stay readable through `read_artifact` rather than move behind
         `sandbox_path`: the reviewer and any future generalist arm reach an artifact's content
         through `read_artifact`, not this path, so anything only reachable here is invisible to
         them. `sandbox_path` remains the right answer for a genuinely large artifact -- a model
-        dump, a large feature matrix -- where that tradeoff doesn't apply. `ArtifactMeta.extra`
-        carries the same value under `"sandbox_path"`, for callers that already hold the metadata.
+        dump, a large feature matrix. `ArtifactMeta.extra` carries the same value under
+        `"sandbox_path"`, for callers that already hold the metadata.
         """
         if artifact_id not in self._paths:
             raise ToolError(f"no artifact {artifact_id!r}")
@@ -208,8 +205,8 @@ class ArtifactStore:
 class MetricLog:
     """`log_metric` behind a file, so a crashed run still leaves its metrics behind.
 
-    Phase 1 kept these in a list on the tools object, which is unreadable the moment the process
-    that owns it exits -- exactly the runs a benchmark most wants to look at.
+    A list on the tools object alone is unreadable the moment the process that owns it exits --
+    exactly the runs a benchmark most wants to look at.
     """
 
     def __init__(self, path: Path | None = None) -> None:
