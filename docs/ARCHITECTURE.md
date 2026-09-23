@@ -1,7 +1,7 @@
 # Architecture
 
-Pressure-tested in session 0 against an adversarial review. `src/ds_agents/state.py` is the
-authoritative contract; this file explains the reasoning and the parts that live outside the code.
+`src/ds_agents/state.py` is the authoritative contract; this file explains the reasoning and the
+parts that live outside the code.
 
 ## Graph
 
@@ -293,118 +293,35 @@ the two retired names, `baseline_score` and `score_ratio`, so a resurrection is 
 
 ## Eval outcomes per dataset
 
-Produced by `PipelineState.results_row()`. If a number in the published tables cannot be traced to
-that method, it is not a real number.
+Produced by `PipelineState.results_row()` in `src/ds_agents/state.py`. If a number in the
+published tables cannot be traced to that method, it is not a real number. Read the method for the
+full column list; this section states the rules that hold across the whole row.
 
-**Nine columns are graded only when there is something to grade against.** `planted_leakage_columns`
-is read as a *complete* enumeration, which it is on a fixture and is not on a benchmark dataset.
-When it is empty, `graded_for_leakage` makes `leakage_caught`, `leakage_precision`, the two
-`false_alarm*` counts, `false_alarm_columns`, and the four `profiler_/reviewer_caught` and
-`*_false_alarm` columns report `None` rather than `False`/`0` — the rule `leakage_remediated` and
-the `*_recall` columns already followed. `evaldiff` excludes `None` metrics from its denominators,
-so an unlabelled dataset drops out of a rate instead of dragging it down. What was flagged and
-nominated is still recorded; not-graded is not not-observed.
+**Graded only when there is something to grade against.** `planted_leakage_columns` is a
+*complete* enumeration on a fixture and does not exist on a benchmark dataset. When it is empty,
+the leakage, profiler- and reviewer-scoped columns report `None` rather than `False`/`0`.
+`evaldiff` excludes `None` metrics from its denominators, so an unlabelled dataset drops out of a
+rate instead of dragging it down. What was flagged or nominated is still recorded; not-graded is
+not not-observed.
 
-Scores: `claimed_holdout_score`, `verified_holdout_score`, `holdout_claim_gap`, `metric`, and the
-scale they are read against — `baseline_zero_score` (a constant class-prior predictor),
-`baseline_unit_score` (our RandomForest on the raw columns), `baseline_normalised_score`
-(`(verified − zero) / (unit − zero)`, direction-aware, and `None` on a dataset with a planted leak
-because the baseline kept the trap), plus `baseline_status` / `baseline_detail` /
-`baseline_recipe`. `baseline_separation` is the denominator itself, published so the quotient can
-be checked: `numerai28_6` reads 2.089 not because the run was extraordinary but because its two
-reference points are 0.0101 apart on a near-chance dataset. It is NOT suppressed on a planted
-leak — the distance between the reference points is a property of the dataset and the recipe,
-not of the run's grade — and it needs no `verified_holdout_score`, so a row whose re-scorer
-failed can still say how long the yardstick was. A narrow scale is deliberately not a
-`baseline_status` value: both points were measured perfectly well.
+**A null with more than one cause gets a `*_status` companion column that says which.**
+`rescore_status`, `baseline_status`, and `top_importance_status` (`ok` / `no_importances` /
+`no_positive_importance`) each separate "not measured" from "measured and empty" for the score,
+baseline, and per-column-importance-shape fields beside them. The same distinction is why
+`graded_for_leakage` exists rather than reading an empty `planted_leakage_columns` as "no leak".
 
-Leakage, as a set comparison against ground truth rather than two booleans: `leakage_planted`,
-`leakage_flagged`, `leakage_caught`, `leakage_remediated`, `leakage_recall`, `leakage_precision`,
-`false_alarm_columns`, `false_alarm`, plus `leakage_flagged_standing` and `false_alarm_standing`.
-The `_standing` pair drops columns whose every objection was later resolved or withdrawn: catching
-a leak at any point is a genuine catch, but taking back a false alarm is better behaviour than
-leaving it standing, and one number cannot say both. A binary pair cannot express "caught the real one and also
-flagged three clean columns."
+**`wall_seconds` is real elapsed time for the graph only, and excludes the grader.** It is stamped
+when the graph returns; `rescore_seconds` and `baseline_seconds` cover the re-scorer and the
+baseline, which run after that and are not inside it. They are two separate columns because the
+two fits run in separate processes with separate timeouts and fail independently.
 
-Profiler nominations, scored separately from the reviewer's objections: `profiler_nominated`,
-`profiler_caught`, `profiler_recall`, `profiler_false_alarm`. Separate because the two nodes give
-different answers to the same run — measured on 2026-08-27, the profiler nominates the planted
-column and the reviewer, shown the result, says nothing — and one combined `leakage_caught` would
-report a team that catches leaks while hiding which member caught it. All four are null rather than
-zero when `profile` is None: a profiler that crashed nominated nothing in a different sense than one
-that looked and declined.
+**Conditions are copied straight off the frozen `RunConfig`.** `commit` is the one that describes
+the tree rather than the run, read once per invocation rather than once per run, because a results
+file is untracked and a per-run read would let the harness's own first write dirty the tree
+mid-invocation. The consequence for experiment design: two arms that must be compared have to run
+in one invocation at one commit, or `eval-diff` refuses to pool them.
 
-Conditions: `arm`, `reviewer_enabled`, `reviewer_model`, `default_model`, `reviewer_sees_code`,
-`loop_cap`, `naming`, `reviewer_prompt`, `objection_routing`, `objection_closure`,
-`forced_drop_release`, `random_seed`, `commit`, straight off the frozen `RunConfig`.
-
-`commit` is the odd one out and is worth its own sentence, because it is a condition that describes
-the *tree* rather than the run: `<short hash>`, or `<short hash>-dirty` when the working tree had
-uncommitted changes, and `None` when git is missing or this is not a checkout. It is read once per
-invocation, before the first run — not once per run, which is a distinction the 2026-08-31 `ci`
-baseline paid for. A results file is untracked until someone commits it, so a per-run read let the
-harness's own first written row dirty the tree and stamp every later run `-dirty`, splitting one
-cell in two under `eval-diff`, for which `commit` is a condition field. See DECISIONS.md
-2026-08-31. The consequence for experiment design is the important half: **two arms that must be
-compared have to run in one invocation at one commit**, because a new arm is usually a new `Literal`
-on `RunConfig` and therefore a new tree, which `eval-diff` will refuse to pool.
-
-Loop: `review_verdict`, `review_loops`, `objections_raised`, `objections_by_category`,
-`objections_open_at_end`, and -- added 2026-08-28 with the closure axis, because
-`objections_open_at_end` conflates two opposite claims about the reviewer -- `objections_resolved`,
-`objections_withdrawn` and `objections_falsely_resolved`, the last being an objection marked
-`resolved` while one of its columns is still in `final_features`. Plus four fields that say why a
-caught leak was not fixed, added 2026-08-28 after 9-of-10 caught turned out to be 1-of-10
-remediated:
-`objections_by_target_node` (who the reviewer asked to act -- an objection addressed to `modeler`,
-which has no column lever, is a correct finding that cannot land), `objected_columns_unremediated`
-(column-scoped objected columns still in `final_features`; `None` when no pass completed or the
-matrix is empty), `route_sequence` and `new_objections_per_pass` (where the loop actually went, and
-whether each pass re-raised the same objection or found a new one). All four are derived from
-`objections`, `review_passes` and `final_features` -- no node records its own remediation.
-
-Cost and reliability: `wall_seconds` (real elapsed, not the sum of node events), `cost_usd`,
-`errored`, `halted_at`, `n_skipped_high_cardinality`, and `n_candidates` /
-`n_candidates_failed_to_fit` / `candidates_failed_to_fit`. The harness must emit a row for every
-dataset even on hard failure, or the hardest datasets disappear and every table biases upward.
-
-`errored` is `bool(errors)` and `halted_at` names the node whose unrecoverable refusal ended the
-run, so the two answer different questions and neither is a drop-in for the other. Keeping `errored`
-honest is a rule about what may be appended to `errors`, not a filter applied when reading it: a
-routine decision is not an error. `feature_eng`'s one-hot cardinality skip broke that rule until
-2026-09-02 and made every `adult` run read as a failure; it is now
-`n_skipped_high_cardinality`, a count of a decision.
-
-The candidate-fit columns are the same rule read from the other side, and the pair is worth holding
-together because they look identical and are not. A candidate that will not fit IS an anomaly, so
-`modeler` keeps raising a `PipelineError` for it and `errored` stays true; what was missing was any
-way to ask WHICH of the twenty-two error sites fired, since the text reached a results file only as
-prose inside `errors`. So this one gets a companion column and not a reclassification -- the
-opposite repair to the cardinality skip, from the same symptom. `n_candidates` is the denominator
-and is not optional: a run halted at `feature_eng` has no candidates at all, and without it a zero
-numerator reads as "every candidate fit fine" on a run where none was ever attempted.
-
-Neither `errored` nor `halted_at` can be tallied as a rate by
-`eval-diff` without help — `halted_at` is null on every healthy run and would exclude them all,
-`errored` is never null — which is what `--metrics halted_at:notnull` exists for.
-
-The shape of the distribution the REVIEWER is shown, not the harness's own measurement: `top_importances`
-is the only per-column evidence in the reviewer's prompt, and before `top_importance_share` and
-`top_importance_n80` nothing on the row summarised it, so no committed row could be used to explain
-why the reviewer objected. `top_importance_share` is the rank-1 mean importance divided by the sum
-of positive mean importances among the top `TOP_IMPORTANCES` (15) columns the reviewer sees;
-`top_importance_n80` is how many of those columns it takes to reach 80% of that positive total. Both
-are `None`, with `top_importance_status` saying why, in the same two-reasons shape as
-`leakage_graded` / `rescore_status` / `baseline_status`: `no_importances` when `top_importances`
-itself is empty, `no_positive_importance` when every entry is zero or negative (permutation
-importance can go negative) and there is no positive mass to divide or sum toward.
-
-Where that time and money went: `node_seconds` (a `{node: seconds}` map summed over repeats, so a
-node the review loop visited three times shows all three), plus `rescore_seconds` and
-`baseline_seconds`. Those last two are NOT inside `wall_seconds` and cannot be: `ended_at` is
-stamped when the graph returns, and the grader runs after it. Before 2026-09-01 nothing recorded
-them, which made the yardstick's own wall cost -- the dominant term at the manifest's larger shapes
--- invisible in every committed row, and made a run WITH two extra fits look faster than one
-without. They are two columns rather than one because the re-scorer and the baseline are separate
-processes with separate timeouts that fail independently; `None` on both means neither ran, which
-is a different claim from `0.0`.
+**`errored` and `halted_at` answer different questions.** `errored` is `bool(errors)`, and keeping
+it honest is a rule about what may be appended to `errors` (a routine decision is not an error),
+not a filter applied when reading it. `halted_at` names the node whose unrecoverable refusal ended
+the run. Neither can be tallied as a rate by `eval-diff` without `--metrics <col>:notnull`.

@@ -25,7 +25,9 @@ Overwrite it with:
 # Next session
 
 ## Start here
-One paragraph: where we are, what the last session delivered, what is half-done.
+One paragraph, no more. Summarize where we are and what the last session delivered and left
+half-done; do not repeat DECISIONS.md or LOG.md prose or restate numbers already recorded there.
+Point at the entry instead of quoting it.
 
 ## First prompt
 The literal prompt to paste to start the next session. Specific enough to begin without rereading history.

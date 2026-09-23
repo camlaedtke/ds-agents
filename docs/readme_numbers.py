@@ -1,11 +1,10 @@
-"""Re-derive every number in docs/README-draft.md from the committed results files.
+"""Re-derive every number in docs/RESULTS.md from the committed results files.
 
 Run from the repo root: `uv run python docs/readme_numbers.py`
 
 Reads only `evals/results/*.jsonl`. Nothing here is a measurement -- it is an aggregation of
-measurements already committed, kept beside the draft so no number in the writeup has to be taken
-on trust. Delete it with the draft, or promote it to `src/ds_agents/` if the README needs
-regenerating on a schedule.
+measurements already committed, kept beside RESULTS.md so no number in it has to be taken on
+trust. Promote it to `src/ds_agents/` if RESULTS.md needs regenerating on a schedule.
 """
 
 import collections

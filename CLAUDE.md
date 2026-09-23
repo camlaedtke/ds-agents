@@ -20,7 +20,8 @@ evals/
   results/        # one JSONL per run, committed
 tests/
   fixtures/toy/   # 200-row toy dataset with planted leakage. Full pipeline runs on it in <60s.
-docs/             # ARCHITECTURE.md, PLAN.md, DECISIONS.md, NEXT.md, LEARNING.md
+docs/             # ARCHITECTURE.md, PLAN.md, DECISIONS.md, decisions-archive.md, NEXT.md,
+                  # LEARNING.md, RESULTS.md, explainers/
 ```
 
 ## Commands

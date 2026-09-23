@@ -408,7 +408,7 @@ error around: a global expected multiplier of 1.1431 predicts $1.2620 against th
 charging the ten quiet datasets a 17.3% premium for behaviour they have never shown while still
 pricing the three noisy ones at 71% of what they cost. The loop rate is 6/52, or 11.5% with a 95%
 interval of [4.3%, 23.4%], which is recorded as a contingency note beside the coefficients and
-pinned by a test as history. `docs/DECISIONS.md`, 2026-09-21, has the full argument.
+pinned by a test as history. `docs/decisions-archive.md`, 2026-09-21, has the full argument.
 
 **Which datasets loop is a reviewer question, not a size question.** The two standing guesses, that
 `australian` is the smallest dataset (690 rows) and `kr_vs_kp` the most categorical (36 columns, all
@@ -421,7 +421,7 @@ reason the contingency above stays a range instead of becoming a coefficient.
 ## Design notes
 
 Choices that shaped what could be measured, one paragraph each. Full reasoning is in
-`docs/DECISIONS.md`.
+`docs/decisions-archive.md`.
 
 **One state object, and nodes that cannot reach around it.** Every node reads and writes
 `PipelineState` and nothing else. That is the reason an ablation is a field on a frozen `RunConfig`
@@ -457,9 +457,9 @@ of the cost, and `pytest -m fast` does not depend on a Docker daemon. Docker sta
 say plainly that this is not a jail.
 
 **Pre-registration, including the parts that were boring.** Each funded run has its endpoints
-written into `docs/DECISIONS.md` before the money is spent, including what would make the resulting
-file uninterpretable. That is why "no count in the 52-row file may be quoted as an effect" is a
-constraint stated in advance instead of a caveat discovered afterwards.
+written into `docs/decisions-archive.md` before the money is spent, including what would make the
+resulting file uninterpretable. That is why "no count in the 52-row file may be quoted as an
+effect" is a constraint stated in advance instead of a caveat discovered afterwards.
 
 ---
 
@@ -517,7 +517,7 @@ is a structural defect that no prompt fixes.
 
 ```console
 uv sync
-uv run pytest                              # 869 tests, includes the toy end-to-end run
+uv run pytest                              # full suite, includes the toy end-to-end run
 uv run ds-agents run --dataset toy         # one pipeline run, prints the node trace
 uv run ds-agents datasets verify --online  # check the manifest against OpenML
 uv run ds-agents eval --subset ci          # the fixture subset, ~$0.73
@@ -532,5 +532,4 @@ look like a system that never finds anything.
 Every table above is regenerated from the committed rows by `uv run python docs/readme_numbers.py`,
 so no number here rests on prose in a log. Run it after adding results and update whatever moved.
 
-`docs/ARCHITECTURE.md` is the contract, `docs/DECISIONS.md` the log of why, `docs/PLAN.md` the
-phases, and `evals/results/LOG.md` a per-run narrative of every funded run.
+Full reasoning behind each decision is in `docs/decisions-archive.md`.
