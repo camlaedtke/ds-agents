@@ -283,7 +283,7 @@ class TestSubsetsPointAtRealFixtures:
     def test_claims_repro_is_the_ci_claims_cell_itself_not_a_copy(self):
         """The reproduction subset must share the object, not the argument list.
 
-        `claims-repro` exists to re-run the arm README Result 3 quotes at a later commit. If it
+        `claims-repro` exists to re-run the arm RESULTS.md Result 3 quotes at a later commit. If it
         held its own `Cell(...)` with the same arguments typed again, a later edit to the `ci`
         cell would silently turn the check into a comparison of two different arms, which is the
         one failure mode a reproduction check cannot survive. `is` is the assertion, not `==`.

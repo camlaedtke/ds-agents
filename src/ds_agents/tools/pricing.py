@@ -1,6 +1,6 @@
 """Per-model token prices, and the one function that turns usage into dollars.
 
-`cost_usd` is a published output of this project, not an implementation detail: the README's
+`cost_usd` is a published output of this project, not an implementation detail: the results'
 cost-per-caught-leak number and the Haiku-vs-Sonnet reviewer ablation are both read straight off
 `NodeEvent.cost_usd`. So this file has two rules.
 
